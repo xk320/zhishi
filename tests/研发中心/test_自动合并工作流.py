@@ -75,6 +75,37 @@ class MergeWorkflowTests(unittest.TestCase):
         self.assertIn("scripts/研发中心/验证自动合并资格.py", self.text)
         self.assertNotIn("ref: ${{ github.event.pull_request.head", self.text)
 
+    def test_合并前同时复核基线和头提交sha(self):
+        trusted_check = self.text.split(
+            "- name: 使用main可信规则重新验证资格",
+            maxsplit=1,
+        )[1].split("- name: 合并前再次确认状态和提交", maxsplit=1)[0]
+        final_check = self.text.split(
+            "- name: 合并前再次确认状态和提交",
+            maxsplit=1,
+        )[1].split("- name: 合并批准的精确提交", maxsplit=1)[0]
+
+        self.assertIn(
+            "BASE_SHA: ${{ steps.pr.outputs.base_sha }}",
+            final_check,
+        )
+        self.assertIn(
+            'pull_request["base"]["sha"] == os.environ["BASE_SHA"]',
+            final_check,
+        )
+        self.assertIn(
+            'pull_request["head"]["sha"] == os.environ["HEAD_SHA"]',
+            final_check,
+        )
+        self.assertIn(
+            "METADATA_PATH: ${{ runner.temp }}/pr-auto-merge-metadata.json",
+            trusted_check,
+        )
+        self.assertIn(
+            "PR_PATH: ${{ runner.temp }}/pull-request.json",
+            final_check,
+        )
+
     def test_权限最小且不使用危险事件(self):
         self.assertIn("contents: write", self.text)
         self.assertIn("pull-requests: write", self.text)
