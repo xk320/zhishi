@@ -5,116 +5,127 @@
 > superpowers:executing-plans to implement this plan task-by-task. Steps use
 > checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 通过固定只读SSH探针发现目标环境、服务、接口、数据库候选与
-BTC、ETH、SOL相关文件元数据，生成可复现的CSV和Markdown清单。
+**Goal:** 通过固定只读SSH探针发现目标环境和BTC、ETH、SOL候选数据资产，生成可重复验证的CSV与Markdown清单。
 
-**Architecture:** 本地Python命令行工具把版本固定的Python探针经标准输入发送给
-SSH别名`ubuntu`；远端探针只运行固定只读命令和白名单目录元数据扫描，返回JSON。
-本地校验、脱敏、归一化、去重、排序后，以同一批次编号原子写入CSV和Markdown。
+**Architecture:** 本地Python命令行工具把固定版本的远端Python探针通过SSH标准输入执行，远端不落盘。探针只返回JSON元数据，本地完成校验、去重、排序、CSV与Markdown渲染；任何失败保留为`无法访问`或`未知`，不推导数据质量与研究可用性。
 
-**Tech Stack:** Python 3标准库、OpenSSH、`unittest`、CSV、JSON、Markdown。
+**Tech Stack:** Python 3标准库、`unittest`、系统SSH客户端、远端Python 3、Markdown、CSV。
 
 ---
 
-## Task 1: 解除阻塞并固定执行合同
+## 文件结构
+
+- 创建：`scripts/审计/发现数据资产.py`，负责安全策略、远端探针、SSH执行、归一化和输出。
+- 创建：`tests/审计/test_发现数据资产.py`，负责安全合同、命令行、失败路径和渲染测试。
+- 创建：`artifacts/审计/数据源清单.csv`，保存真实只读发现结果。
+- 创建：`docs/审计/数据源清单.md`，解释结果、边界、缺口和复现方式。
+- 修改：`docs/研发中心/任务/任务-000003.md`，记录执行状态、交付和验收。
+- 修改：`docs/研发中心/看板.md`，同步任务状态。
+- 修改：PR #23标题与正文，撤销错误目标阻塞说明并记录最终交付。
+
+### Task 1：纠正任务状态与在途记录
 
 **Files:**
 
 - Modify: `docs/研发中心/任务/任务-000003.md`
 - Modify: `docs/研发中心/看板.md`
 
-- [x] **Step 1: 用无交互SSH验证解除条件**
+- [ ] **Step 1：删除错误目标产生的阻塞证据**
+
+删除`btc-prod`、`btc-event-prod`及SSH失败相关记录，不在最终差异中保留错误事实。
+
+- [ ] **Step 2：把任务更新为执行中**
+
+任务头部使用以下状态字段：
+
+```markdown
+- 状态：执行中
+- 优先级：P0
+- 执行分支：`codex/000003-access-blocker-20260727`
+- 开始时间：2026-07-28（使用实际Asia/Shanghai时间）
+- 解除阻塞证据：SSH别名`ubuntu`无交互只读握手成功
+```
+
+看板把任务-000003从`阻塞`移到`执行中`；任务-000004至000006继续保持阻塞。
+
+- [ ] **Step 3：验证任务中心状态映射**
 
 Run:
 
 ```bash
-ssh -o BatchMode=yes -o ConnectTimeout=10 ubuntu \
-  'printf "SSH_OK\\n"; uname -srm; date +%z'
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+task = Path('docs/研发中心/任务/任务-000003.md').read_text()
+board = Path('docs/研发中心/看板.md').read_text()
+assert re.search(r'^- 状态：执行中$', task, re.M)
+section = board.split('## 执行中', 1)[1].split('## ', 1)[0]
+assert '| P0 | 任务-000003 |' in section
+print('任务-000003状态映射：执行中')
+PY
 ```
 
-Expected: 返回`SSH_OK`、Linux系统信息和`+0800`，且不修改远端状态。
+Expected: `任务-000003状态映射：执行中`。
 
-- [x] **Step 2: 同步任务和看板为执行中**
-
-记录分支`codex/000003-access-blocker-20260727`、开始时间、解除阻塞证据和只读边界，
-并从看板阻塞区移动到执行中区。
-
-- [x] **Step 3: 检查并提交认领状态**
-
-Run:
+- [ ] **Step 4：提交状态纠正**
 
 ```bash
-npx --yes markdownlint-cli2 \
-  docs/研发中心/任务/任务-000003.md docs/研发中心/看板.md
-git diff --check
-git commit -m 'docs: 解除任务000003访问阻塞'
+git add docs/研发中心/任务/任务-000003.md docs/研发中心/看板.md
+git commit -m "docs: 认领任务000003"
 ```
 
-Expected: Markdown为0 issues，空白检查通过并形成独立认领提交。
-
-## Task 2: 用失败测试定义发现器合同
+### Task 2：以失败测试固定安全合同和数据模型
 
 **Files:**
 
 - Create: `tests/审计/test_发现数据资产.py`
-- Test: `tests/审计/test_发现数据资产.py`
+- Create: `scripts/审计/发现数据资产.py`
 
-- [x] **Step 1: 写实现存在性和模块加载测试**
+- [ ] **Step 1：写安全合同与归一化失败测试**
 
-测试必须先断言`scripts/审计/发现数据资产.py`存在；实现文件缺失时测试明确失败。
-模块存在后通过`importlib.util.spec_from_file_location`加载，不依赖包名或第三方库。
-
-- [x] **Step 2: 写纯函数合同测试**
-
-使用固定探针JSON覆盖：
+测试通过`importlib.util.spec_from_file_location`加载中文路径脚本，定义以下用例：
 
 ```python
-def sample_probe_result() -> dict[str, object]:
-    return {
-        "probe_version": "1.0",
-        "collected_at": "2026-07-28T09:00:00+08:00",
-        "host": {
-            "os": "Ubuntu 22.04",
-            "kernel": "Linux",
-            "timezone": "Asia/Shanghai",
-        },
-        "mounts": [{"target": "/", "fstype": "ext4", "mode": "rw"}],
-        "services": [{
-            "name": "mysql.service",
-            "state": "active",
-            "user": "mysql",
-            "workdir": "/",
-        }],
-        "listeners": [{"protocol": "tcp", "port": 3306, "process": "mysqld"}],
-        "containers": [],
-        "roots": [{"path": "/opt/crypto-radar", "status": "可访问"}],
-        "files": [{
-            "path": "/opt/crypto-radar/data/btc.csv",
-            "format": "CSV",
-            "size": 42,
-            "modified_at": "2026-07-28T08:00:00+08:00",
-            "project": "crypto-radar",
-        }],
-        "database": {"status": "无法访问", "objects": []},
-        "errors": [{"category": "database", "status": "无法访问"}],
-    }
+class 发现数据资产测试(unittest.TestCase):
+    def test_远端探针不包含禁止行为(self):
+        probe = module.build_remote_probe()
+        forbidden = [
+            "systemctl restart",
+            "systemctl stop",
+            "systemctl start",
+            "docker inspect",
+            ".env",
+            "password",
+            "private_key",
+            "open(",
+            "write(",
+        ]
+        for token in forbidden:
+            self.assertNotIn(token, probe.lower())
+
+    def test_归一化会去重并稳定排序(self):
+        payload = {
+            "batch": {"batch_id": "batch-1", "host": "ubuntu"},
+            "assets": [
+                {"asset_type": "file_group", "location": "/b", "name": "b"},
+                {"asset_type": "file_group", "location": "/a", "name": "a"},
+                {"asset_type": "file_group", "location": "/a", "name": "a"},
+            ],
+            "errors": [],
+        }
+        normalized = module.normalize_payload(payload)
+        self.assertEqual(
+            [row["location"] for row in normalized["assets"]],
+            ["/a", "/b"],
+        )
+
+    def test_非法结构被拒绝(self):
+        with self.assertRaises(module.DiscoveryError):
+            module.normalize_payload({"assets": "not-a-list"})
 ```
 
-断言：资产编号稳定、BTC范围正确、未知时间范围不被猜测、数据库失败被明确记录、
-相同资源去重、排序稳定、CSV和Markdown批次编号相同。
-
-- [x] **Step 3: 写安全与失败合同测试**
-
-断言固定探针：
-
-- 只包含白名单根目录和候选扩展名；
-- SSH参数使用`BatchMode=yes`且目标经严格别名校验；
-- 不包含文件内容读取、环境变量、凭据搜索、服务启停、写入或提权行为；
-- MySQL命令带`--no-defaults`，只查询`information_schema`元数据；
-- SSH失败、非法JSON或非法结构返回非零，且不覆盖既有产物；
-- 输出中不出现IPv4、私钥头、令牌或密码值。
-
-- [x] **Step 4: 运行测试并确认正确失败**
+- [ ] **Step 2：运行测试并确认RED**
 
 Run:
 
@@ -122,22 +133,19 @@ Run:
 python3 -m unittest tests/审计/test_发现数据资产.py -v
 ```
 
-Expected: 因实现文件不存在而失败，不是语法、夹具或导入错误。
+Expected: FAIL，原因是`scripts/审计/发现数据资产.py`不存在或目标API未定义。
 
-## Task 3: 实现固定只读探针和本地生成器
+- [ ] **Step 3：实现最小数据模型与安全常量**
 
-**Files:**
-
-- Create: `scripts/审计/发现数据资产.py`
-- Modify: `tests/审计/test_发现数据资产.py`
-
-- [x] **Step 1: 实现远端固定探针**
-
-模块常量必须包含`PROBE_VERSION`、`ALLOWED_ROOTS`、`CANDIDATE_SUFFIXES`和
-`REMOTE_PROBE`。远端代码只用标准库和固定参数的`subprocess.run`：
+脚本先实现：
 
 ```python
-ALLOWED_ROOTS = (
+class DiscoveryError(RuntimeError):
+    pass
+
+
+PROBE_VERSION = "1"
+ROOTS = (
     "/opt/binance-event",
     "/opt/celueqing",
     "/opt/crypto-radar",
@@ -145,59 +153,41 @@ ALLOWED_ROOTS = (
     "/opt/orderbook-intelligence-service",
     "/var/lib/mysql",
 )
-CANDIDATE_SUFFIXES = {
-    ".csv": "CSV", ".jsonl": "JSONL", ".ndjson": "NDJSON",
-    ".parquet": "Parquet", ".sqlite": "SQLite", ".sqlite3": "SQLite",
-    ".db": "SQLite", ".arrow": "Arrow", ".feather": "Feather",
+
+EXCLUDED_PARTS = {
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".pytest_cache",
+    ".deploy-backups",
+    "deploy-backups",
+    "deploy-staging",
+    "tests",
+    "fixtures",
+}
+
+DATA_SUFFIXES = {
+    ".csv",
+    ".jsonl",
+    ".ndjson",
+    ".parquet",
+    ".db",
+    ".sqlite",
+    ".sqlite3",
+    ".arrow",
+    ".feather",
 }
 ```
 
-探针收集逻辑身份无关的OS、内核、时区、挂载、任务相关服务、监听端口进程名、容器
-名称与镜像、白名单根目录和候选文件`stat`元数据。目录遍历不得跟随符号链接，忽略
-`.git`、虚拟环境、缓存、备份、测试夹具和隐藏目录；每个根目录设置明确上限并记录
-截断。MySQL只运行`mysql --no-defaults`的`information_schema`元数据查询，失败仅输出
-`无法访问`，不保留原始错误文本。
+实现`normalize_payload()`，要求`batch`为字典、`assets`和`errors`为列表，并按
+`asset_type + location + name`去重排序；缺失显示字段填`未知`。
 
-- [x] **Step 2: 实现结构校验与安全归一化**
+- [ ] **Step 4：实现固定探针骨架并确认GREEN**
 
-提供：
-
-```python
-def validate_probe_result(payload: object) -> dict[str, object]: ...
-def build_assets(
-    payload: dict[str, object],
-    logical_host: str,
-) -> list[dict[str, str]]: ...
-def infer_symbols(text: str) -> str: ...
-def redact(value: object) -> str: ...
-```
-
-校验顶层字段和集合类型；拒绝探针版本不匹配。所有文本进入产物前统一过滤IPv4、私钥
-头、疑似令牌和`password/secret/token=值`。无法从文件元数据证明的时间范围写`未知`，
-不可把资源存在解释为数据质量或研究可用性。
-
-- [x] **Step 3: 实现CLI与原子产物写入**
-
-CLI参数：`--target`、`--ssh-bin`、`--timeout`、`--csv-output`、
-`--markdown-output`。SSH使用参数数组，不调用shell：
-
-```python
-command = [
-    ssh_bin,
-    "-o", "BatchMode=yes",
-    "-o", f"ConnectTimeout={timeout}",
-    "-o", "ServerAliveInterval=5",
-    "-o", "ServerAliveCountMax=1",
-    target,
-    "python3", "-",
-]
-```
-
-先完整校验JSON和生成两个内存文本，再在本地输出目录创建临时文件并`os.replace`。
-任一前置失败不创建、不截断、不覆盖既有产物。成功输出批次编号和资产数量，失败只给
-中文错误类别及退出码，不回显SSH标准错误中的主机、地址或凭据片段。
-
-- [x] **Step 4: 运行测试直到全部通过**
+`build_remote_probe()`返回不含文件读取或写入API的远端Python脚本。远端只使用
+`os.scandir()`、`entry.stat(follow_symlinks=False)`和白名单只读子进程命令采集元数据。
 
 Run:
 
@@ -205,99 +195,316 @@ Run:
 python3 -m unittest tests/审计/test_发现数据资产.py -v
 ```
 
-Expected: 所有发现器合同测试通过，0 failures、0 errors。
+Expected: 3 tests PASS。
 
-- [x] **Step 5: 提交实现与测试**
+- [ ] **Step 5：提交安全核心**
+
+```bash
+git add scripts/审计/发现数据资产.py tests/审计/test_发现数据资产.py
+git commit -m "test: 固定数据资产发现安全合同"
+```
+
+### Task 3：以测试驱动实现SSH执行和远端元数据探针
+
+**Files:**
+
+- Modify: `tests/审计/test_发现数据资产.py`
+- Modify: `scripts/审计/发现数据资产.py`
+
+- [ ] **Step 1：写假SSH端到端失败测试**
+
+测试在临时目录创建可执行`ssh`脚本，从固定夹具输出JSON；真实调用CLI：
+
+```python
+def test_命令行通过假ssh生成两个输出(self):
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        fake_ssh = tmp_path / "ssh"
+        fake_ssh.write_text(
+            "#!/bin/sh\n"
+            "cat >/dev/null\n"
+            "printf '%s' '{\"batch\":{\"batch_id\":\"batch-1\",\"host\":\"ubuntu\"},"
+            "\"assets\":[{\"asset_type\":\"service\",\"location\":\"mysql.service\","
+            "\"name\":\"mysql\"}],\"errors\":[]}'\n"
+        )
+        fake_ssh.chmod(0o755)
+        csv_path = tmp_path / "inventory.csv"
+        md_path = tmp_path / "inventory.md"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--host",
+                "ubuntu",
+                "--ssh-bin",
+                str(fake_ssh),
+                "--csv-output",
+                str(csv_path),
+                "--markdown-output",
+                str(md_path),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(csv_path.exists())
+        self.assertTrue(md_path.exists())
+```
+
+补充SSH退出255、超时和非法JSON测试，断言原输出文件保持不变。
+
+- [ ] **Step 2：运行新增测试并确认RED**
 
 Run:
 
 ```bash
-git add scripts/审计/发现数据资产.py tests/审计/test_发现数据资产.py
-git commit -m 'feat: 建立只读数据资产发现器'
+python3 -m unittest tests/审计/test_发现数据资产.py -v
 ```
 
-## Task 4: 执行真实只读发现并核验产物
+Expected: FAIL，原因是CLI参数、SSH执行或渲染器尚未实现。
+
+- [ ] **Step 3：实现SSH执行器**
+
+实现：
+
+```python
+def run_ssh(host: str, ssh_bin: str, timeout: int) -> dict[str, object]:
+    command = [
+        ssh_bin,
+        "-o", "BatchMode=yes",
+        "-o", f"ConnectTimeout={timeout}",
+        "-o", "StrictHostKeyChecking=yes",
+        host,
+        "python3 -",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            input=build_remote_probe(),
+            text=True,
+            capture_output=True,
+            timeout=timeout + 5,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise DiscoveryError("SSH只读发现超时") from exc
+    if result.returncode != 0:
+        raise DiscoveryError(f"SSH只读发现失败，退出码={result.returncode}")
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise DiscoveryError("远端探针返回非法JSON") from exc
+```
+
+错误信息不得回显SSH标准错误，避免意外暴露地址、用户或本机路径。
+
+- [ ] **Step 4：实现远端探针**
+
+探针返回：
+
+```json
+{
+  "batch": {
+    "batch_id": "主机名-UTC采集时间",
+    "probe_version": "1",
+    "host": "逻辑主机",
+    "collected_at": "带时区时间",
+    "timezone": "Asia/Shanghai"
+  },
+  "assets": [],
+  "errors": []
+}
+```
+
+实现以下独立采集器，每个采集器异常只追加`errors`：
+
+- `collect_system()`：主机、OS、内核、时区；
+- `collect_mounts()`：`findmnt -rn -o TARGET,FSTYPE,OPTIONS`；
+- `collect_services()`：固定服务名的`systemctl show`属性；
+- `collect_listeners()`：`ss -lntupH`，只保留协议、端口和进程名；
+- `collect_containers()`：`docker ps`和`lxc list`的名称、镜像、状态；
+- `collect_files()`：白名单根目录、排除目录和允许扩展名，只用目录项元数据；
+- `collect_mysql_metadata()`：无交互查询`information_schema`，失败只记录错误。
+
+文件按`项目根目录 + 相对父目录 + 扩展名`聚合，记录文件数、总字节数、最早和最新
+修改时间；从路径名识别`BTC`、`ETH`、`SOL`，无法识别则为`未知`。
+
+- [ ] **Step 5：运行全部审计脚本测试并确认GREEN**
+
+Run:
+
+```bash
+python3 -m unittest tests/审计/test_发现数据资产.py -v
+```
+
+Expected: 全部PASS，失败路径不覆盖既有文件。
+
+- [ ] **Step 6：提交SSH探针**
+
+```bash
+git add scripts/审计/发现数据资产.py tests/审计/test_发现数据资产.py
+git commit -m "feat: 实现只读数据资产发现探针"
+```
+
+### Task 4：以测试驱动实现CSV和Markdown输出
+
+**Files:**
+
+- Modify: `tests/审计/test_发现数据资产.py`
+- Modify: `scripts/审计/发现数据资产.py`
+
+- [ ] **Step 1：写输出合同失败测试**
+
+断言CSV表头精确为：
+
+```python
+CSV_FIELDS = [
+    "资产编号",
+    "发现批次",
+    "资产类型",
+    "逻辑主机",
+    "服务或项目",
+    "资源名称",
+    "位置",
+    "格式",
+    "标的范围",
+    "时间范围",
+    "文件数",
+    "字节数",
+    "最后修改时间",
+    "访问状态",
+    "发现证据",
+    "限制",
+    "后续任务",
+]
+```
+
+Markdown测试必须找到：执行边界、环境摘要、资产汇总、BTC/ETH/SOL覆盖、数据库限制、
+已知缺口、不可推导结论、复现命令和批次编号。
+
+- [ ] **Step 2：运行新增测试并确认RED**
+
+Run:
+
+```bash
+python3 -m unittest tests/审计/test_发现数据资产.py -v
+```
+
+Expected: FAIL，原因是CSV字段或Markdown章节尚未完整。
+
+- [ ] **Step 3：实现原子输出**
+
+`write_outputs()`先在目标目录创建临时文件，完整写入并校验后使用`os.replace()`替换
+本地输出。远端不写文件。资产编号使用排序后六位流水号`资产-000001`。
+
+所有空字段归一化为`未知`。数据库元数据失败时保留MySQL服务、端口和存储目录候选，
+访问状态写`元数据无法访问`，限制写`未读取凭据，不代表数据库不可用`。
+
+- [ ] **Step 4：运行测试并确认GREEN**
+
+Run:
+
+```bash
+python3 -m unittest tests/审计/test_发现数据资产.py -v
+python3 -m unittest discover -s tests -p 'test_*.py' -v
+```
+
+Expected: 新测试和仓库全部测试PASS。
+
+- [ ] **Step 5：提交输出实现**
+
+```bash
+git add scripts/审计/发现数据资产.py tests/审计/test_发现数据资产.py
+git commit -m "feat: 生成可验证数据源清单"
+```
+
+### Task 5：真实只读发现、验收与PR收尾
 
 **Files:**
 
 - Create: `artifacts/审计/数据源清单.csv`
 - Create: `docs/审计/数据源清单.md`
+- Modify: `docs/研发中心/任务/任务-000003.md`
+- Modify: `docs/研发中心/看板.md`
 
-- [x] **Step 1: 在目标环境执行一次真实只读发现**
+- [ ] **Step 1：对正确目标执行真实只读发现**
 
 Run:
 
 ```bash
-python3 scripts/审计/发现数据资产.py --target ubuntu \
+python3 scripts/审计/发现数据资产.py \
+  --host ubuntu \
   --csv-output artifacts/审计/数据源清单.csv \
   --markdown-output docs/审计/数据源清单.md
 ```
 
-Expected: 命令退出0，两个产物使用同一批次编号；数据库无凭据时记录`无法访问`而不
-寻找密码或扩大权限。
+Expected: 退出码0；输出批次编号、资产数量和部分失败数量。MySQL元数据若仍无法访问，
+必须显示为部分失败，不能写成通过。
 
-- [x] **Step 2: 执行产物合同和敏感信息检查**
-
-用只读Python检查CSV列、编号唯一、排序稳定、BTC/ETH/SOL映射、批次一致与Markdown
-必要章节。使用显式模式扫描IPv4、私钥头、GitHub/云令牌和明文凭据；任何命中必须先
-确认并删除敏感值，不得提交。
-
-- [x] **Step 3: 提交真实发现产物**
+- [ ] **Step 2：验证清单只包含元数据**
 
 Run:
 
 ```bash
-git add artifacts/审计/数据源清单.csv docs/审计/数据源清单.md
-git commit -m 'docs: 记录数据资产只读发现结果'
+python3 - <<'PY'
+from pathlib import Path
+import csv
+
+csv_path = Path('artifacts/审计/数据源清单.csv')
+rows = list(csv.DictReader(csv_path.open()))
+assert rows
+assert {'BTC', 'ETH', 'SOL'} & {item for row in rows for item in row['标的范围'].split('|')}
+for row in rows:
+    assert 'password' not in str(row).lower()
+    assert 'token=' not in str(row).lower()
+print(f'资产行数：{len(rows)}')
+PY
 ```
 
-## Task 5: 完整验收并更新待评审状态
+Expected: 资产行数大于0；不得要求三种标的都有数据，缺失本身是正式结果。
 
-**Files:**
-
-- Modify: `docs/研发中心/任务/任务-000003.md`
-- Modify: `docs/研发中心/看板.md`
-- Modify: `docs/superpowers/plans/2026-07-28-data-asset-discovery.md`
-
-- [x] **Step 1: 运行完整验证**
+- [ ] **Step 3：运行完整验证**
 
 Run:
 
 ```bash
-python3 -m unittest discover -s tests/研发中心 -p 'test_*.py' -v
-python3 -m unittest discover -s tests/审计 -p 'test_*.py' -v
+python3 -m unittest discover -s tests -p 'test_*.py' -v
 npx --yes markdownlint-cli2 \
+  docs/审计/数据源清单.md \
   docs/superpowers/specs/2026-07-28-data-asset-discovery-design.md \
   docs/superpowers/plans/2026-07-28-data-asset-discovery.md \
-  docs/审计/数据源清单.md \
   docs/研发中心/任务/任务-000003.md \
   docs/研发中心/看板.md
 git diff --check origin/main...HEAD
 ```
 
-Expected: 全部测试通过、Markdown为0 issues、无空白错误。
+另运行任务中心一一映射、禁止命令、凭据/IP模式、CSV重复行、批次一致性和不读取
+内容的静态检查。
 
-- [x] **Step 2: 逐项核验任务交付与安全边界**
+- [ ] **Step 4：更新任务为待评审**
 
-确认四个交付物存在；真实产物只包含允许的元数据；未读取候选文件内容或数据库业务
-记录；未修改服务器、数据库、服务、权限、防火墙或原始数据；未产生胜率、收益、
-质量、可重放或交易许可结论。
+任务文件记录：执行分支、开始/完成时间、实现提交、PR #23、四项交付物、真实资产
+数量、部分失败、验证结果、已知限制和数据安全影响。看板把任务-000003移到`待评审`。
 
-- [x] **Step 3: 更新任务和看板为待评审**
+不得把任务-000004至000006解阻；它们必须等待任务-000003评审合并。
 
-任务文件记录实现提交、PR #23、交付物、实际验证结果、已知限制、数据与安全影响、
-需要人工决策和自动合并资格。看板同步移动到待评审区。
-
-- [x] **Step 4: 提交并推送最终状态，更新PR正文并转为可评审**
-
-Run:
+- [ ] **Step 5：提交并推送最终状态**
 
 ```bash
-git commit -m 'docs: 更新任务000003待评审状态'
+git add \
+  artifacts/审计/数据源清单.csv \
+  docs/审计/数据源清单.md \
+  scripts/审计/发现数据资产.py \
+  tests/审计/test_发现数据资产.py \
+  docs/研发中心/任务/任务-000003.md \
+  docs/研发中心/看板.md
+git commit -m "docs: 提交任务000003审计结果"
 git push
-env -u GITHUB_TOKEN gh pr ready 23 --repo xk320/zhishi
 ```
 
-PR正文必须包含任务、交付物、验收结果、验证命令、已知限制、数据与安全影响和回滚
-方式。任务缺少基线类型，且PR包含脚本、测试和CSV，因此自动合并资格为“不符合并转
-人工”，不得自行合并。
+- [ ] **Step 6：更新PR #23并转为待评审**
+
+PR标题改为`feat: 建立可验证数据源清单（任务-000003）`，正文写明任务、交付物、
+验收结果、验证命令、部分失败、数据与安全影响、已知限制和回滚方式。确认最终头SHA
+后再把草稿转为Ready；不得自行合并。
