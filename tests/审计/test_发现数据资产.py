@@ -362,6 +362,11 @@ class DataAssetDiscoveryTests(unittest.TestCase):
         self.assertEqual(["mysql.service"], [item["name"] for item in payload["services"]])
         self.assertEqual(2, len(payload["containers"]))
 
+        mysql_commands = [command for command in commands if command[0] == "mysql"]
+        self.assertEqual(1, len(mysql_commands))
+        self.assertEqual("--no-defaults", mysql_commands[0][1])
+        self.assertIn("--protocol=SOCKET", mysql_commands[0])
+
         for command, kwargs in captured:
             environment = kwargs.get("env")
             self.assertIsInstance(environment, dict, command)

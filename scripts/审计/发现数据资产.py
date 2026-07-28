@@ -413,7 +413,7 @@ REMOTE_PROBE = textwrap.dedent(
     mysql_result = run_fixed(
         [
             "mysql", "--no-defaults", "--batch", "--skip-column-names",
-            "--connect-timeout=3", "-e", metadata_query,
+            "--protocol=SOCKET", "--connect-timeout=3", "-e", metadata_query,
         ],
         timeout=8,
     )
