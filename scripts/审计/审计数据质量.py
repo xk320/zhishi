@@ -9,17 +9,15 @@ import datetime as dt
 import hashlib
 import io
 import json
-import math
 import os
+import platform
 import re
-import sqlite3
 import subprocess
 import sys
 import tempfile
 import textwrap
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, Sequence
-from urllib.parse import quote
 
 
 AUDIT_VERSION = "1.0"
@@ -117,6 +115,7 @@ ANOMALY_COLUMNS = (
     "处置",
 )
 SSH_TARGET_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
+ALLOWED_SSH_TARGETS = {"ubuntu"}
 ASSET_ID_PATTERN = re.compile(r"^DS-\d{6}$")
 MYSQL_LOCATION_PATTERN = re.compile(r"^MySQL/([A-Za-z0-9_]+)/([A-Za-z0-9_]+)$")
 IPV4_PATTERN = re.compile(
@@ -158,6 +157,17 @@ TIME_CANDIDATES = {
         "created_at",
     },
 }
+ERROR_REASONS = {
+    "identity_changed_before_scan": "结构阶段与质量阶段之间文件身份变化，未执行内容统计",
+    "identity_changed_during_scan": "内容扫描期间文件身份变化，结果不完整",
+    "schema_changed_between_phases": "两阶段数据库元数据结构不一致，未形成质量结论",
+    "sensitive_system_log_excluded": "敏感系统日志按安全边界排除正文读取",
+    "object_timeout": "单对象只读扫描超时",
+    "quality_read_failed": "只读质量扫描失败",
+    "mysql_metadata_unavailable": "MySQL元数据不可用",
+    "mysql_object_not_found": "MySQL元数据对象未发现",
+    "unsupported_format": "格式不在审计支持范围",
+}
 
 
 REMOTE_AUDIT_PROGRAM = textwrap.dedent(
@@ -167,6 +177,7 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
     import json
     import math
     import os
+    import platform
     import re
     import signal
     import sqlite3
@@ -206,12 +217,30 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
             value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         )
 
-    def stat_identity(path):
+    def stat_identity(path, include_sqlite_companions=False):
         stat_result = os.lstat(path)
-        return {
+        identity = {
             "size": int(stat_result.st_size),
             "mtime_ns": int(stat_result.st_mtime_ns),
         }
+        if include_sqlite_companions:
+            companions = {}
+            for suffix in ("-wal", "-shm"):
+                companion = path + suffix
+                try:
+                    companion_stat = os.lstat(companion)
+                except FileNotFoundError:
+                    companions[suffix] = None
+                else:
+                    companions[suffix] = {
+                        "size": int(companion_stat.st_size),
+                        "mtime_ns": int(companion_stat.st_mtime_ns),
+                    }
+            identity["companions"] = companions
+        return identity
+
+    def file_identity(path, data_format):
+        return stat_identity(path, data_format == "SQLite")
 
     def validate_file_path(path):
         parsed = PurePosixPath(path)
@@ -245,7 +274,7 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
 
     def schema_csv(path, result):
         with open(path, "r", encoding="utf-8", errors="replace", newline="") as handle:
-            reader = csv.reader(handle)
+            reader = csv.reader(handle, strict=True)
             try:
                 fields = next(reader)
             except StopIteration:
@@ -258,7 +287,6 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
 
     def schema_jsonl(path, result):
         fields = set()
-        valid_objects = 0
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
             for line in handle:
                 if not line.strip():
@@ -269,9 +297,6 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
                     continue
                 if isinstance(value, dict):
                     fields.update(str(field) for field in value)
-                    valid_objects += 1
-                    if valid_objects >= 1000:
-                        break
         result.update(
             status="已发现结构",
             fields=sorted(fields),
@@ -317,7 +342,7 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
         result = base_object(unit)
         try:
             path = validate_file_path(unit["location"])
-            result["identity"] = stat_identity(path)
+            result["identity"] = file_identity(path, unit["format"])
             data_format = unit["format"]
             if data_format == "CSV":
                 schema_csv(path, result)
@@ -329,7 +354,7 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
                 result.update(status="无法判定", error_code="unsupported_format")
         except ObjectTimeout:
             result.update(status="无法判定", error_code="object_timeout")
-        except (OSError, ValueError, sqlite3.Error):
+        except (OSError, ValueError, sqlite3.Error, csv.Error):
             result.update(status="无法判定", error_code="schema_read_failed")
         return result
 
@@ -402,6 +427,7 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
             "record_count": 0,
             "field_count": 0,
             "missing_count": 0,
+            "cell_count": 0,
             "duplicate_status": "已量化（规范记录完全一致）",
             "exact_duplicate_count": 0,
             "row_width_error_count": 0,
@@ -409,6 +435,7 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
             "invalid_json_count": 0,
             "non_object_count": 0,
             "non_finite_number_count": 0,
+            "csv_parse_error_count": 0,
             "fields": [],
             "primary_key": [],
         }
@@ -427,30 +454,45 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
         seen = set()
         duplicate_complete = True
         with open(path, "r", encoding="utf-8", errors="replace", newline="") as handle:
-            reader = csv.reader(handle)
+            reader = csv.reader(handle, strict=True)
             try:
                 fields = next(reader)
             except StopIteration:
                 result["status"] = "空文件"
                 return result
+            except csv.Error:
+                result.update(
+                    status="CSV解析失败",
+                    scan_completeness="未完整",
+                    csv_parse_error_count=1,
+                )
+                return result
             result["fields"] = fields
             result["field_count"] = len(fields)
-            for row in reader:
-                result["record_count"] += 1
-                if len(row) != len(fields):
-                    result["row_width_error_count"] += 1
-                normalized = row[:len(fields)] + [""] * max(0, len(fields) - len(row))
-                result["missing_count"] += sum(
-                    1 for value in normalized if not value.strip()
+            try:
+                for row in reader:
+                    result["record_count"] += 1
+                    if len(row) != len(fields):
+                        result["row_width_error_count"] += 1
+                    normalized = row[:len(fields)] + [""] * max(0, len(fields) - len(row))
+                    result["missing_count"] += sum(
+                        1 for value in normalized if not value.strip()
+                    )
+                    if duplicate_complete:
+                        digest = hashlib.sha256(canonical(row).encode("utf-8")).digest()
+                        if digest in seen:
+                            result["exact_duplicate_count"] += 1
+                        elif len(seen) < duplicate_limit:
+                            seen.add(digest)
+                        else:
+                            duplicate_complete = False
+            except csv.Error:
+                result.update(
+                    status="CSV解析失败",
+                    scan_completeness="未完整",
+                    csv_parse_error_count=1,
                 )
-                if duplicate_complete:
-                    digest = hashlib.sha256(canonical(row).encode("utf-8")).digest()
-                    if digest in seen:
-                        result["exact_duplicate_count"] += 1
-                    elif len(seen) < duplicate_limit:
-                        seen.add(digest)
-                    else:
-                        duplicate_complete = False
+            result["cell_count"] = result["record_count"] * result["field_count"]
         if not duplicate_complete:
             result["duplicate_status"] = "无法判定（超过重复集合上限）"
             result["exact_duplicate_count"] = "无法判定"
@@ -498,6 +540,7 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
                         duplicate_complete = False
         result["fields"] = sorted(fields)
         result["field_count"] = len(fields)
+        result["cell_count"] = result["record_count"] * result["field_count"]
         result["missing_count"] = sum(missing_by_field.values())
         if not duplicate_complete:
             result["duplicate_status"] = "无法判定（超过重复集合上限）"
@@ -539,7 +582,9 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
                     "SELECT " + ", ".join(expressions) + " FROM " + quoted(str(table))
                 ).fetchone()
                 if values:
-                    result["record_count"] += int(values[0] or 0)
+                    table_record_count = int(values[0] or 0)
+                    result["record_count"] += table_record_count
+                    result["cell_count"] += table_record_count * len(names)
                     result["missing_count"] += sum(int(value or 0) for value in values[1:])
             result["field_count"] = len(result["fields"])
             if duplicate_proven:
@@ -556,7 +601,7 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
         result = empty_quality(asset_id)
         try:
             path = validate_file_path(unit["location"])
-            before = stat_identity(path)
+            before = file_identity(path, unit["format"])
             if rule.get("identity") and before != rule["identity"]:
                 result.update(
                     status="输入漂移",
@@ -576,7 +621,7 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
                     error_code="unsupported_format",
                 )
                 return result
-            after = stat_identity(path)
+            after = file_identity(path, unit["format"])
             if before != after:
                 result.update(
                     status="输入漂移",
@@ -597,7 +642,21 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
             )
         return result
 
-    def quality_mysql(schema_results):
+    def schema_fingerprint(schema):
+        contract = {
+            "status": schema.get("status", "无法判定"),
+            "fields": sorted(str(field) for field in schema.get("fields", [])),
+            "types": {
+                str(key): str(value)
+                for key, value in sorted(schema.get("types", {}).items())
+            },
+            "primary_key": sorted(
+                str(field) for field in schema.get("primary_key", [])
+            ),
+        }
+        return hashlib.sha256(canonical(contract).encode("utf-8")).hexdigest()
+
+    def quality_mysql(schema_results, rules):
         converted = []
         for schema in schema_results:
             result = empty_quality(schema["asset_id"])
@@ -612,6 +671,15 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
                 fields=schema.get("fields", []),
                 primary_key=schema.get("primary_key", []),
             )
+            rule = rules.get(schema["asset_id"], {})
+            if rule.get("schema_fingerprint") != schema_fingerprint(schema):
+                result.update(
+                    status="输入漂移",
+                    scan_completeness="未执行",
+                    record_count="无法判定",
+                    field_count="无法判定",
+                    error_code="schema_changed_between_phases",
+                )
             if schema.get("status") != "已发现结构":
                 result.update(
                     status="无法判定", scan_completeness="未执行",
@@ -690,10 +758,14 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
                         )
                     finally:
                         signal.alarm(0)
-                results.extend(quality_mysql(mysql_metadata(databases)))
+                results.extend(quality_mysql(mysql_metadata(databases), rules))
             payload = {
                 "audit_version": AUDIT_VERSION,
                 "phase": phase,
+                "runtime": {
+                    "python": platform.python_version(),
+                    "platform": platform.system() + "-" + platform.machine(),
+                },
                 "objects": sorted(results, key=lambda item: item["asset_id"]),
             }
             json.dump(payload, sys.stdout, ensure_ascii=False, sort_keys=True)
@@ -727,6 +799,8 @@ def safe_csv_cell(value: object) -> str:
 def validate_ssh_target(target: str) -> str:
     if not target or not SSH_TARGET_PATTERN.fullmatch(target):
         raise ValueError("SSH目标别名不安全")
+    if target not in ALLOWED_SSH_TARGETS:
+        raise ValueError("SSH目标不在任务固定白名单")
     return target
 
 
@@ -796,7 +870,23 @@ def _fingerprint(value: object) -> str:
 
 def _time_candidates(fields: Iterable[str], kind: str) -> list[str]:
     aliases = TIME_CANDIDATES[kind]
-    return sorted(field for field in fields if field.strip().lower() in aliases)
+    return sorted(
+        field
+        for field in fields
+        if field.strip().lower().rsplit(".", 1)[-1] in aliases
+    )
+
+
+def _schema_contract(item: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "status": str(item.get("status", "无法判定")),
+        "fields": sorted(str(field) for field in item.get("fields", [])),
+        "types": {
+            str(key): str(value)
+            for key, value in sorted(dict(item.get("types", {})).items())
+        },
+        "primary_key": sorted(str(field) for field in item.get("primary_key", [])),
+    }
 
 
 def freeze_rules(schema_payload: Mapping[str, object]) -> tuple[dict[str, object], str]:
@@ -820,6 +910,7 @@ def freeze_rules(schema_payload: Mapping[str, object]) -> tuple[dict[str, object
                 "asset_id": asset_id,
                 "schema_status": str(item.get("status", "无法判定")),
                 "identity": dict(item.get("identity", {})),
+                "schema_fingerprint": _fingerprint(_schema_contract(item)),
                 "primary_key": sorted(str(field) for field in item.get("primary_key", [])),
                 "event_time_status": "无法判定",
                 "event_time_candidates": _time_candidates(fields, "event"),
@@ -869,9 +960,16 @@ def validate_remote_payload(
     actual = [str(item.get("asset_id", "")) for item in objects]
     if len(actual) != len(set(actual)) or set(actual) != expected:
         raise ValueError("远端结果未覆盖全部验证单元或包含重复")
+    runtime = payload.get("runtime", {})
+    if not isinstance(runtime, dict):
+        runtime = {}
     return {
         "audit_version": AUDIT_VERSION,
         "phase": phase,
+        "runtime": {
+            "python": redact(runtime.get("python", "未记录")),
+            "platform": redact(runtime.get("platform", "未记录")),
+        },
         "objects": sorted(objects, key=lambda item: str(item["asset_id"])),
     }
 
@@ -941,183 +1039,6 @@ def run_remote_phase(
     return validate_remote_payload(payload, phase, units)
 
 
-def _empty_result() -> dict[str, object]:
-    return {
-        "status": "完成",
-        "scan_completeness": "完整",
-        "record_count": 0,
-        "field_count": 0,
-        "missing_count": 0,
-        "duplicate_status": "已量化（规范记录完全一致）",
-        "exact_duplicate_count": 0,
-        "row_width_error_count": 0,
-        "empty_line_count": 0,
-        "invalid_json_count": 0,
-        "non_object_count": 0,
-        "non_finite_number_count": 0,
-        "primary_key": [],
-        "fields": [],
-    }
-
-
-def audit_csv_file(path: Path, duplicate_limit: int = 500_000) -> dict[str, object]:
-    result = _empty_result()
-    seen: set[bytes] = set()
-    duplicate_complete = True
-    with path.open("r", encoding="utf-8", errors="replace", newline="") as handle:
-        reader = csv.reader(handle)
-        try:
-            header = next(reader)
-        except StopIteration:
-            result["status"] = "空文件"
-            return result
-        result["fields"] = [str(field) for field in header]
-        result["field_count"] = len(header)
-        for row in reader:
-            result["record_count"] = int(result["record_count"]) + 1
-            expected = len(header)
-            if len(row) != expected:
-                result["row_width_error_count"] = int(result["row_width_error_count"]) + 1
-            normalized = list(row[:expected]) + [""] * max(0, expected - len(row))
-            result["missing_count"] = int(result["missing_count"]) + sum(
-                1 for value in normalized if not value.strip()
-            )
-            if duplicate_complete:
-                digest = hashlib.sha256(_canonical_json(row).encode("utf-8")).digest()
-                if digest in seen:
-                    result["exact_duplicate_count"] = int(result["exact_duplicate_count"]) + 1
-                elif len(seen) < duplicate_limit:
-                    seen.add(digest)
-                else:
-                    duplicate_complete = False
-    if not duplicate_complete:
-        result["duplicate_status"] = "无法判定（超过重复集合上限）"
-        result["exact_duplicate_count"] = "无法判定"
-    return result
-
-
-def _count_non_finite(value: object) -> int:
-    if isinstance(value, float) and not math.isfinite(value):
-        return 1
-    if isinstance(value, dict):
-        return sum(_count_non_finite(item) for item in value.values())
-    if isinstance(value, list):
-        return sum(_count_non_finite(item) for item in value)
-    return 0
-
-
-def audit_jsonl_file(path: Path, duplicate_limit: int = 500_000) -> dict[str, object]:
-    result = _empty_result()
-    seen: set[bytes] = set()
-    duplicate_complete = True
-    fields: set[str] = set()
-    missing_by_field: dict[str, int] = {}
-    object_count = 0
-    with path.open("r", encoding="utf-8", errors="replace") as handle:
-        for line in handle:
-            if not line.strip():
-                result["empty_line_count"] = int(result["empty_line_count"]) + 1
-                continue
-            try:
-                value = json.loads(line)
-            except (TypeError, ValueError):
-                result["invalid_json_count"] = int(result["invalid_json_count"]) + 1
-                continue
-            if not isinstance(value, dict):
-                result["non_object_count"] = int(result["non_object_count"]) + 1
-                continue
-            current_fields = {str(field) for field in value}
-            for field in current_fields - fields:
-                missing_by_field[field] = object_count
-            fields.update(current_fields)
-            for field in fields:
-                if field not in value or value[field] is None or (
-                    isinstance(value[field], str) and not value[field].strip()
-                ):
-                    missing_by_field[field] += 1
-            object_count += 1
-            result["record_count"] = object_count
-            result["non_finite_number_count"] = int(
-                result["non_finite_number_count"]
-            ) + _count_non_finite(value)
-            if duplicate_complete:
-                digest = hashlib.sha256(_canonical_json(value).encode("utf-8")).digest()
-                if digest in seen:
-                    result["exact_duplicate_count"] = int(result["exact_duplicate_count"]) + 1
-                elif len(seen) < duplicate_limit:
-                    seen.add(digest)
-                else:
-                    duplicate_complete = False
-    result["fields"] = sorted(fields)
-    result["field_count"] = len(fields)
-    result["missing_count"] = sum(missing_by_field.values())
-    if not duplicate_complete:
-        result["duplicate_status"] = "无法判定（超过重复集合上限）"
-        result["exact_duplicate_count"] = "无法判定"
-    return result
-
-
-def _quote_identifier(identifier: str) -> str:
-    return '"' + identifier.replace('"', '""') + '"'
-
-
-def audit_sqlite_file(path: Path) -> dict[str, object]:
-    result = _empty_result()
-    uri = "file:" + quote(str(path), safe="/") + "?mode=ro"
-    connection = sqlite3.connect(uri, uri=True)
-    try:
-        connection.execute("PRAGMA query_only=ON")
-        table_rows = connection.execute(
-            "SELECT name FROM sqlite_master "
-            "WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-        ).fetchall()
-        all_fields = []
-        primary_key = []
-        duplicate_proven = True
-        for (table,) in table_rows:
-            quoted_table = _quote_identifier(str(table))
-            columns = connection.execute(f"PRAGMA table_info({quoted_table})").fetchall()
-            column_names = [str(column[1]) for column in columns]
-            all_fields.extend(f"{table}.{column}" for column in column_names)
-            table_primary = [
-                str(column[1]) for column in sorted(columns, key=lambda item: int(item[5])) if int(column[5])
-            ]
-            primary_key.extend(f"{table}.{column}" for column in table_primary)
-            if not table_primary:
-                duplicate_proven = False
-            if not column_names:
-                continue
-            expressions = ["COUNT(*)"] + [
-                "SUM(CASE WHEN "
-                + _quote_identifier(column)
-                + " IS NULL OR (typeof("
-                + _quote_identifier(column)
-                + ")='text' AND trim("
-                + _quote_identifier(column)
-                + ")='') THEN 1 ELSE 0 END)"
-                for column in column_names
-            ]
-            values = connection.execute(
-                f"SELECT {', '.join(expressions)} FROM {quoted_table}"
-            ).fetchone()
-            if values:
-                result["record_count"] = int(result["record_count"]) + int(values[0] or 0)
-                result["missing_count"] = int(result["missing_count"]) + sum(
-                    int(value or 0) for value in values[1:]
-                )
-        result["fields"] = all_fields
-        result["field_count"] = len(all_fields)
-        result["primary_key"] = primary_key
-        if duplicate_proven:
-            result["duplicate_status"] = "已量化（SQLite声明主键）"
-        else:
-            result["duplicate_status"] = "无法判定（部分表未声明主键）"
-            result["exact_duplicate_count"] = "无法判定"
-        return result
-    finally:
-        connection.close()
-
-
 def _index_by_asset(items: object) -> dict[str, dict[str, object]]:
     if not isinstance(items, list):
         return {}
@@ -1160,11 +1081,7 @@ def build_output_rows(
         record_count = result.get("record_count", "无法判定")
         field_count = result.get("field_count", len(schema.get("fields", [])))
         missing_count = result.get("missing_count", "无法判定")
-        denominator = (
-            int(record_count) * int(field_count)
-            if str(record_count).isdigit() and str(field_count).isdigit()
-            else "无法判定"
-        )
+        denominator = result.get("cell_count", "无法判定")
         evidence = _fingerprint(
             {"schema": schema, "quality": result, "rule": rule}
         )
@@ -1172,6 +1089,11 @@ def build_output_rows(
             "缺少已证明的标的、市场、三类时间、频率、重放和闭环合同；"
             "本结果不得用于预测性研究或交易许可"
         )
+        error_code = str(result.get("error_code", schema.get("error_code", "")))
+        status_reason = ERROR_REASONS.get(error_code, "")
+        evidence_basis = f"结构与质量证据{evidence}"
+        if status_reason:
+            evidence_basis += f"；{status_reason}"
         quality_rows.append(
             {
                 "审计批次": str(metadata["audit_batch"]),
@@ -1202,7 +1124,7 @@ def build_output_rows(
                 "乱序状态": "无法判定（缺少已证明的事件时间与排序合同）",
                 "实际覆盖范围": str(result.get("coverage", "无法判定")),
                 "可用性结论": "无法判定",
-                "依据": f"结构与质量证据{evidence}",
+                "依据": evidence_basis,
                 "限制": limitation,
                 "解除条件": "补齐来源、市场、标的、字段、三类时间、频率合同并完成重放与闭环验证",
                 "证据指纹": evidence,
@@ -1225,17 +1147,33 @@ def build_output_rows(
                 "解除条件": "冻结事件时间字段、时区、边界规则和预期频率后创建新审计批次",
             }
         )
-        anomaly_count = sum(
-            int(result.get(key, 0) or 0)
-            for key in (
-                "row_width_error_count",
-                "empty_line_count",
-                "invalid_json_count",
-                "non_object_count",
-                "non_finite_number_count",
+        scan_completeness = str(result.get("scan_completeness", "无法判定"))
+        if scan_completeness == "完整":
+            anomaly_count: object = sum(
+                int(result.get(key, 0) or 0)
+                for key in (
+                    "row_width_error_count",
+                    "empty_line_count",
+                    "invalid_json_count",
+                    "non_object_count",
+                    "non_finite_number_count",
+                    "csv_parse_error_count",
+                )
+                if str(result.get(key, 0)).isdigit()
             )
-            if str(result.get(key, 0)).isdigit()
-        )
+            anomaly_ratio = _ratio(anomaly_count, record_count)
+            severity = "高" if anomaly_count else "低"
+            rule_status = "已执行"
+        elif scan_completeness == "元数据范围":
+            anomaly_count = "无法判定"
+            anomaly_ratio = "无法判定"
+            severity = "无法判定"
+            rule_status = "仅元数据，未执行内容异常规则"
+        else:
+            anomaly_count = "无法判定"
+            anomaly_ratio = "无法判定"
+            severity = "无法判定"
+            rule_status = "未完整" if scan_completeness == "未完整" else "未执行"
         anomaly_rows.append(
             {
                 "审计批次": str(metadata["audit_batch"]),
@@ -1247,9 +1185,9 @@ def build_output_rows(
                 "规则编号": "DQ-STRUCT-001",
                 "异常类型": "结构解析异常汇总",
                 "异常数量": str(anomaly_count),
-                "异常比例": _ratio(anomaly_count, record_count),
-                "严重度": "高" if anomaly_count else "低",
-                "规则状态": "已执行" if result else "无法判定",
+                "异常比例": anomaly_ratio,
+                "严重度": severity,
+                "规则状态": rule_status,
                 "证据": evidence,
                 "处置": "仅记录，不修改原始数据",
             }
@@ -1302,7 +1240,13 @@ def render_report(
     )
     unquantified_duplicates = len(quality_rows) - len(quantified_duplicates)
     metadata_only = sum(row.get("扫描完整性") == "元数据范围" for row in quality_rows)
-    excluded = sum(row.get("扫描完整性") == "未执行" for row in quality_rows)
+    not_executed = sum(row.get("扫描完整性") == "未执行" for row in quality_rows)
+    sensitive_excluded = sum(
+        row.get("扫描完整性") == "未执行"
+        and str(row.get("位置", "")).startswith("/var/lib/mysql/mysql/")
+        for row in quality_rows
+    )
+    input_drift = sum(row.get("扫描状态") == "输入漂移" for row in quality_rows)
     event_candidates = sum(
         row.get("事件时间候选字段", "无") != "无" for row in quality_rows
     )
@@ -1315,8 +1259,22 @@ def render_report(
     anomaly_total = sum(
         int(row["异常数量"])
         for row in anomaly_rows
-        if str(row.get("异常数量", "")).isdigit()
+        if row.get("规则状态") == "已执行"
+        and str(row.get("异常数量", "")).isdigit()
     )
+    anomaly_executed = sum(row.get("规则状态") == "已执行" for row in anomaly_rows)
+    anomaly_not_executed = len(anomaly_rows) - anomaly_executed
+    symbol_counts = {
+        symbol: sum(
+            symbol
+            in {
+                part.strip()
+                for part in str(row.get("候选标的范围", "")).split("、")
+            }
+            for row in quality_rows
+        )
+        for symbol in ("BTC", "ETH", "SOL")
+    }
     lines = [
         "# 《知势》数据质量审计报告",
         "",
@@ -1328,6 +1286,10 @@ def render_report(
         f"- 资产清单SHA-256：`{redact(metadata['inventory_fingerprint'])}`",
         f"- 规则版本：`{RULE_VERSION}`",
         f"- 规则SHA-256：`{redact(metadata['rules_fingerprint'])}`",
+        f"- 结构SHA-256：`{redact(metadata.get('schema_fingerprint', '未记录'))}`",
+        f"- 规则冻结时间：`{redact(metadata.get('rules_frozen_at', metadata['cutoff_time']))}`",
+        f"- 脚本与本地环境：`{AUDIT_VERSION}` / `{redact(metadata.get('local_runtime', '未记录'))}`",
+        f"- 远端逻辑环境：`{redact(metadata.get('ssh_target', '未记录'))}` / `{redact(metadata.get('remote_runtime', '未记录'))}`",
         "- 执行方式：固定白名单、远端无落盘、文件与SQLite只读、MySQL仅元数据",
         "",
         "## 技术摘要",
@@ -1335,7 +1297,7 @@ def render_report(
         f"- **结论：BTC、ETH、SOL均为无法判定。** {unresolved}个验证单元没有一个具备已证明的标的身份、三类时间、频率、重放和最小闭环证据。",
         f"- **文件结构质量已形成部分可重算证据。** {complete}个文件完整扫描，共{file_records}条记录、{structural_missing}项空值或空文本；已量化{exact_duplicates}条规范记录重复。",
         f"- **时间与断档硬门仍未建立。** 只有{arrival_candidates}个验证单元出现到达时间候选字段，且候选字段均未获得业务语义证明；全部断档结果保持无法判定。",
-        f"- **审计保持只读。** {metadata_only}个MySQL对象仅查询元数据，{excluded}个敏感系统日志保留覆盖记录但未读取正文。",
+        f"- **审计保持只读。** {metadata_only}个MySQL对象仅查询元数据，{sensitive_excluded}个敏感系统日志保留覆盖记录但未读取正文；{input_drift}个动态文件因两阶段身份漂移未形成内容结论。",
         "",
         "## 全部验证单元均未达到可用性证据门槛",
         "",
@@ -1343,8 +1305,8 @@ def render_report(
         f"- 完整扫描：{complete}个；未完整或无法执行：{len(quality_rows) - complete}个。",
         f"- 完整扫描文件记录：{file_records}条；结构空值或空文本：{structural_missing}项。",
         f"- 已量化的规范记录重复：{exact_duplicates}条；重复仍无法完整量化：{unquantified_duplicates}个验证单元。",
-        f"- MySQL仅元数据：{metadata_only}个；因敏感系统日志边界未执行：{excluded}个。",
-        f"- 结构解析异常合计：{anomaly_total}项；该数字不包含未定义的业务异常。",
+        f"- MySQL仅元数据：{metadata_only}个；未执行：{not_executed}个（敏感系统日志{sensitive_excluded}个、输入漂移{input_drift}个）。",
+        f"- 结构解析异常规则在{anomaly_executed}个完整扫描对象执行，发现{anomaly_total}项；{anomaly_not_executed}个仅元数据、未完整或未执行对象不进入零异常分母。该数字不包含未定义的业务异常。",
         f"- 可用性仍无法判定的验证单元：{unresolved}个。",
         f"- 事件时间候选字段：{event_candidates}个验证单元；到达时间候选字段：{arrival_candidates}个；采集时间候选字段：{collection_candidates}个。候选不构成时间语义证明。",
         "- 字段名称只被记录为时间候选，没有被自动认定为事件、到达或采集时间。",
@@ -1374,9 +1336,17 @@ def render_report(
         "| --- | --- | --- | --- | --- |",
     ]
     for symbol in ("BTC", "ETH", "SOL"):
+        count = symbol_counts[symbol]
+        if count:
+            scope = (
+                f"{count}个已登记候选验证单元；候选映射未证明精确标的、市场、合约或时间尺度"
+            )
+            basis = "存在候选映射，但缺少正式标的身份、三类时间、频率、重放和最小闭环证据"
+        else:
+            scope = f"0个已登记候选验证单元；清单未发现{symbol}候选证据"
+            basis = "没有该标的候选覆盖，且缺少正式数据合同与完整性证据"
         lines.append(
-            f"| {symbol} | 无法判定 | 任务-000003清单中的{symbol}候选资产，未证明市场、合约和时间尺度 | "
-            "缺少正式标的身份、三类时间、频率、重放和最小闭环证据 | "
+            f"| {symbol} | 无法判定 | {scope} | {basis} | "
             "禁止预测性研究与交易许可；补齐合同后创建新审计批次 |"
         )
     lines.extend(
@@ -1434,7 +1404,18 @@ def publish_outputs(outputs: Mapping[Path, str]) -> None:
             raise ValueError(f"输出目录必须存在且不是符号链接：{path.parent}")
         if path.suffix not in {".csv", ".md"}:
             raise ValueError(f"输出扩展名必须是.csv或.md：{path}")
-        normalized[path] = str(content)
+        serialized = str(content)
+        if any(
+            pattern.search(serialized)
+            for pattern in (
+                IPV4_PATTERN,
+                CREDENTIAL_PATTERN,
+                TOKEN_PATTERN,
+                PRIVATE_KEY_PATTERN,
+            )
+        ):
+            raise ValueError(f"输出内容命中敏感信息模式，拒绝发布：{path}")
+        normalized[path] = serialized
 
     temporary: dict[Path, Path] = {}
     previous: dict[Path, bytes | None] = {}
@@ -1525,6 +1506,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         rules, rules_sha256 = freeze_rules(schema_payload)
         schema_sha256 = _fingerprint(schema_payload)
+        rules_frozen_at = dt.datetime.now().astimezone()
 
         print("质量阶段：规则已冻结，开始只读统计", file=sys.stderr, flush=True)
         quality_payload = run_remote_phase(
@@ -1541,7 +1523,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             "schema_fingerprint": schema_sha256,
             "rules_fingerprint": rules_sha256,
             "cutoff_time": cutoff.isoformat(timespec="seconds"),
+            "rules_frozen_at": rules_frozen_at.isoformat(timespec="seconds"),
             "unit_count": len(units),
+            "local_runtime": f"Python {platform.python_version()} / {platform.system()}-{platform.machine()}",
+            "ssh_target": arguments.ssh_target,
+            "remote_runtime": (
+                f"Python {schema_payload.get('runtime', {}).get('python', '未记录')} / "
+                f"{schema_payload.get('runtime', {}).get('platform', '未记录')}"
+            ),
         }
         quality_rows, gap_rows, anomaly_rows = build_output_rows(
             units, schema_payload, quality_payload, rules, metadata
