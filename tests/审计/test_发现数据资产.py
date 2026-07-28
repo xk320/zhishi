@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import importlib.util
+import contextlib
+import io
 import json
+import os as real_os
 import stat
+import subprocess as real_subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -199,6 +204,8 @@ class DataAssetDiscoveryTests(unittest.TestCase):
         self.assertEqual(["ubuntu", "python3", "-"], command[-3:])
         with self.assertRaisesRegex(ValueError, "SSH目标"):
             self.discovery.build_ssh_command("ssh", "ubuntu;touch /tmp/x", 10)
+        with self.assertRaisesRegex(ValueError, "SSH目标"):
+            self.discovery.build_ssh_command("ssh", "other-safe-alias", 10)
 
     def test_脱敏覆盖ip私钥令牌和明文凭据(self):
         value = (
@@ -226,6 +233,159 @@ class DataAssetDiscoveryTests(unittest.TestCase):
         )
         fake_ssh.chmod(fake_ssh.stat().st_mode | stat.S_IXUSR)
         return fake_ssh
+
+    def _execute_remote_probe(
+        self,
+        *,
+        missing_commands: set[str] | None = None,
+        walk_permission_error: bool = False,
+    ):
+        captured: list[tuple[list[str], dict[str, object]]] = []
+        missing_commands = missing_commands or set()
+
+        def fake_run(arguments, **kwargs):
+            command = list(arguments)
+            captured.append((command, dict(kwargs)))
+            if command[0] in missing_commands:
+                raise FileNotFoundError(command[0])
+            if command[0] == "timedatectl":
+                return SimpleNamespace(returncode=0, stdout="Asia/Shanghai\n")
+            if command[0] == "findmnt":
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "filesystems": [
+                                {
+                                    "target": "/",
+                                    "fstype": "ext4",
+                                    "vfs-options": "rw,relatime",
+                                    "children": [
+                                        {
+                                            "target": "/data",
+                                            "fstype": "xfs",
+                                            "vfs-options": "ro,relatime",
+                                        }
+                                    ],
+                                }
+                            ]
+                        }
+                    ),
+                )
+            if command[:2] == ["systemctl", "list-units"]:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=(
+                        "mysql.service loaded active running MySQL\n"
+                        "systemd-resolved.service loaded active running Resolver\n"
+                    ),
+                )
+            if command[:2] == ["systemctl", "show"]:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=(
+                        "User=mysql\nWorkingDirectory=/\n"
+                        "ActiveState=active\nSubState=running\n"
+                    ),
+                )
+            if command[0] == "ss":
+                return SimpleNamespace(returncode=0, stdout="")
+            if command[0] == "docker":
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout="market-data\tregistry/market:1\trunning\n",
+                )
+            if command[0] == "lxc":
+                return SimpleNamespace(returncode=0, stdout="research,RUNNING\n")
+            if command[0] == "mysql":
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout="market\tbtc_ticks\tInnoDB\n",
+                )
+            raise AssertionError(f"未处理的远端命令：{command}")
+
+        fake_subprocess = SimpleNamespace(
+            run=fake_run,
+            TimeoutExpired=real_subprocess.TimeoutExpired,
+        )
+        previous_subprocess = sys.modules.get("subprocess")
+        previous_os = sys.modules.get("os")
+        sys.modules["subprocess"] = fake_subprocess
+        if walk_permission_error:
+            def fake_stat(path, *, follow_symlinks=True):
+                if path == "/opt/binance-event":
+                    return SimpleNamespace(st_mtime=0, st_size=0)
+                raise FileNotFoundError(path)
+
+            def fake_walk(_root, *, topdown, onerror=None, followlinks):
+                self.assertTrue(topdown)
+                self.assertFalse(followlinks)
+                if onerror is not None:
+                    onerror(PermissionError("模拟目录权限不足"))
+                return iter(())
+
+            fake_os = SimpleNamespace(
+                path=real_os.path,
+                stat=fake_stat,
+                walk=fake_walk,
+            )
+            sys.modules["os"] = fake_os
+        output = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(output):
+                exec(self.discovery.REMOTE_PROBE, {})
+        finally:
+            if previous_subprocess is None:
+                sys.modules.pop("subprocess", None)
+            else:
+                sys.modules["subprocess"] = previous_subprocess
+            if previous_os is None:
+                sys.modules.pop("os", None)
+            else:
+                sys.modules["os"] = previous_os
+        return json.loads(output.getvalue()), captured
+
+    def test_远端探针只请求安全列并使用清洁环境(self):
+        payload, captured = self._execute_remote_probe()
+        commands = [command for command, _ in captured]
+
+        self.assertIn(
+            ["findmnt", "--json", "--output", "TARGET,FSTYPE,VFS-OPTIONS"],
+            commands,
+        )
+        self.assertIn(
+            ["docker", "ps", "--format", "{{.Names}}\\t{{.Image}}\\t{{.State}}"],
+            commands,
+        )
+        self.assertIn(["lxc", "list", "--format=csv", "-c", "ns"], commands)
+        self.assertEqual(2, len(payload["mounts"]))
+        self.assertEqual(["mysql.service"], [item["name"] for item in payload["services"]])
+        self.assertEqual(2, len(payload["containers"]))
+
+        for command, kwargs in captured:
+            environment = kwargs.get("env")
+            self.assertIsInstance(environment, dict, command)
+            self.assertEqual("/nonexistent", environment.get("HOME"), command)
+            self.assertEqual(
+                "/nonexistent/.mylogin.cnf",
+                environment.get("MYSQL_TEST_LOGIN_FILE"),
+                command,
+            )
+            for forbidden in ("MYSQL_PWD", "MYSQL_HOST", "MYSQL_USER", "MYSQL_TCP_PORT"):
+                self.assertNotIn(forbidden, environment, command)
+
+    def test_容器命令缺失时记录无法判定(self):
+        payload, _ = self._execute_remote_probe(missing_commands={"docker", "lxc"})
+
+        errors = {(item["category"], item["status"]) for item in payload["errors"]}
+        self.assertIn(("docker", "无法判定"), errors)
+        self.assertIn(("lxd", "无法判定"), errors)
+
+    def test_目录遍历权限不足时记录部分无法访问(self):
+        payload, _ = self._execute_remote_probe(walk_permission_error=True)
+
+        errors = {(item["category"], item["status"]) for item in payload["errors"]}
+        self.assertIn(("files:/opt/binance-event", "部分无法访问"), errors)
 
     def test_完整命令行流程写出同一批次的两个产物(self):
         with tempfile.TemporaryDirectory() as raw_directory:
@@ -275,6 +435,38 @@ class DataAssetDiscoveryTests(unittest.TestCase):
                         "旧Markdown",
                         markdown_output.read_text(encoding="utf-8"),
                     )
+
+    def test_第二个产物替换失败时回滚两个旧产物(self):
+        with tempfile.TemporaryDirectory() as raw_directory:
+            directory = Path(raw_directory)
+            csv_output = directory / "assets.csv"
+            markdown_output = directory / "assets.md"
+            csv_output.write_text("旧CSV", encoding="utf-8")
+            markdown_output.write_text("旧Markdown", encoding="utf-8")
+            real_replace = self.discovery.os.replace
+
+            def fail_markdown_publish(source, destination):
+                source_path = Path(source)
+                destination_path = Path(destination)
+                if destination_path == markdown_output and source_path.suffix == ".tmp":
+                    raise OSError("模拟第二个产物替换失败")
+                return real_replace(source, destination)
+
+            with mock.patch.object(
+                self.discovery.os,
+                "replace",
+                side_effect=fail_markdown_publish,
+            ):
+                with self.assertRaisesRegex(OSError, "第二个产物"):
+                    self.discovery._replace_outputs(
+                        csv_output,
+                        "新CSV",
+                        markdown_output,
+                        "新Markdown",
+                    )
+
+            self.assertEqual("旧CSV", csv_output.read_text(encoding="utf-8"))
+            self.assertEqual("旧Markdown", markdown_output.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

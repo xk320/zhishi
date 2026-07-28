@@ -77,6 +77,7 @@ PRIVATE_KEY_PATTERN = re.compile(
 
 REMOTE_PROBE = textwrap.dedent(
     r'''
+    import csv
     import datetime as dt
     import json
     import os
@@ -115,6 +116,13 @@ REMOTE_PROBE = textwrap.dedent(
         "celueqing", "mysql", "nginx",
     )
     MAX_FILES_PER_ROOT = 50000
+    SAFE_ENV = {
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "HOME": "/nonexistent",
+        "MYSQL_TEST_LOGIN_FILE": "/nonexistent/.mylogin.cnf",
+    }
 
     errors = []
 
@@ -131,6 +139,7 @@ REMOTE_PROBE = textwrap.dedent(
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                env=SAFE_ENV,
             )
         except (FileNotFoundError, subprocess.TimeoutExpired):
             return None
@@ -145,6 +154,10 @@ REMOTE_PROBE = textwrap.dedent(
             if isinstance(children, list):
                 flattened.extend(flatten_filesystems(children))
         return flattened
+
+    def is_relevant_service_name(name):
+        tokens = set(re.findall(r"[a-z0-9]+", name.lower()))
+        return bool(tokens.intersection(SERVICE_KEYWORDS))
 
     now = dt.datetime.now().astimezone()
     try:
@@ -167,7 +180,7 @@ REMOTE_PROBE = textwrap.dedent(
 
     mounts = []
     mount_result = run_fixed(
-        ["findmnt", "--json", "--output", "TARGET,FSTYPE,OPTIONS"],
+        ["findmnt", "--json", "--output", "TARGET,FSTYPE,VFS-OPTIONS"],
         timeout=5,
     )
     if mount_result is None or mount_result.returncode != 0:
@@ -178,7 +191,7 @@ REMOTE_PROBE = textwrap.dedent(
             for filesystem in flatten_filesystems(
                 mount_payload.get("filesystems", [])
             ):
-                options = str(filesystem.get("options", ""))
+                options = str(filesystem.get("vfs-options", ""))
                 option_set = set(options.split(","))
                 mounts.append(
                     {
@@ -208,8 +221,7 @@ REMOTE_PROBE = textwrap.dedent(
             if not fields:
                 continue
             name = fields[0]
-            lowered = name.lower()
-            if any(keyword in lowered for keyword in SERVICE_KEYWORDS):
+            if is_relevant_service_name(name):
                 service_names.append(name)
         for name in sorted(set(service_names)):
             detail = run_fixed(
@@ -262,47 +274,47 @@ REMOTE_PROBE = textwrap.dedent(
 
     containers = []
     docker_result = run_fixed(
-        ["docker", "ps", "--format", "{{json .}}"],
+        ["docker", "ps", "--format", "{{.Names}}\\t{{.Image}}\\t{{.State}}"],
         timeout=8,
     )
     if docker_result is None:
         record_error("docker")
     elif docker_result.returncode == 0:
         for line in docker_result.stdout.splitlines():
-            try:
-                item = json.loads(line)
-            except ValueError:
+            fields = line.split("\t")
+            if len(fields) != 3:
                 record_error("docker")
                 continue
             containers.append(
                 {
                     "runtime": "Docker",
-                    "name": str(item.get("Names", "未知")),
-                    "image": str(item.get("Image", "未知")),
-                    "state": str(item.get("State", item.get("Status", "未知"))),
+                    "name": fields[0] or "未知",
+                    "image": fields[1] or "未知",
+                    "state": fields[2] or "未知",
                 }
             )
     else:
         record_error("docker", "无法访问")
 
-    lxc_result = run_fixed(["lxc", "list", "--format=json"], timeout=8)
+    lxc_result = run_fixed(
+        ["lxc", "list", "--format=csv", "-c", "ns"],
+        timeout=8,
+    )
     if lxc_result is None:
         record_error("lxd")
     elif lxc_result.returncode == 0:
-        try:
-            for item in json.loads(lxc_result.stdout):
-                containers.append(
-                    {
-                        "runtime": "LXD",
-                        "name": str(item.get("name", "未知")),
-                        "image": str(item.get("config", {}).get(
-                            "image.description", "未知"
-                        )),
-                        "state": str(item.get("status", "未知")),
-                    }
-                )
-        except (TypeError, ValueError):
-            record_error("lxd")
+        for fields in csv.reader(lxc_result.stdout.splitlines()):
+            if len(fields) != 2:
+                record_error("lxd")
+                continue
+            containers.append(
+                {
+                    "runtime": "LXD",
+                    "name": fields[0] or "未知",
+                    "image": "未知",
+                    "state": fields[1] or "未知",
+                }
+            )
     else:
         record_error("lxd", "无法访问")
 
@@ -332,10 +344,14 @@ REMOTE_PROBE = textwrap.dedent(
             }
         )
         discovered = 0
+        def walk_error(_error):
+            record_error("files:" + root, "部分无法访问")
+
         try:
             for current, directory_names, file_names in os.walk(
                 root,
                 topdown=True,
+                onerror=walk_error,
                 followlinks=False,
             ):
                 directory_names[:] = sorted(
@@ -360,7 +376,10 @@ REMOTE_PROBE = textwrap.dedent(
                         continue
                     try:
                         file_stat = os.stat(path, follow_symlinks=False)
-                    except (FileNotFoundError, PermissionError):
+                    except FileNotFoundError:
+                        continue
+                    except PermissionError:
+                        record_error("files:" + root, "部分无法访问")
                         continue
                     files.append(
                         {
@@ -911,8 +930,8 @@ def render_markdown(
 def build_ssh_command(ssh_bin: str, target: str, timeout: int) -> list[str]:
     """构造无shell、无交互且有界超时的SSH命令。"""
 
-    if not SSH_TARGET_PATTERN.fullmatch(target):
-        raise ValueError("SSH目标只能是安全的本机别名")
+    if not SSH_TARGET_PATTERN.fullmatch(target) or target != "ubuntu":
+        raise ValueError("SSH目标只允许任务合同指定的本机别名ubuntu")
     if not 1 <= timeout <= 120:
         raise ValueError("SSH超时必须在1至120秒之间")
     return [
@@ -969,18 +988,57 @@ def _replace_outputs(
         raise ValueError("CSV与Markdown输出路径不能相同")
     csv_temporary: Path | None = None
     markdown_temporary: Path | None = None
+    csv_backup: Path | None = None
+    markdown_backup: Path | None = None
+    csv_published = False
+    markdown_published = False
+
+    def move_to_backup(target: Path) -> Path | None:
+        if not target.exists() and not target.is_symlink():
+            return None
+        descriptor, raw_path = tempfile.mkstemp(
+            prefix=f".{target.name}.",
+            suffix=".bak",
+            dir=target.parent,
+        )
+        os.close(descriptor)
+        backup = Path(raw_path)
+        backup.unlink()
+        os.replace(target, backup)
+        return backup
+
+    def restore(backup: Path | None, target: Path, published: bool) -> None:
+        if published and (target.exists() or target.is_symlink()):
+            target.unlink()
+        if backup is not None:
+            os.replace(backup, target)
+
     try:
         csv_temporary = _write_temporary(csv_output, csv_text)
         markdown_temporary = _write_temporary(markdown_output, markdown_text)
+        csv_backup = move_to_backup(csv_output)
+        markdown_backup = move_to_backup(markdown_output)
         os.replace(csv_temporary, csv_output)
         csv_temporary = None
+        csv_published = True
         os.replace(markdown_temporary, markdown_output)
         markdown_temporary = None
+        markdown_published = True
+    except BaseException:
+        restore(csv_backup, csv_output, csv_published)
+        csv_backup = None
+        restore(markdown_backup, markdown_output, markdown_published)
+        markdown_backup = None
+        raise
     finally:
         if csv_temporary is not None:
             csv_temporary.unlink(missing_ok=True)
         if markdown_temporary is not None:
             markdown_temporary.unlink(missing_ok=True)
+        if csv_backup is not None:
+            csv_backup.unlink(missing_ok=True)
+        if markdown_backup is not None:
+            markdown_backup.unlink(missing_ok=True)
 
 
 def run_discovery(
