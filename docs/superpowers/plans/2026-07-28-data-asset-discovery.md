@@ -59,12 +59,12 @@ Expected: Markdown为0 issues，空白检查通过并形成独立认领提交。
 - Create: `tests/审计/test_发现数据资产.py`
 - Test: `tests/审计/test_发现数据资产.py`
 
-- [ ] **Step 1: 写实现存在性和模块加载测试**
+- [x] **Step 1: 写实现存在性和模块加载测试**
 
 测试必须先断言`scripts/审计/发现数据资产.py`存在；实现文件缺失时测试明确失败。
 模块存在后通过`importlib.util.spec_from_file_location`加载，不依赖包名或第三方库。
 
-- [ ] **Step 2: 写纯函数合同测试**
+- [x] **Step 2: 写纯函数合同测试**
 
 使用固定探针JSON覆盖：
 
@@ -103,7 +103,7 @@ def sample_probe_result() -> dict[str, object]:
 断言：资产编号稳定、BTC范围正确、未知时间范围不被猜测、数据库失败被明确记录、
 相同资源去重、排序稳定、CSV和Markdown批次编号相同。
 
-- [ ] **Step 3: 写安全与失败合同测试**
+- [x] **Step 3: 写安全与失败合同测试**
 
 断言固定探针：
 
@@ -114,7 +114,7 @@ def sample_probe_result() -> dict[str, object]:
 - SSH失败、非法JSON或非法结构返回非零，且不覆盖既有产物；
 - 输出中不出现IPv4、私钥头、令牌或密码值。
 
-- [ ] **Step 4: 运行测试并确认正确失败**
+- [x] **Step 4: 运行测试并确认正确失败**
 
 Run:
 
@@ -131,7 +131,7 @@ Expected: 因实现文件不存在而失败，不是语法、夹具或导入错�
 - Create: `scripts/审计/发现数据资产.py`
 - Modify: `tests/审计/test_发现数据资产.py`
 
-- [ ] **Step 1: 实现远端固定探针**
+- [x] **Step 1: 实现远端固定探针**
 
 模块常量必须包含`PROBE_VERSION`、`ALLOWED_ROOTS`、`CANDIDATE_SUFFIXES`和
 `REMOTE_PROBE`。远端代码只用标准库和固定参数的`subprocess.run`：
@@ -158,7 +158,7 @@ CANDIDATE_SUFFIXES = {
 截断。MySQL只运行`mysql --no-defaults`的`information_schema`元数据查询，失败仅输出
 `无法访问`，不保留原始错误文本。
 
-- [ ] **Step 2: 实现结构校验与安全归一化**
+- [x] **Step 2: 实现结构校验与安全归一化**
 
 提供：
 
@@ -176,7 +176,7 @@ def redact(value: object) -> str: ...
 头、疑似令牌和`password/secret/token=值`。无法从文件元数据证明的时间范围写`未知`，
 不可把资源存在解释为数据质量或研究可用性。
 
-- [ ] **Step 3: 实现CLI与原子产物写入**
+- [x] **Step 3: 实现CLI与原子产物写入**
 
 CLI参数：`--target`、`--ssh-bin`、`--timeout`、`--csv-output`、
 `--markdown-output`。SSH使用参数数组，不调用shell：
@@ -197,7 +197,7 @@ command = [
 任一前置失败不创建、不截断、不覆盖既有产物。成功输出批次编号和资产数量，失败只给
 中文错误类别及退出码，不回显SSH标准错误中的主机、地址或凭据片段。
 
-- [ ] **Step 4: 运行测试直到全部通过**
+- [x] **Step 4: 运行测试直到全部通过**
 
 Run:
 
@@ -207,7 +207,7 @@ python3 -m unittest tests/审计/test_发现数据资产.py -v
 
 Expected: 所有发现器合同测试通过，0 failures、0 errors。
 
-- [ ] **Step 5: 提交实现与测试**
+- [x] **Step 5: 提交实现与测试**
 
 Run:
 
@@ -223,7 +223,7 @@ git commit -m 'feat: 建立只读数据资产发现器'
 - Create: `artifacts/审计/数据源清单.csv`
 - Create: `docs/审计/数据源清单.md`
 
-- [ ] **Step 1: 在目标环境执行一次真实只读发现**
+- [x] **Step 1: 在目标环境执行一次真实只读发现**
 
 Run:
 
@@ -236,13 +236,13 @@ python3 scripts/审计/发现数据资产.py --target ubuntu \
 Expected: 命令退出0，两个产物使用同一批次编号；数据库无凭据时记录`无法访问`而不
 寻找密码或扩大权限。
 
-- [ ] **Step 2: 执行产物合同和敏感信息检查**
+- [x] **Step 2: 执行产物合同和敏感信息检查**
 
 用只读Python检查CSV列、编号唯一、排序稳定、BTC/ETH/SOL映射、批次一致与Markdown
 必要章节。使用显式模式扫描IPv4、私钥头、GitHub/云令牌和明文凭据；任何命中必须先
 确认并删除敏感值，不得提交。
 
-- [ ] **Step 3: 提交真实发现产物**
+- [x] **Step 3: 提交真实发现产物**
 
 Run:
 
@@ -264,7 +264,8 @@ git commit -m 'docs: 记录数据资产只读发现结果'
 Run:
 
 ```bash
-python3 -m unittest discover -s tests -p 'test_*.py' -v
+python3 -m unittest discover -s tests/研发中心 -p 'test_*.py' -v
+python3 -m unittest discover -s tests/审计 -p 'test_*.py' -v
 npx --yes markdownlint-cli2 \
   docs/superpowers/specs/2026-07-28-data-asset-discovery-design.md \
   docs/superpowers/plans/2026-07-28-data-asset-discovery.md \
