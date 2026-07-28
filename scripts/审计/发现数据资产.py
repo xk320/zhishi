@@ -108,8 +108,9 @@ REMOTE_PROBE = textwrap.dedent(
     IGNORED_DIRECTORIES = {
         ".git", ".venv", "venv", "node_modules", "__pycache__",
         ".cache", "cache", "caches", "backup", "backups", "tmp",
-        "temp", "fixtures", "testdata", "tests",
+        "temp", "fixtures", "testdata", "tests", "deploy-staging",
     }
+    IGNORED_FILENAME_TOKENS = {"demo", "example", "fixture", "sample"}
     SERVICE_KEYWORDS = (
         "bitcoin", "btc", "ethereum", "eth", "solana", "sol",
         "binance", "crypto", "market", "orderbook", "event", "radar",
@@ -158,6 +159,10 @@ REMOTE_PROBE = textwrap.dedent(
     def is_relevant_service_name(name):
         tokens = set(re.findall(r"[a-z0-9]+", name.lower()))
         return bool(tokens.intersection(SERVICE_KEYWORDS))
+
+    def is_ignored_file_name(name):
+        tokens = set(re.findall(r"[a-z0-9]+", name.lower()))
+        return bool(tokens.intersection(IGNORED_FILENAME_TOKENS))
 
     now = dt.datetime.now().astimezone()
     try:
@@ -362,7 +367,7 @@ REMOTE_PROBE = textwrap.dedent(
                     and not os.path.islink(os.path.join(current, name))
                 )
                 for name in sorted(file_names):
-                    if name.startswith("."):
+                    if name.startswith(".") or is_ignored_file_name(name):
                         continue
                     suffix = os.path.splitext(name)[1].lower()
                     data_format = CANDIDATE_SUFFIXES.get(suffix)
@@ -760,7 +765,22 @@ def build_assets(
     unique: dict[tuple[str, str, str], dict[str, str]] = {}
     for asset in raw_assets:
         key = (asset["资产类型"], asset["位置"], asset["资源名称"])
-        unique.setdefault(key, asset)
+        existing = unique.get(key)
+        if existing is None:
+            unique[key] = asset
+            continue
+        if existing == asset:
+            continue
+        merged = dict(existing)
+        for column in ASSET_COLUMNS:
+            if column in {"资产类型", "位置", "资源名称"}:
+                continue
+            if existing[column] != asset[column]:
+                merged[column] = "未知"
+        merged["访问状态"] = "元数据冲突"
+        merged["发现证据"] = "同一资源由固定探针返回冲突元数据"
+        merged["限制"] = "冲突字段已置为未知；未选择任一值"
+        unique[key] = merged
     ordered = sorted(
         unique.values(),
         key=lambda asset: (
@@ -781,9 +801,20 @@ def render_csv(assets: Sequence[Mapping[str, str]], batch_id: str) -> str:
     buffer = io.StringIO(newline="")
     writer = csv.DictWriter(buffer, fieldnames=CSV_COLUMNS, lineterminator="\n")
     writer.writeheader()
+    def safe_cell(value: object) -> str:
+        text = redact(value)
+        stripped = text.lstrip()
+        if stripped and stripped[0] in "=+-@":
+            return "'" + text
+        if text.startswith("\t"):
+            return "'" + text
+        return text
+
     for asset in assets:
-        row = {"发现批次": redact(batch_id)}
-        row.update({column: redact(asset.get(column, "未知")) for column in ASSET_COLUMNS})
+        row = {"发现批次": safe_cell(batch_id)}
+        row.update(
+            {column: safe_cell(asset.get(column, "未知")) for column in ASSET_COLUMNS}
+        )
         writer.writerow(row)
     return buffer.getvalue()
 
@@ -955,6 +986,8 @@ def _batch_id(collected_at: str) -> str:
         timestamp = dt.datetime.fromisoformat(collected_at)
     except ValueError as error:
         raise ValueError("collected_at不是ISO 8601时间") from error
+    if timestamp.utcoffset() is None:
+        raise ValueError("collected_at必须包含时区")
     return "discovery-" + timestamp.strftime("%Y%m%dT%H%M%S%z")
 
 
@@ -984,6 +1017,13 @@ def _replace_outputs(
     markdown_output: Path,
     markdown_text: str,
 ) -> None:
+    for target, suffix in ((csv_output, ".csv"), (markdown_output, ".md")):
+        if target.suffix.lower() != suffix:
+            raise ValueError(f"输出目标必须使用{suffix}扩展名")
+        if target.is_symlink():
+            raise ValueError("输出目标不能是符号链接")
+        if target.exists() and not target.is_file():
+            raise ValueError("输出目标必须是普通文件或尚不存在的文件")
     if csv_output.resolve() == markdown_output.resolve():
         raise ValueError("CSV与Markdown输出路径不能相同")
     csv_temporary: Path | None = None
@@ -992,6 +1032,7 @@ def _replace_outputs(
     markdown_backup: Path | None = None
     csv_published = False
     markdown_published = False
+    preserve_backups = False
 
     def move_to_backup(target: Path) -> Path | None:
         if not target.exists() and not target.is_symlink():
@@ -1024,20 +1065,30 @@ def _replace_outputs(
         os.replace(markdown_temporary, markdown_output)
         markdown_temporary = None
         markdown_published = True
-    except BaseException:
-        restore(csv_backup, csv_output, csv_published)
-        csv_backup = None
-        restore(markdown_backup, markdown_output, markdown_published)
-        markdown_backup = None
+    except BaseException as publish_error:
+        rollback_errors: list[BaseException] = []
+        try:
+            restore(csv_backup, csv_output, csv_published)
+            csv_backup = None
+        except BaseException as rollback_error:
+            rollback_errors.append(rollback_error)
+        try:
+            restore(markdown_backup, markdown_output, markdown_published)
+            markdown_backup = None
+        except BaseException as rollback_error:
+            rollback_errors.append(rollback_error)
+        if rollback_errors:
+            preserve_backups = True
+            raise OSError("产物发布失败且回滚未完整；可恢复备份已保留") from publish_error
         raise
     finally:
         if csv_temporary is not None:
             csv_temporary.unlink(missing_ok=True)
         if markdown_temporary is not None:
             markdown_temporary.unlink(missing_ok=True)
-        if csv_backup is not None:
+        if csv_backup is not None and not preserve_backups:
             csv_backup.unlink(missing_ok=True)
-        if markdown_backup is not None:
+        if markdown_backup is not None and not preserve_backups:
             markdown_backup.unlink(missing_ok=True)
 
 

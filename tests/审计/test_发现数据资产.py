@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import contextlib
+import csv
 import io
 import json
 import os as real_os
@@ -136,6 +137,28 @@ class DataAssetDiscoveryTests(unittest.TestCase):
             )
         )
 
+    def test_冲突重复资源不依赖输入顺序且不选择任一元数据(self):
+        payload = sample_probe_result()
+        first = dict(payload["files"][0])
+        second = {
+            **first,
+            "project": "另一个项目",
+            "size": 84,
+            "modified_at": "2026-07-28T08:30:00+08:00",
+        }
+        payload["files"] = [first, second]
+        forward = self.discovery.build_assets(payload, "ubuntu")
+        payload["files"] = [second, first]
+        reverse = self.discovery.build_assets(payload, "ubuntu")
+
+        self.assertEqual(forward, reverse)
+        file_asset = next(
+            asset for asset in forward if asset["资产类型"] == "候选数据文件"
+        )
+        self.assertEqual("元数据冲突", file_asset["访问状态"])
+        self.assertEqual("未知", file_asset["字节数"])
+        self.assertIn("未选择任一值", file_asset["限制"])
+
     def test_交易对名称映射到明确标的(self):
         self.assertEqual("BTC", self.discovery.infer_symbols("BTCUSDT_seconds.csv"))
         self.assertEqual("ETH", self.discovery.infer_symbols("ethusdc.parquet"))
@@ -160,6 +183,32 @@ class DataAssetDiscoveryTests(unittest.TestCase):
         self.assertIn("BTC", markdown)
         self.assertIn("ETH", markdown)
         self.assertIn("SOL", markdown)
+
+        rows = list(csv.reader(io.StringIO(csv_text)))
+        self.assertEqual(list(self.discovery.CSV_COLUMNS), rows[0])
+        self.assertTrue(all(len(row) == len(self.discovery.CSV_COLUMNS) for row in rows))
+
+    def test_csv阻止公式前缀被表格软件执行(self):
+        payload = sample_probe_result()
+        payload["files"] = [
+            {
+                "path": "/opt/crypto-radar/data/=WEBSERVICE-test.csv",
+                "format": "CSV",
+                "size": 42,
+                "modified_at": "2026-07-28T08:00:00+08:00",
+                "project": "+SUM(1,1)",
+            }
+        ]
+        assets = self.discovery.build_assets(payload, "ubuntu")
+
+        rows = list(
+            csv.DictReader(
+                io.StringIO(self.discovery.render_csv(assets, "discovery-fixed"))
+            )
+        )
+        file_row = next(row for row in rows if row["资产类型"] == "候选数据文件")
+        self.assertEqual("'=WEBSERVICE-test.csv", file_row["资源名称"])
+        self.assertEqual("'+SUM(1,1)", file_row["服务或项目"])
 
     def test_固定探针只有白名单且不包含危险能力(self):
         probe = self.discovery.REMOTE_PROBE
@@ -239,6 +288,7 @@ class DataAssetDiscoveryTests(unittest.TestCase):
         *,
         missing_commands: set[str] | None = None,
         walk_permission_error: bool = False,
+        walk_candidate_files: bool = False,
     ):
         captured: list[tuple[list[str], dict[str, object]]] = []
         missing_commands = missing_commands or set()
@@ -311,18 +361,38 @@ class DataAssetDiscoveryTests(unittest.TestCase):
         previous_subprocess = sys.modules.get("subprocess")
         previous_os = sys.modules.get("os")
         sys.modules["subprocess"] = fake_subprocess
-        if walk_permission_error:
+        if walk_permission_error or walk_candidate_files:
             def fake_stat(path, *, follow_symlinks=True):
                 if path == "/opt/binance-event":
                     return SimpleNamespace(st_mtime=0, st_size=0)
+                if walk_candidate_files and path in {
+                    "/opt/binance-event/data/btc.csv",
+                    "/opt/binance-event/data/example.jsonl",
+                    "/opt/binance-event/deploy-staging/sample.jsonl",
+                }:
+                    return SimpleNamespace(st_mtime=0, st_size=42)
                 raise FileNotFoundError(path)
 
             def fake_walk(_root, *, topdown, onerror=None, followlinks):
                 self.assertTrue(topdown)
                 self.assertFalse(followlinks)
-                if onerror is not None:
+                if walk_permission_error and onerror is not None:
                     onerror(PermissionError("模拟目录权限不足"))
-                return iter(())
+                if walk_candidate_files:
+                    directory_names = ["data", "deploy-staging"]
+                    yield "/opt/binance-event", directory_names, []
+                    if "data" in directory_names:
+                        yield (
+                            "/opt/binance-event/data",
+                            [],
+                            ["btc.csv", "example.jsonl"],
+                        )
+                    if "deploy-staging" in directory_names:
+                        yield (
+                            "/opt/binance-event/deploy-staging",
+                            [],
+                            ["sample.jsonl"],
+                        )
 
             fake_os = SimpleNamespace(
                 path=real_os.path,
@@ -391,6 +461,16 @@ class DataAssetDiscoveryTests(unittest.TestCase):
 
         errors = {(item["category"], item["status"]) for item in payload["errors"]}
         self.assertIn(("files:/opt/binance-event", "部分无法访问"), errors)
+
+    def test_目录遍历排除部署副本和样例文件(self):
+        payload, _ = self._execute_remote_probe(walk_candidate_files=True)
+
+        paths = [item["path"] for item in payload["files"]]
+        self.assertEqual(["/opt/binance-event/data/btc.csv"], paths)
+
+    def test_发现时间必须包含时区(self):
+        with self.assertRaisesRegex(ValueError, "时区"):
+            self.discovery._batch_id("2026-07-28T09:00:00")
 
     def test_完整命令行流程写出同一批次的两个产物(self):
         with tempfile.TemporaryDirectory() as raw_directory:
@@ -472,6 +552,72 @@ class DataAssetDiscoveryTests(unittest.TestCase):
 
             self.assertEqual("旧CSV", csv_output.read_text(encoding="utf-8"))
             self.assertEqual("旧Markdown", markdown_output.read_text(encoding="utf-8"))
+
+    def test_回滚自身失败时保留两个可恢复备份(self):
+        with tempfile.TemporaryDirectory() as raw_directory:
+            directory = Path(raw_directory)
+            csv_output = directory / "assets.csv"
+            markdown_output = directory / "assets.md"
+            csv_output.write_text("旧CSV", encoding="utf-8")
+            markdown_output.write_text("旧Markdown", encoding="utf-8")
+            real_replace = self.discovery.os.replace
+
+            def fail_publish_and_restore(source, destination):
+                source_path = Path(source)
+                destination_path = Path(destination)
+                if destination_path == markdown_output and source_path.suffix == ".tmp":
+                    raise OSError("模拟第二个产物替换失败")
+                if source_path.suffix == ".bak":
+                    raise OSError("模拟回滚失败")
+                return real_replace(source, destination)
+
+            with mock.patch.object(
+                self.discovery.os,
+                "replace",
+                side_effect=fail_publish_and_restore,
+            ):
+                with self.assertRaisesRegex(OSError, "回滚"):
+                    self.discovery._replace_outputs(
+                        csv_output,
+                        "新CSV",
+                        markdown_output,
+                        "新Markdown",
+                    )
+
+            backups = sorted(directory.glob("*.bak"))
+            self.assertEqual(2, len(backups))
+            self.assertEqual(
+                {"旧CSV", "旧Markdown"},
+                {path.read_text(encoding="utf-8") for path in backups},
+            )
+
+    def test_输出目标拒绝目录和符号链接(self):
+        with tempfile.TemporaryDirectory() as raw_directory:
+            directory = Path(raw_directory)
+            csv_directory = directory / "assets.csv"
+            csv_directory.mkdir()
+            markdown_output = directory / "assets.md"
+            with self.assertRaisesRegex(ValueError, "普通文件"):
+                self.discovery._replace_outputs(
+                    csv_directory,
+                    "新CSV",
+                    markdown_output,
+                    "新Markdown",
+                )
+            self.assertTrue(csv_directory.is_dir())
+
+            real_csv = directory / "real.csv"
+            real_csv.write_text("旧CSV", encoding="utf-8")
+            csv_link = directory / "linked.csv"
+            csv_link.symlink_to(real_csv)
+            with self.assertRaisesRegex(ValueError, "符号链接"):
+                self.discovery._replace_outputs(
+                    csv_link,
+                    "新CSV",
+                    markdown_output,
+                    "新Markdown",
+                )
+            self.assertEqual("旧CSV", real_csv.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
