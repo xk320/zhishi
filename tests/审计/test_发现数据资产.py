@@ -18,6 +18,24 @@ from types import ModuleType, SimpleNamespace
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = REPO_ROOT / "scripts" / "审计" / "发现数据资产.py"
+EXPECTED_CSV_COLUMNS = [
+    "发现批次",
+    "资产编号",
+    "资产类型",
+    "逻辑主机",
+    "服务或项目",
+    "资源名称",
+    "位置",
+    "格式",
+    "标的范围",
+    "时间范围",
+    "字节数",
+    "最后修改时间",
+    "访问状态",
+    "发现证据",
+    "限制",
+    "后续任务",
+]
 
 
 def load_discovery_module() -> ModuleType:
@@ -185,8 +203,8 @@ class DataAssetDiscoveryTests(unittest.TestCase):
         self.assertIn("SOL", markdown)
 
         rows = list(csv.reader(io.StringIO(csv_text)))
-        self.assertEqual(list(self.discovery.CSV_COLUMNS), rows[0])
-        self.assertTrue(all(len(row) == len(self.discovery.CSV_COLUMNS) for row in rows))
+        self.assertEqual(EXPECTED_CSV_COLUMNS, rows[0])
+        self.assertTrue(all(len(row) == len(EXPECTED_CSV_COLUMNS) for row in rows))
 
     def test_csv阻止公式前缀被表格软件执行(self):
         payload = sample_probe_result()
