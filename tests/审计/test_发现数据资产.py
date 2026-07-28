@@ -131,6 +131,12 @@ class DataAssetDiscoveryTests(unittest.TestCase):
             )
         )
 
+    def test_交易对名称映射到明确标的(self):
+        self.assertEqual("BTC", self.discovery.infer_symbols("BTCUSDT_seconds.csv"))
+        self.assertEqual("ETH", self.discovery.infer_symbols("ethusdc.parquet"))
+        self.assertEqual("SOL", self.discovery.infer_symbols("SOL-USD.jsonl"))
+        self.assertEqual("BTC、ETH", self.discovery.infer_symbols("ETHBTC.sqlite"))
+
     def test_csv和markdown共享批次且声明不可推导结论(self):
         payload = sample_probe_result()
         assets = self.discovery.build_assets(payload, "ubuntu")

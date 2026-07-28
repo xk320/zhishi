@@ -467,12 +467,26 @@ def infer_symbols(text: str) -> str:
     """仅根据路径或资源名中的明确标的词推导覆盖范围。"""
 
     tokens = set(re.findall(r"[a-z0-9]+", text.lower()))
+    quote_tokens = {"usdt", "usdc", "usd", "eur", "try", "btc", "xbt", "eth", "sol"}
+    asset_tokens = {"btc", "xbt", "bitcoin", "eth", "ethereum", "sol", "solana"}
+
+    def matches(aliases: set[str]) -> bool:
+        for token in tokens:
+            if token in aliases:
+                return True
+            for alias in aliases:
+                if token.startswith(alias) and token[len(alias) :] in quote_tokens:
+                    return True
+                if token.endswith(alias) and token[: -len(alias)] in asset_tokens:
+                    return True
+        return False
+
     symbols: list[str] = []
-    if tokens.intersection({"btc", "bitcoin", "xbt"}):
+    if matches({"btc", "bitcoin", "xbt"}):
         symbols.append("BTC")
-    if tokens.intersection({"eth", "ethereum"}):
+    if matches({"eth", "ethereum"}):
         symbols.append("ETH")
-    if tokens.intersection({"sol", "solana"}):
+    if matches({"sol", "solana"}):
         symbols.append("SOL")
     return "、".join(symbols) if symbols else "未限定"
 
