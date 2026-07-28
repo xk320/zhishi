@@ -16,7 +16,7 @@ SSH别名`ubuntu`；远端探针只运行固定只读命令和白名单目录元
 
 ---
 
-### Task 1: 解除阻塞并固定执行合同
+## Task 1: 解除阻塞并固定执行合同
 
 **Files:**
 
@@ -52,7 +52,7 @@ git commit -m 'docs: 解除任务000003访问阻塞'
 
 Expected: Markdown为0 issues，空白检查通过并形成独立认领提交。
 
-### Task 2: 用失败测试定义发现器合同
+## Task 2: 用失败测试定义发现器合同
 
 **Files:**
 
@@ -73,14 +73,28 @@ def sample_probe_result() -> dict[str, object]:
     return {
         "probe_version": "1.0",
         "collected_at": "2026-07-28T09:00:00+08:00",
-        "host": {"os": "Ubuntu 22.04", "kernel": "Linux", "timezone": "Asia/Shanghai"},
+        "host": {
+            "os": "Ubuntu 22.04",
+            "kernel": "Linux",
+            "timezone": "Asia/Shanghai",
+        },
         "mounts": [{"target": "/", "fstype": "ext4", "mode": "rw"}],
-        "services": [{"name": "mysql.service", "state": "active", "user": "mysql", "workdir": "/"}],
+        "services": [{
+            "name": "mysql.service",
+            "state": "active",
+            "user": "mysql",
+            "workdir": "/",
+        }],
         "listeners": [{"protocol": "tcp", "port": 3306, "process": "mysqld"}],
         "containers": [],
         "roots": [{"path": "/opt/crypto-radar", "status": "可访问"}],
-        "files": [{"path": "/opt/crypto-radar/data/btc.csv", "format": "CSV", "size": 42,
-                   "modified_at": "2026-07-28T08:00:00+08:00", "project": "crypto-radar"}],
+        "files": [{
+            "path": "/opt/crypto-radar/data/btc.csv",
+            "format": "CSV",
+            "size": 42,
+            "modified_at": "2026-07-28T08:00:00+08:00",
+            "project": "crypto-radar",
+        }],
         "database": {"status": "无法访问", "objects": []},
         "errors": [{"category": "database", "status": "无法访问"}],
     }
@@ -110,7 +124,7 @@ python3 -m unittest tests/审计/test_发现数据资产.py -v
 
 Expected: 因实现文件不存在而失败，不是语法、夹具或导入错误。
 
-### Task 3: 实现固定只读探针和本地生成器
+## Task 3: 实现固定只读探针和本地生成器
 
 **Files:**
 
@@ -150,7 +164,10 @@ CANDIDATE_SUFFIXES = {
 
 ```python
 def validate_probe_result(payload: object) -> dict[str, object]: ...
-def build_assets(payload: dict[str, object], logical_host: str) -> list[dict[str, str]]: ...
+def build_assets(
+    payload: dict[str, object],
+    logical_host: str,
+) -> list[dict[str, str]]: ...
 def infer_symbols(text: str) -> str: ...
 def redact(value: object) -> str: ...
 ```
@@ -199,7 +216,7 @@ git add scripts/审计/发现数据资产.py tests/审计/test_发现数据资�
 git commit -m 'feat: 建立只读数据资产发现器'
 ```
 
-### Task 4: 执行真实只读发现并核验产物
+## Task 4: 执行真实只读发现并核验产物
 
 **Files:**
 
@@ -234,7 +251,7 @@ git add artifacts/审计/数据源清单.csv docs/审计/数据源清单.md
 git commit -m 'docs: 记录数据资产只读发现结果'
 ```
 
-### Task 5: 完整验收并更新待评审状态
+## Task 5: 完整验收并更新待评审状态
 
 **Files:**
 
