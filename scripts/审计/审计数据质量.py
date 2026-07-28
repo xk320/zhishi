@@ -164,6 +164,8 @@ ERROR_REASONS = {
     "sensitive_system_log_excluded": "敏感系统日志按安全边界排除正文读取",
     "object_timeout": "单对象只读扫描超时",
     "quality_read_failed": "只读质量扫描失败",
+    "csv_header_parse_failed": "CSV表头严格解析失败，未执行内容统计",
+    "csv_body_parse_failed": "CSV正文严格解析失败，仅保留部分统计且不形成重复结论",
     "mysql_metadata_unavailable": "MySQL元数据不可用",
     "mysql_object_not_found": "MySQL元数据对象未发现",
     "unsupported_format": "格式不在审计支持范围",
@@ -440,6 +442,27 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
             "primary_key": [],
         }
 
+    def mark_not_executed(result, status, error_code):
+        result.update(
+            status=status,
+            scan_completeness="未执行",
+            record_count="无法判定",
+            field_count="无法判定",
+            missing_count="无法判定",
+            cell_count="无法判定",
+            duplicate_status="无法判定（内容统计未执行）",
+            exact_duplicate_count="无法判定",
+            row_width_error_count="无法判定",
+            empty_line_count="无法判定",
+            invalid_json_count="无法判定",
+            non_object_count="无法判定",
+            non_finite_number_count="无法判定",
+            csv_parse_error_count="无法判定",
+            coverage="无法判定",
+            error_code=error_code,
+        )
+        return result
+
     def count_non_finite(value):
         if isinstance(value, float) and not math.isfinite(value):
             return 1
@@ -461,11 +484,10 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
                 result["status"] = "空文件"
                 return result
             except csv.Error:
-                result.update(
-                    status="CSV解析失败",
-                    scan_completeness="未完整",
-                    csv_parse_error_count=1,
+                mark_not_executed(
+                    result, "CSV解析失败", "csv_header_parse_failed"
                 )
+                result["csv_parse_error_count"] = 1
                 return result
             result["fields"] = fields
             result["field_count"] = len(fields)
@@ -491,6 +513,10 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
                     status="CSV解析失败",
                     scan_completeness="未完整",
                     csv_parse_error_count=1,
+                    duplicate_status="无法判定（CSV扫描未完整）",
+                    exact_duplicate_count="无法判定",
+                    coverage="部分范围，无法判定",
+                    error_code="csv_body_parse_failed",
                 )
             result["cell_count"] = result["record_count"] * result["field_count"]
         if not duplicate_complete:
@@ -603,12 +629,9 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
             path = validate_file_path(unit["location"])
             before = file_identity(path, unit["format"])
             if rule.get("identity") and before != rule["identity"]:
-                result.update(
-                    status="输入漂移",
-                    scan_completeness="未执行",
-                    error_code="identity_changed_before_scan",
+                return mark_not_executed(
+                    result, "输入漂移", "identity_changed_before_scan"
                 )
-                return result
             if unit["format"] == "CSV":
                 result = quality_csv(path, asset_id, duplicate_limit)
             elif unit["format"] in ("JSONL", "NDJSON"):
@@ -616,30 +639,23 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
             elif unit["format"] == "SQLite":
                 result = quality_sqlite(path, asset_id)
             else:
-                result.update(
-                    status="无法判定", scan_completeness="未执行",
-                    error_code="unsupported_format",
-                )
-                return result
+                return mark_not_executed(result, "无法判定", "unsupported_format")
             after = file_identity(path, unit["format"])
             if before != after:
                 result.update(
                     status="输入漂移",
                     scan_completeness="未完整",
+                    duplicate_status="无法判定（扫描期间输入漂移）",
+                    exact_duplicate_count="无法判定",
                     error_code="identity_changed_during_scan",
                 )
             result["identity_before"] = before
             result["identity_after"] = after
             return result
         except ObjectTimeout:
-            result.update(
-                status="超时", scan_completeness="未完整", error_code="object_timeout"
-            )
+            return mark_not_executed(result, "超时", "object_timeout")
         except (OSError, ValueError, sqlite3.Error, csv.Error):
-            result.update(
-                status="无法判定", scan_completeness="未执行",
-                error_code="quality_read_failed",
-            )
+            return mark_not_executed(result, "无法判定", "quality_read_failed")
         return result
 
     def schema_fingerprint(schema):
@@ -673,17 +689,14 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
             )
             rule = rules.get(schema["asset_id"], {})
             if rule.get("schema_fingerprint") != schema_fingerprint(schema):
-                result.update(
-                    status="输入漂移",
-                    scan_completeness="未执行",
-                    record_count="无法判定",
-                    field_count="无法判定",
-                    error_code="schema_changed_between_phases",
+                mark_not_executed(
+                    result, "输入漂移", "schema_changed_between_phases"
                 )
             if schema.get("status") != "已发现结构":
-                result.update(
-                    status="无法判定", scan_completeness="未执行",
-                    error_code=schema.get("error_code", "mysql_metadata_unavailable"),
+                mark_not_executed(
+                    result,
+                    "无法判定",
+                    schema.get("error_code", "mysql_metadata_unavailable"),
                 )
             converted.append(result)
         return converted
@@ -697,16 +710,10 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
             )
             return result
         result = empty_quality(unit["asset_id"])
-        result.update(
-            status="未执行",
-            scan_completeness="未执行",
-            record_count="无法判定",
-            field_count="无法判定",
-            missing_count="无法判定",
-            duplicate_status="无法判定（敏感系统日志排除）",
-            exact_duplicate_count="无法判定",
-            error_code="sensitive_system_log_excluded",
+        mark_not_executed(
+            result, "未执行", "sensitive_system_log_excluded"
         )
+        result["duplicate_status"] = "无法判定（敏感系统日志排除）"
         return result
 
     def main():

@@ -357,11 +357,11 @@ class RemoteStatisticsTests(unittest.TestCase):
         self.assertEqual(1, result["row_width_error_count"])
         self.assertEqual("完整", result["scan_completeness"])
 
-    def test_csv严格解析失败标记未完整而非零异常(self):
+    def test_csv表头严格解析失败标记未执行且不产生零事实(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             path = root / "broken.csv"
-            path.write_text('a,b\n"unterminated', encoding="utf-8")
+            path.write_text('"unterminated', encoding="utf-8")
             payload = run_remote_program(
                 self.audit,
                 {
@@ -383,8 +383,14 @@ class RemoteStatisticsTests(unittest.TestCase):
                 root,
             )
         result = payload["objects"][0]
-        self.assertEqual("未完整", result["scan_completeness"])
+        self.assertEqual("未执行", result["scan_completeness"])
         self.assertEqual(1, result["csv_parse_error_count"])
+        for key in (
+            "record_count", "field_count", "missing_count", "cell_count",
+            "exact_duplicate_count",
+        ):
+            self.assertEqual("无法判定", result[key])
+        self.assertTrue(result["duplicate_status"].startswith("无法判定"))
 
     def test_远端程序可执行且空清单返回合法结果(self):
         request = {
@@ -616,6 +622,119 @@ class RemoteStatisticsTests(unittest.TestCase):
         result = payload["objects"][0]
         self.assertEqual("输入漂移", result["status"])
         self.assertEqual("未执行", result["scan_completeness"])
+        for key in (
+            "record_count", "field_count", "missing_count", "cell_count",
+            "exact_duplicate_count",
+        ):
+            self.assertEqual("无法判定", result[key])
+        self.assertTrue(result["duplicate_status"].startswith("无法判定"))
+
+    def test_远端未执行失败路径统一拒绝默认零值(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            path = root / "data.csv"
+            path.write_text("a\n1\n", encoding="utf-8")
+            base_request = {
+                "audit_version": "1.0",
+                "phase": "quality",
+                "objects": [{
+                    "asset_id": "DS-000001",
+                    "asset_type": "候选数据文件",
+                    "location": str(path),
+                    "format": "CSV",
+                }],
+                "rules": {"objects": [{
+                    "asset_id": "DS-000001",
+                    "identity": remote_identity(path, "CSV"),
+                }]},
+                "duplicate_limit": 100,
+                "object_timeout": 5,
+            }
+            cases = [
+                (
+                    "不支持格式",
+                    {**base_request, "objects": [{
+                        **base_request["objects"][0], "format": "Parquet"
+                    }]},
+                    "",
+                ),
+                (
+                    "读取失败",
+                    {
+                        **base_request,
+                        "objects": [{
+                            **base_request["objects"][0],
+                            "location": str(root / "missing.csv"),
+                        }],
+                    },
+                    "",
+                ),
+                (
+                    "超时",
+                    base_request,
+                    "\ndef quality_csv(path, asset_id, duplicate_limit):\n"
+                    "    raise ObjectTimeout()\n",
+                ),
+            ]
+            for label, request, prelude in cases:
+                with self.subTest(label=label):
+                    payload = run_remote_program(
+                        self.audit, request, root, prelude=prelude
+                    )
+                    result = payload["objects"][0]
+                    self.assertEqual("未执行", result["scan_completeness"])
+                    for key in (
+                        "record_count", "field_count", "missing_count",
+                        "cell_count", "exact_duplicate_count",
+                    ):
+                        self.assertEqual("无法判定", result[key])
+                    self.assertTrue(
+                        result["duplicate_status"].startswith("无法判定")
+                    )
+
+    def test_扫描期间漂移只保留部分计数且重复降级(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            path = root / "data.csv"
+            path.write_text("a\n1\n1\n", encoding="utf-8")
+            identity = remote_identity(path, "CSV")
+            prelude = '''
+_original_file_identity = file_identity
+_identity_calls = 0
+def file_identity(path, data_format):
+    global _identity_calls
+    _identity_calls += 1
+    value = _original_file_identity(path, data_format)
+    if _identity_calls > 1:
+        value = dict(value)
+        value["mtime_ns"] += 1
+    return value
+'''
+            payload = run_remote_program(
+                self.audit,
+                {
+                    "audit_version": "1.0",
+                    "phase": "quality",
+                    "objects": [{
+                        "asset_id": "DS-000001",
+                        "asset_type": "候选数据文件",
+                        "location": str(path),
+                        "format": "CSV",
+                    }],
+                    "rules": {"objects": [{
+                        "asset_id": "DS-000001", "identity": identity,
+                    }]},
+                    "duplicate_limit": 100,
+                    "object_timeout": 5,
+                },
+                root,
+                prelude=prelude,
+            )
+        result = payload["objects"][0]
+        self.assertEqual("未完整", result["scan_completeness"])
+        self.assertEqual(2, result["record_count"])
+        self.assertEqual("无法判定", result["exact_duplicate_count"])
+        self.assertEqual("无法判定（扫描期间输入漂移）", result["duplicate_status"])
 
     def test_jsonl结构阶段完整发现第1001条后的字段(self):
         with tempfile.TemporaryDirectory() as directory:
