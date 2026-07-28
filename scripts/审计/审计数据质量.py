@@ -31,6 +31,7 @@ ALLOWED_ROOTS = (
     "/opt/event-prob-lab",
     "/opt/orderbook-intelligence-service",
 )
+DISCOVERY_ALLOWED_ROOTS = ALLOWED_ROOTS + ("/var/lib/mysql",)
 SUPPORTED_FILE_FORMATS = {"CSV", "JSONL", "NDJSON", "SQLite"}
 INVENTORY_COLUMNS = (
     "发现批次",
@@ -619,9 +620,33 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
             converted.append(result)
         return converted
 
+    def excluded_result(unit, phase):
+        if phase == "schema":
+            result = base_object(unit)
+            result.update(
+                status="未执行",
+                error_code="sensitive_system_log_excluded",
+            )
+            return result
+        result = empty_quality(unit["asset_id"])
+        result.update(
+            status="未执行",
+            scan_completeness="未执行",
+            record_count="无法判定",
+            field_count="无法判定",
+            missing_count="无法判定",
+            duplicate_status="无法判定（敏感系统日志排除）",
+            exact_duplicate_count="无法判定",
+            error_code="sensitive_system_log_excluded",
+        )
+        return result
+
     def main():
         try:
-            request = json.load(sys.stdin)
+            if "REMOTE_REQUEST_JSON" in globals():
+                request = json.loads(REMOTE_REQUEST_JSON)
+            else:
+                request = json.load(sys.stdin)
             if request.get("audit_version") != AUDIT_VERSION:
                 raise ValueError("version")
             phase = request.get("phase")
@@ -633,9 +658,14 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
             duplicate_limit = int(request.get("duplicate_limit", 500000))
             object_timeout = int(request.get("object_timeout", 90))
             signal.signal(signal.SIGALRM, timeout_handler)
-            files = [unit for unit in units if unit.get("asset_type") == "候选数据文件"]
+            excluded = [unit for unit in units if unit.get("excluded_reason")]
+            files = [
+                unit for unit in units
+                if unit.get("asset_type") == "候选数据文件"
+                and not unit.get("excluded_reason")
+            ]
             databases = [unit for unit in units if unit.get("asset_type") == "数据库元数据"]
-            results = []
+            results = [excluded_result(unit, phase) for unit in excluded]
             if phase == "schema":
                 for unit in files:
                     print("audit:" + str(unit.get("asset_id", "unknown")), file=sys.stderr)
@@ -667,8 +697,8 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
                 "objects": sorted(results, key=lambda item: item["asset_id"]),
             }
             json.dump(payload, sys.stdout, ensure_ascii=False, sort_keys=True)
-        except (ValueError, TypeError, KeyError, subprocess.SubprocessError):
-            print("remote_audit_failed", file=sys.stderr)
+        except Exception as error:
+            print("remote_audit_failed:" + type(error).__name__, file=sys.stderr)
             raise SystemExit(2)
 
     if __name__ == "__main__":
@@ -732,7 +762,7 @@ def _validate_file_location(location: str) -> str:
     if not path.is_absolute() or ".." in path.parts:
         raise ValueError("候选文件路径不在白名单")
     normalized = str(path)
-    if not any(normalized.startswith(root + "/") for root in ALLOWED_ROOTS):
+    if not any(normalized.startswith(root + "/") for root in DISCOVERY_ALLOWED_ROOTS):
         raise ValueError("候选文件路径不在白名单")
     return normalized
 
@@ -745,7 +775,10 @@ def build_validation_units(rows: list[dict[str, str]]) -> list[dict[str, str]]:
             if row["格式"] not in SUPPORTED_FILE_FORMATS:
                 raise ValueError(f"不支持的候选文件格式：{row['格式']}")
             location = _validate_file_location(row["位置"])
-            units.append({**row, "位置": location})
+            exclusion = ""
+            if location.startswith("/var/lib/mysql/"):
+                exclusion = "MySQL系统日志可能包含敏感查询文本，仅保留覆盖记录，不读取内容"
+            units.append({**row, "位置": location, "审计排除原因": exclusion})
         elif asset_type == "数据库元数据":
             if row["格式"] != "InnoDB" or not MYSQL_LOCATION_PATTERN.fullmatch(row["位置"]):
                 raise ValueError("数据库元数据位置或格式非法")
@@ -814,6 +847,7 @@ def _remote_units(units: list[dict[str, str]]) -> list[dict[str, str]]:
                 "format": unit["格式"],
                 "inventory_size": unit["字节数"],
                 "inventory_modified_at": unit["最后修改时间"],
+                "excluded_reason": unit.get("审计排除原因", ""),
             }
         )
     return payload
@@ -875,13 +909,18 @@ def run_remote_phase(
         "ServerAliveCountMax=2",
         target,
         "python3",
-        "-c",
-        REMOTE_AUDIT_PROGRAM,
+        "-",
     ]
+    remote_input = (
+        "REMOTE_REQUEST_JSON = "
+        + repr(_canonical_json(request))
+        + "\n"
+        + REMOTE_AUDIT_PROGRAM
+    )
     try:
         completed = subprocess.run(
             command,
-            input=_canonical_json(request),
+            input=remote_input,
             text=True,
             capture_output=True,
             check=False,
@@ -890,7 +929,11 @@ def run_remote_phase(
     except (OSError, subprocess.TimeoutExpired) as error:
         raise RuntimeError("SSH远端审计失败：命令不可用或总体超时") from error
     if completed.returncode != 0:
-        raise RuntimeError("SSH远端审计失败：远端返回非零状态")
+        category_match = re.search(
+            r"remote_audit_failed:([A-Za-z][A-Za-z0-9_]*)", completed.stderr
+        )
+        category = f"（{category_match.group(1)}）" if category_match else ""
+        raise RuntimeError(f"SSH远端审计失败：远端返回非零状态{category}")
     try:
         payload = json.loads(completed.stdout)
     except (TypeError, ValueError) as error:
@@ -1231,6 +1274,44 @@ def render_report(
 ) -> str:
     complete = sum(row.get("扫描完整性") == "完整" for row in quality_rows)
     unresolved = sum(row.get("可用性结论") == "无法判定" for row in quality_rows)
+    complete_files = [
+        row
+        for row in quality_rows
+        if row.get("资产类型") == "候选数据文件"
+        and row.get("扫描完整性") == "完整"
+    ]
+    file_records = sum(
+        int(row["记录数"])
+        for row in complete_files
+        if str(row.get("记录数", "")).isdigit()
+    )
+    structural_missing = sum(
+        int(row["结构缺失数"])
+        for row in complete_files
+        if str(row.get("结构缺失数", "")).isdigit()
+    )
+    quantified_duplicates = [
+        row
+        for row in quality_rows
+        if str(row.get("重复状态", "")).startswith("已量化")
+    ]
+    exact_duplicates = sum(
+        int(row["精确重复数"])
+        for row in quantified_duplicates
+        if str(row.get("精确重复数", "")).isdigit()
+    )
+    unquantified_duplicates = len(quality_rows) - len(quantified_duplicates)
+    metadata_only = sum(row.get("扫描完整性") == "元数据范围" for row in quality_rows)
+    excluded = sum(row.get("扫描完整性") == "未执行" for row in quality_rows)
+    event_candidates = sum(
+        row.get("事件时间候选字段", "无") != "无" for row in quality_rows
+    )
+    arrival_candidates = sum(
+        row.get("到达时间候选字段", "无") != "无" for row in quality_rows
+    )
+    collection_candidates = sum(
+        row.get("采集时间候选字段", "无") != "无" for row in quality_rows
+    )
     anomaly_total = sum(
         int(row["异常数量"])
         for row in anomaly_rows
@@ -1249,16 +1330,45 @@ def render_report(
         f"- 规则SHA-256：`{redact(metadata['rules_fingerprint'])}`",
         "- 执行方式：固定白名单、远端无落盘、文件与SQLite只读、MySQL仅元数据",
         "",
-        "## 事实",
+        "## 技术摘要",
+        "",
+        f"- **结论：BTC、ETH、SOL均为无法判定。** {unresolved}个验证单元没有一个具备已证明的标的身份、三类时间、频率、重放和最小闭环证据。",
+        f"- **文件结构质量已形成部分可重算证据。** {complete}个文件完整扫描，共{file_records}条记录、{structural_missing}项空值或空文本；已量化{exact_duplicates}条规范记录重复。",
+        f"- **时间与断档硬门仍未建立。** 只有{arrival_candidates}个验证单元出现到达时间候选字段，且候选字段均未获得业务语义证明；全部断档结果保持无法判定。",
+        f"- **审计保持只读。** {metadata_only}个MySQL对象仅查询元数据，{excluded}个敏感系统日志保留覆盖记录但未读取正文。",
+        "",
+        "## 全部验证单元均未达到可用性证据门槛",
         "",
         f"- 验证单元：{len(quality_rows)}个。",
         f"- 完整扫描：{complete}个；未完整或无法执行：{len(quality_rows) - complete}个。",
+        f"- 完整扫描文件记录：{file_records}条；结构空值或空文本：{structural_missing}项。",
+        f"- 已量化的规范记录重复：{exact_duplicates}条；重复仍无法完整量化：{unquantified_duplicates}个验证单元。",
+        f"- MySQL仅元数据：{metadata_only}个；因敏感系统日志边界未执行：{excluded}个。",
         f"- 结构解析异常合计：{anomaly_total}项；该数字不包含未定义的业务异常。",
         f"- 可用性仍无法判定的验证单元：{unresolved}个。",
+        f"- 事件时间候选字段：{event_candidates}个验证单元；到达时间候选字段：{arrival_candidates}个；采集时间候选字段：{collection_candidates}个。候选不构成时间语义证明。",
         "- 字段名称只被记录为时间候选，没有被自动认定为事件、到达或采集时间。",
         "- 没有正式频率合同的验证单元未计算断档。",
         "",
-        "## 判定",
+        "## 作用域与指标定义",
+        "",
+        "- **验证单元：** 任务-000003清单中的一个候选文件或一个MySQL表元数据对象。",
+        "- **完整扫描：** 文件在结构与质量阶段身份一致，且内容统计未超时或失败。",
+        "- **结构缺失：** CSV单元格、JSON对象字段、SQLite值中的空值或空文本；不代表已证明的业务必填违约。",
+        "- **规范记录重复：** 同一文件内整条CSV记录或规范化JSON对象内容一致，或SQLite声明主键保证唯一；不等同于业务去重键。",
+        "- **结构解析异常：** 列宽错误、空JSONL行、非法JSON、非对象JSON或非有限数值；未定义的价格、数量和收益异常不在该指标内。",
+        "- **候选时间字段：** 名称匹配时间别名的字段，仅用于列出待确认合同，不证明事件、到达或采集时间。",
+        "",
+        "## 方法与稳健性检查",
+        "",
+        "1. 以任务-000003资产清单SHA-256冻结验证单元，拒绝白名单外路径和重复资产编号。",
+        "2. 结构阶段只取得字段、类型、SQLite主键与MySQL元数据，再冻结规则指纹。",
+        "3. 质量阶段流式扫描CSV和JSONL，以只读URI扫描SQLite；MySQL不读取业务记录。",
+        "4. 文件在两阶段之间或扫描过程中身份变化时标记输入漂移，不混合版本。",
+        "5. 重复集合超过固定上限时保留记录与缺失统计，但重复结论降级为无法判定。",
+        "6. 三份逐对象CSV用于精确复算；未绘制图表，因为审计明细和不可比口径更适合表格查验。",
+        "",
+        "## BTC、ETH、SOL均无法判定",
         "",
         "| 标的 | 结论 | 精确作用域 | 主要依据 | 限制与解除条件 |",
         "| --- | --- | --- | --- | --- |",
@@ -1275,31 +1385,34 @@ def render_report(
             "本任务不能独立给出`可用`结论。任务-000005的历史重放与任务-000006的最小",
             "数据闭环尚未完成，任何文件名、列名或其他标的结果均不能补偿这些硬门。",
             "",
-            "## 质量与断档证据",
+            "## 审计证据可逐对象重算",
             "",
             "- 逐对象质量证据：`artifacts/审计/数据质量结果.csv`。",
             "- 逐对象断档证据：`artifacts/审计/数据断档结果.csv`。",
             "- 逐对象异常证据：`artifacts/审计/数据异常结果.csv`。",
             "- 三份CSV与本报告共享审计批次、清单指纹和规则指纹。",
             "",
-            "## 建议",
+            "## 推荐的解除路径",
             "",
             "1. 为候选数据对象补齐来源、市场、合约、字段中文映射、类型、单位和精度合同。",
             "2. 明确事件时间、到达时间、采集时间、时区、预期频率和修订行为后重新审计。",
             "3. 任务-000005验证当时可见集合和未来数据拒绝；任务-000006验证最小闭环。",
             "4. 在三类时间、重放和闭环通过前，不进入正式回测、模型训练或交易许可。",
             "",
-            "## 已知限制",
+            "## 仍需回答的问题",
+            "",
+            "1. 哪些候选对象具有可验证的来源、市场、合约和标的身份合同？",
+            "2. 哪些字段分别表示事件时间、到达时间和采集时间，其时区与可见性语义是什么？",
+            "3. 各对象的预期频率、迟到、补录、修订和去重规则由哪个版本化合同定义？",
+            "4. MySQL业务记录是否应在新的授权与资源预算下建立独立只读质量审计？",
+            "",
+            "## 限制、不确定性与安全影响",
             "",
             "- MySQL只审计元数据，不扫描业务记录，记录数为元数据估计或无法判定。",
             "- 结构缺失是空值或空文本统计，不等同于业务必填字段违约。",
             "- 精确重复只表示规范记录内容一致，不等同于业务主键重复。",
             "- 未定义业务异常阈值，因此不评价价格、数量、收益或盘口数值是否异常。",
-            "",
-            "## 数据与安全影响",
-            "",
-            "审计未修改服务器、数据库、服务、权限、防火墙或原始数据；仓库仅保存汇总",
-            "统计、规则和指纹，不保存原始记录、未脱敏样本或凭据。",
+            "- 审计未修改服务器、数据库、服务、权限、防火墙或原始数据；仓库仅保存汇总统计、规则和指纹，不保存原始记录、未脱敏样本或凭据。",
         ]
     )
     return "\n".join(lines) + "\n"

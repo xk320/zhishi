@@ -147,6 +147,22 @@ class InventoryAndRuleTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, message):
                         self.audit.load_inventory(path)
 
+    def test_mysql系统日志保留覆盖但禁止读取内容(self):
+        row = {
+            **inventory_rows()[0],
+            "资产编号": "DS-000003",
+            "服务或项目": "mysql",
+            "资源名称": "general_log.CSV",
+            "位置": "/var/lib/mysql/mysql/general_log.CSV",
+        }
+
+        units = self.audit.build_validation_units([row])
+        remote_units = self.audit._remote_units(units)
+
+        self.assertEqual(1, len(units))
+        self.assertIn("敏感", units[0]["审计排除原因"])
+        self.assertIn("敏感", remote_units[0]["excluded_reason"])
+
     def test_ssh目标别名必须安全(self):
         self.assertEqual("ubuntu", self.audit.validate_ssh_target("ubuntu"))
         for invalid in ("root@ubuntu", "ubuntu;id", "../ubuntu", ""):
@@ -276,6 +292,25 @@ class LocalStatisticsTests(unittest.TestCase):
         self.assertEqual("schema", payload["phase"])
         self.assertEqual([], payload["objects"])
 
+    def test_远端失败只返回异常类别不返回输入正文(self):
+        request = {
+            "audit_version": "1.0",
+            "phase": "schema",
+            "objects": "secret=should-not-leak",
+        }
+        completed = subprocess.run(
+            [sys.executable, "-c", self.audit.REMOTE_AUDIT_PROGRAM],
+            input=json.dumps(request),
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+
+        self.assertEqual(2, completed.returncode)
+        self.assertIn("remote_audit_failed:ValueError", completed.stderr)
+        self.assertNotIn("should-not-leak", completed.stderr)
+
     def test_ssh调用使用参数数组且不回显远端错误(self):
         units = self.audit.build_validation_units(inventory_rows())
         response = {
@@ -297,8 +332,10 @@ class LocalStatisticsTests(unittest.TestCase):
         command = runner.call_args.args[0]
         self.assertIsInstance(command, list)
         self.assertIn("BatchMode=yes", command)
-        self.assertEqual("python3", command[-3])
-        self.assertEqual("-c", command[-2])
+        self.assertEqual("python3", command[-2])
+        self.assertEqual("-", command[-1])
+        self.assertNotIn(self.audit.REMOTE_AUDIT_PROGRAM, command)
+        self.assertIn("REMOTE_REQUEST_JSON", runner.call_args.kwargs["input"])
         self.assertEqual(2, len(payload["objects"]))
 
         failure = subprocess.CompletedProcess(
@@ -422,9 +459,61 @@ class OutputContractTests(unittest.TestCase):
 
         for symbol in ("BTC", "ETH", "SOL"):
             self.assertIn(f"| {symbol} | 无法判定 |", report)
-        self.assertIn("## 事实", report)
-        self.assertIn("## 判定", report)
-        self.assertIn("## 建议", report)
+        self.assertIn("## 技术摘要", report)
+        self.assertIn("## 全部验证单元均未达到可用性证据门槛", report)
+        self.assertIn("## BTC、ETH、SOL均无法判定", report)
+        self.assertIn("## 作用域与指标定义", report)
+        self.assertIn("## 方法与稳健性检查", report)
+        self.assertIn("## 推荐的解除路径", report)
+        self.assertIn("## 仍需回答的问题", report)
+
+    def test_报告汇总完整扫描缺失重复与时间候选但不提升语义(self):
+        quality_rows = [
+            {
+                "资产类型": "候选数据文件",
+                "扫描完整性": "完整",
+                "扫描状态": "完成",
+                "记录数": "3",
+                "结构缺失数": "2",
+                "重复状态": "已量化（规范记录完全一致）",
+                "精确重复数": "1",
+                "事件时间候选字段": "event_time",
+                "到达时间候选字段": "无",
+                "采集时间候选字段": "created_at",
+                "可用性结论": "无法判定",
+            },
+            {
+                "资产类型": "数据库元数据",
+                "扫描完整性": "元数据范围",
+                "扫描状态": "仅元数据",
+                "记录数": "10",
+                "结构缺失数": "无法判定",
+                "重复状态": "无法判定（未读取业务记录）",
+                "精确重复数": "无法判定",
+                "事件时间候选字段": "无",
+                "到达时间候选字段": "无",
+                "采集时间候选字段": "无",
+                "可用性结论": "无法判定",
+            },
+        ]
+        report = self.audit.render_report(
+            quality_rows,
+            [],
+            [],
+            {
+                "audit_batch": "audit-fixed",
+                "inventory_fingerprint": "a" * 64,
+                "rules_fingerprint": "b" * 64,
+                "cutoff_time": "2026-07-28T10:00:00+08:00",
+                "unit_count": 2,
+            },
+        )
+
+        self.assertIn("完整扫描文件记录：3条", report)
+        self.assertIn("结构空值或空文本：2项", report)
+        self.assertIn("已量化的规范记录重复：1条", report)
+        self.assertIn("事件时间候选字段：1个验证单元", report)
+        self.assertIn("候选不构成时间语义证明", report)
 
     def test_脱敏覆盖地址私钥令牌和明文凭据(self):
         raw = (
