@@ -64,12 +64,12 @@ Expected: Markdown为0 issues，空白检查通过，规划形成独立提交。
 - Create: `tests/审计/test_审计数据质量.py`
 - Test: `tests/审计/test_审计数据质量.py`
 
-- [ ] **Step 1: 写实现存在性与模块加载测试**
+- [x] **Step 1: 写实现存在性与模块加载测试**
 
 测试先断言`scripts/审计/审计数据质量.py`存在，再使用`importlib`加载。实现缺失时必须
 因“实现文件尚不存在”失败，不能因夹具、编码或导入错误失败。
 
-- [ ] **Step 2: 写清单校验测试**
+- [x] **Step 2: 写清单校验测试**
 
 用临时CSV覆盖以下行为：
 
@@ -81,13 +81,13 @@ self.assertEqual(["DS-000001", "DS-000002"], [a["资产编号"] for a in assets]
 断言缺列、多个发现批次、重复编号、不支持格式、非白名单路径、相对路径、路径逃逸、
 符号链接语义和非法SSH别名被拒绝；仅`候选数据文件`与`数据库元数据`进入验证单元。
 
-- [ ] **Step 3: 写固定探针安全测试**
+- [x] **Step 3: 写固定探针安全测试**
 
 断言`REMOTE_AUDIT_PROGRAM`包含`mode=ro`、`query_only`、`--no-defaults`和
 `information_schema`，且不包含`sudo`、写文件、环境变量读取、凭据搜索、服务控制、
 数据库写语句、`ATTACH`或`VACUUM`。SSH命令必须为参数数组并使用`BatchMode=yes`。
 
-- [ ] **Step 4: 运行测试并确认正确失败**
+- [x] **Step 4: 运行测试并确认正确失败**
 
 Run:
 
@@ -104,7 +104,7 @@ Expected: 因实现文件不存在失败；失败信息精确指向缺失实现�
 - Create: `scripts/审计/审计数据质量.py`
 - Modify: `tests/审计/test_审计数据质量.py`
 
-- [ ] **Step 1: 实现固定合同常量与清单校验**
+- [x] **Step 1: 实现固定合同常量与清单校验**
 
 实现`load_inventory(Path)`、`validate_ssh_target(str)`、
 `inventory_fingerprint(Path)`和`build_validation_units(rows)`四个公开接口，并通过
@@ -122,7 +122,7 @@ units = build_validation_units(rows)
 `load_inventory`验证任务-000003固定列和单一发现批次；`build_validation_units`只接收
 CSV、JSONL、NDJSON、SQLite和InnoDB元数据，并验证路径位于固定白名单内。
 
-- [ ] **Step 2: 实现结构结果校验与规则冻结**
+- [x] **Step 2: 实现结构结果校验与规则冻结**
 
 实现`validate_schema_payload(payload, units)`和`freeze_rules(schema_payload)`，满足：
 
@@ -136,7 +136,7 @@ assert len(rules_sha256) == 64
 形成候选，不自动映射三类时间；无正式频率时断档规则固定为`无法判定`。指纹使用排序
 JSON的SHA-256。
 
-- [ ] **Step 3: 实现SSH调用与失败安全**
+- [x] **Step 3: 实现SSH调用与失败安全**
 
 实现`run_remote_phase(target, phase, units, rules, ssh_bin, timeout)`并满足：
 
@@ -154,7 +154,7 @@ quality_payload = run_remote_phase(
 阶段、已校验资产和规则嵌入固定程序输入；不调用shell。非零退出、超时、非法JSON、
 版本不匹配和对象集合漂移均抛出中文错误，不回显远端标准错误正文。
 
-- [ ] **Step 4: 运行输入与安全合同测试**
+- [x] **Step 4: 运行输入与安全合同测试**
 
 Run:
 
@@ -171,7 +171,7 @@ Expected: 清单、规则冻结、安全探针和SSH失败测试全部通过。
 - Modify: `tests/审计/test_审计数据质量.py`
 - Test: `tests/审计/test_审计数据质量.py`
 
-- [ ] **Step 1: 写远端统计夹具测试**
+- [x] **Step 1: 写远端统计夹具测试**
 
 通过模块提供的本地探针测试入口，在临时目录建立：
 
@@ -182,12 +182,12 @@ Expected: 清单、规则冻结、安全探针和SSH失败测试全部通过。
 断言记录数、字段数、缺失数、精确重复数、解析异常数和扫描完整状态准确。测试入口与
 SSH运行使用同一审计函数，不另写测试专用实现。
 
-- [ ] **Step 2: 写时间与断档保守判定测试**
+- [x] **Step 2: 写时间与断档保守判定测试**
 
 夹具字段包含`event_time`、`arrival_time`和`collected_at`，断言它们只出现在候选
 字段中，三类时间合同、延迟、乱序和断档仍为`无法判定`；没有规则时不得执行统计。
 
-- [ ] **Step 3: 写CSV、报告与脱敏测试**
+- [x] **Step 3: 写CSV、报告与脱敏测试**
 
 断言：
 
@@ -203,7 +203,7 @@ self.assertTrue(all(a["资产编号"] for a in anomalies))
 三份CSV共享批次和规则指纹、列固定、按资产编号排序、防公式注入；报告包含事实、判定、
 建议及BTC、ETH、SOL独立结论。IPv4、私钥头、令牌和明文凭据不得进入任一产物。
 
-- [ ] **Step 4: 运行新增测试并确认缺失行为导致失败**
+- [x] **Step 4: 运行新增测试并确认缺失行为导致失败**
 
 Run:
 
@@ -220,19 +220,19 @@ Expected: 新测试因统计与输出函数尚未实现而失败，不是夹具�
 - Modify: `scripts/审计/审计数据质量.py`
 - Modify: `tests/审计/test_审计数据质量.py`
 
-- [ ] **Step 1: 实现CSV和JSONL流式统计**
+- [x] **Step 1: 实现CSV和JSONL流式统计**
 
 CSV以`newline=""`和UTF-8替换模式读取；JSONL逐行解析。实现记录数、结构空值、列宽、
 空行、非法JSON、非对象、字段并集和规范记录SHA-256重复。重复集合上限固定并在超限
 时把重复状态改为`无法判定`，不得将部分重复数写成全量。
 
-- [ ] **Step 2: 实现SQLite与MySQL元数据审计**
+- [x] **Step 2: 实现SQLite与MySQL元数据审计**
 
 SQLite使用`file:<path>?mode=ro`和`PRAGMA query_only=ON`，逐表统计行数与NULL/空文本，
 主键仅来自`PRAGMA table_info`。MySQL只使用`information_schema.COLUMNS`、
 `STATISTICS`和`TABLES`元数据，记录行数估计与结构，不查询业务表内容。
 
-- [ ] **Step 3: 实现输出归一化与报告**
+- [x] **Step 3: 实现输出归一化与报告**
 
 实现`build_output_rows`、`render_csv`、`render_report`和`publish_outputs`，调用合同为：
 
@@ -249,13 +249,13 @@ publish_outputs({quality_path: quality_csv, report_path: report})
 BTC、ETH、SOL在缺少标的身份、三类时间、重放或闭环证据时为`无法判定`，并列出解除
 条件。四个产物先在内存生成并通过敏感扫描，再以本地临时文件替换；失败不覆盖旧文件。
 
-- [ ] **Step 4: 实现CLI和本地探针测试入口**
+- [x] **Step 4: 实现CLI和本地探针测试入口**
 
 CLI参数固定为`--inventory`、`--ssh-target`、`--ssh-bin`、`--timeout`、
 `--output-dir`和`--report`。成功输出审计批次、规则指纹、验证单元数和三份CSV路径；
 失败只输出中文错误类别并返回非零。
 
-- [ ] **Step 5: 运行测试并提交实现**
+- [x] **Step 5: 运行测试并提交实现**
 
 Run:
 
@@ -327,7 +327,8 @@ Run:
 
 ```bash
 python3 -m unittest tests/审计/test_审计数据质量.py -v
-python3 -m unittest discover -s tests -p 'test_*.py' -v
+python3 -m unittest discover -s tests/研发中心 -p 'test_*.py' -v
+python3 -m unittest discover -s tests/审计 -p 'test_*.py' -v
 npx --yes markdownlint-cli2 \
   docs/superpowers/specs/2026-07-28-data-quality-audit-design.md \
   docs/superpowers/plans/2026-07-28-data-quality-audit.md \
