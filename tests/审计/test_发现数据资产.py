@@ -164,6 +164,16 @@ class DataAssetDiscoveryTests(unittest.TestCase):
         self.assertIn("--no-defaults", probe)
         self.assertIn("information_schema", probe)
         self.assertIn("os.path.islink(root)", probe)
+        self.assertIn("def flatten_filesystems", probe)
+        self.assertIn("flattened.extend(flatten_filesystems(children))", probe)
+        self.assertRegex(
+            probe,
+            r'if docker_result is None:\s+record_error\("docker"\)',
+        )
+        self.assertRegex(
+            probe,
+            r'if lxc_result is None:\s+record_error\("lxd"\)',
+        )
         for forbidden in (
             "sudo ",
             "systemctl restart",

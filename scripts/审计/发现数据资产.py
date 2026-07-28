@@ -135,6 +135,17 @@ REMOTE_PROBE = textwrap.dedent(
         except (FileNotFoundError, subprocess.TimeoutExpired):
             return None
 
+    def flatten_filesystems(filesystems):
+        flattened = []
+        for filesystem in filesystems:
+            if not isinstance(filesystem, dict):
+                continue
+            flattened.append(filesystem)
+            children = filesystem.get("children", [])
+            if isinstance(children, list):
+                flattened.extend(flatten_filesystems(children))
+        return flattened
+
     now = dt.datetime.now().astimezone()
     try:
         os_release = platform.freedesktop_os_release()
@@ -164,7 +175,9 @@ REMOTE_PROBE = textwrap.dedent(
     else:
         try:
             mount_payload = json.loads(mount_result.stdout)
-            for filesystem in mount_payload.get("filesystems", []):
+            for filesystem in flatten_filesystems(
+                mount_payload.get("filesystems", [])
+            ):
                 options = str(filesystem.get("options", ""))
                 option_set = set(options.split(","))
                 mounts.append(
@@ -252,7 +265,9 @@ REMOTE_PROBE = textwrap.dedent(
         ["docker", "ps", "--format", "{{json .}}"],
         timeout=8,
     )
-    if docker_result is not None and docker_result.returncode == 0:
+    if docker_result is None:
+        record_error("docker")
+    elif docker_result.returncode == 0:
         for line in docker_result.stdout.splitlines():
             try:
                 item = json.loads(line)
@@ -267,11 +282,13 @@ REMOTE_PROBE = textwrap.dedent(
                     "state": str(item.get("State", item.get("Status", "未知"))),
                 }
             )
-    elif docker_result is not None:
+    else:
         record_error("docker", "无法访问")
 
     lxc_result = run_fixed(["lxc", "list", "--format=json"], timeout=8)
-    if lxc_result is not None and lxc_result.returncode == 0:
+    if lxc_result is None:
+        record_error("lxd")
+    elif lxc_result.returncode == 0:
         try:
             for item in json.loads(lxc_result.stdout):
                 containers.append(
@@ -286,7 +303,7 @@ REMOTE_PROBE = textwrap.dedent(
                 )
         except (TypeError, ValueError):
             record_error("lxd")
-    elif lxc_result is not None:
+    else:
         record_error("lxd", "无法访问")
 
     roots = []
