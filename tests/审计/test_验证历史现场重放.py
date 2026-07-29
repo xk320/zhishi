@@ -183,7 +183,7 @@ class ContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "指纹"):
                 self.replay.load_and_freeze_inputs(inventory, quality)
 
-    def test_ssh仅允许逻辑别名ubunut并且远端失败不回显(self):
+    def test_ssh仅允许逻辑别名ubuntu并且远端失败不回显(self):
         self.assertEqual("ubuntu", self.replay.validate_ssh_target("ubuntu"))
         for invalid in ("root@ubuntu", "192.168.31.201", "prod", "ubuntu;id", ""):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
