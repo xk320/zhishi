@@ -306,7 +306,7 @@ class SnapshotContractTests(unittest.TestCase):
             "input_identity_drift", "input_scan_incomplete", "decision_record_missing",
             "snapshot_contract_incomplete", "data_version_missing", "data_hash_missing",
             "data_hash_mismatch", "input_asset_set_missing", "available_fields_unproven",
-            "output_hash_mismatch",
+            "output_hash_mismatch", "source_provenance_unverified", "numeric_precision_unproven",
         }
         self.assertTrue(required.issubset(self.replay.UNREPLAYABLE_REMEDIATIONS))
         self.assertTrue(all(
@@ -333,6 +333,7 @@ class SnapshotContractTests(unittest.TestCase):
             ("采集时间字段", lambda item: item.__setitem__("采集时间字段", "arrival")),
             ("输入数据哈希", lambda item: item.__setitem__("输入数据哈希", "f" * 64)),
             ("快照合同版本", lambda item: item.__setitem__("快照合同版本", "replay-snapshot-contract-2.0")),
+            ("规范JSON版本", lambda item: item.__setitem__("规范JSON版本", "canonical-json-v2")),
             ("快照版本标识", lambda item: item.__setitem__("快照版本标识", "sha256:" + "f" * 64)),
             ("快照记录编号", lambda item: item.__setitem__("快照记录编号", "ZS-历史重放-" + "f" * 64)),
             ("输入资产集合指纹", lambda item: item.__setitem__("输入资产集合指纹", "f" * 64)),
@@ -390,6 +391,28 @@ class SnapshotContractTests(unittest.TestCase):
                 self.replay.freeze_replay_snapshot(evidence)["输入数据版本"],
             )
 
+    def test_紧邻字母的扩展或基本时间身份仍必须拒绝(self):
+        invalid_values = (
+            "v2026-07-28", "dataset2026-07-28", "v1722134400",
+            "data:20260728T080000Z", "prefix20260728", "x1722134400000",
+        )
+        for field in ("快照逻辑标识", "输入数据版本"):
+            for value in invalid_values:
+                evidence = make_snapshot_evidence(self.replay)
+                evidence[field] = value
+                with self.subTest(field=field, value=value), self.assertRaisesRegex(
+                    ValueError, "snapshot_contract_incomplete|data_version_missing"
+                ):
+                    self.replay.freeze_replay_snapshot(evidence)
+
+        for valid_value in ("smoke-data-v1", "DS-000001", "current2"):
+            evidence = make_snapshot_evidence(self.replay)
+            evidence["输入数据版本"] = valid_value
+            self.assertEqual(
+                valid_value,
+                self.replay.freeze_replay_snapshot(evidence)["输入数据版本"],
+            )
+
     def test_快照版本标识不接受调用方注入(self):
         evidence = make_snapshot_evidence(self.replay)
         evidence["快照版本标识"] = "sha256:" + "f" * 64
@@ -411,15 +434,36 @@ class SnapshotContractTests(unittest.TestCase):
         }
         self.assertEqual(3, len(fingerprints))
 
-    def test_规范JSON拒绝NaN和Infinity(self):
-        for value in (float("nan"), float("inf"), float("-inf")):
+    def test_规范JSON拒绝非整数浮点NaN和Infinity(self):
+        for value in (1.25, -0.5, float("nan"), float("inf"), float("-inf")):
             with self.subTest(value=repr(value)), self.assertRaisesRegex(
-                ValueError, "record_not_canonical_json"
+                ValueError, "numeric_precision_unproven"
             ):
                 self.replay.calculate_data_sha256(
                     [{"id": "1", "arrival": "2026-07-28T08:00:00+08:00", "value": value}],
                     ["id"],
                 )
+
+    def test_规范JSON版本与固定字节哈希向量(self):
+        records = [
+            {"id": "2", "active": True, "n": 2},
+            {"id": "1", "n": 1.0, "中文": "值"},
+        ]
+        expected = '[{"id":"1","n":1,"中文":"值"},{"active":true,"id":"2","n":2}]'
+        normalized = self.replay._canonical_records(records, ["id"])
+        self.assertEqual(expected.encode("utf-8"), self.replay._canonical_json(normalized).encode("utf-8"))
+        self.assertEqual(
+            hashlib.sha256(expected.encode("utf-8")).hexdigest(),
+            self.replay.calculate_data_sha256(records, ["id"]),
+        )
+        frozen = self.replay.freeze_replay_snapshot(make_snapshot_evidence(self.replay))
+        self.assertEqual("canonical-json-v1", self.replay.CANONICAL_JSON_VERSION)
+        self.assertEqual("canonical-json-v1", frozen["规范JSON版本"])
+
+        injected = make_snapshot_evidence(self.replay)
+        injected["规范JSON版本"] = "canonical-json-v1"
+        with self.assertRaisesRegex(ValueError, "snapshot_contract_incomplete"):
+            self.replay.freeze_replay_snapshot(injected)
 
 
 @unittest.skipUnless(MODULE_PATH.exists(), "等待历史重放实现")
@@ -748,6 +792,47 @@ class OutputTests(unittest.TestCase):
             )
         self.assertEqual("无法判定", rows[0]["重放结论"])
         self.assertEqual("input_asset_set_missing", rows[0]["不可重放原因代码"])
+
+    def test_自报正式或伪合成来源不得进入第二门(self):
+        untrusted_types = ("formal", "mock", "SMOKE-ONLY", "smoke_only", "smoke-only-v2", "任意自报")
+        with tempfile.TemporaryDirectory() as directory:
+            inventory, quality = make_inputs(Path(directory))
+            frozen = self.replay.load_and_freeze_inputs(inventory, quality)
+            for evidence_type in untrusted_types:
+                evidence = make_snapshot_evidence(self.replay)
+                evidence["证据类型"] = evidence_type
+                with self.subTest(evidence_type=evidence_type), mock.patch.object(
+                    self.replay, "execute_snapshot_replay", wraps=self.replay.execute_snapshot_replay
+                ) as replay_call:
+                    row = self.replay.build_formal_coverage(
+                        frozen, "replay-fixed", replay_evidence={"DS-000001": evidence}
+                    )[0]
+                    self.assertEqual(0, replay_call.call_count)
+                    self.assertEqual("无法判定", row["重放结论"])
+                    self.assertEqual("source_provenance_unverified", row["不可重放原因代码"])
+
+    def test_正式发布拒绝自报通过行和合成标记变体(self):
+        base = {column: "无法判定" for column in self.replay.RESULT_COLUMNS}
+        base.update({"资产编号": "DS-000001", "决策记录编号": "DEC-001"})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for marker in ("mock", "SMOKE-ONLY", "smoke_only", "smoke-only-v2"):
+                row = dict(base)
+                row["依据"] = marker
+                with self.subTest(marker=marker), self.assertRaisesRegex(
+                    ValueError, "smoke_only_formal_output_rejected"
+                ):
+                    self.replay.publish_outputs(
+                        root / "result.csv", root / "report.md", [row], "safe report"
+                    )
+
+            invented = dict(base)
+            invented["重放结论"] = "通过"
+            invented["依据"] = "formal invented text"
+            with self.assertRaisesRegex(ValueError, "source_provenance_unverified"):
+                self.replay.publish_outputs(
+                    root / "result.csv", root / "report.md", [invented], "safe report"
+                )
 
     def test_固定列公式防护与敏感发布失败保留旧版(self):
         row = {column: "无法判定" for column in self.replay.RESULT_COLUMNS}

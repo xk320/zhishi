@@ -9,6 +9,7 @@ import datetime as dt
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import subprocess
@@ -22,6 +23,7 @@ from typing import Iterable, Mapping, Sequence, TextIO
 
 REPLAY_VERSION = "historical-replay-1.0"
 REPLAY_SNAPSHOT_CONTRACT_VERSION = "replay-snapshot-contract-1.0"
+CANONICAL_JSON_VERSION = "canonical-json-v1"
 UNREPLAYABLE_REMEDIATIONS = {
     "input_identity_drift": "修复建议：创建新审计批次并重新冻结输入身份。",
     "input_scan_incomplete": "修复建议：在不修改原始数据的前提下完成全量只读扫描。",
@@ -33,7 +35,12 @@ UNREPLAYABLE_REMEDIATIONS = {
     "input_asset_set_missing": "修复建议：显式冻结非空、去重的输入资产集合。",
     "available_fields_unproven": "修复建议：分别证明并冻结事件、到达和采集时间字段语义。",
     "output_hash_mismatch": "修复建议：拒绝当前结果，排查非确定输入、排序或重放逻辑后生成新版本。",
+    "source_provenance_unverified": "修复建议：由独立可信的只读来源加载器或登记合同绑定来源，不接受调用方自报。",
+    "numeric_precision_unproven": "修复建议：金额、价格和比例使用带单位与精度合同的规范十进制字符串。",
 }
+SYNTHETIC_MARKER_PATTERN = re.compile(
+    r"(?i)(?:^|[^a-z0-9])(?:mock|smoke[-_]only(?:[-_][a-z0-9]+)*)(?:$|[^a-z0-9])"
+)
 ALLOWED_SSH_TARGETS = {"ubuntu"}
 SSH_TARGET_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
@@ -102,6 +109,22 @@ def _canonical_json(value: object) -> str:
     )
 
 
+def _normalize_json_value(value: object) -> object:
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            raise ValueError("numeric_precision_unproven")
+        return int(value)
+    if isinstance(value, Mapping):
+        if not all(isinstance(key, str) for key in value):
+            raise ValueError("record_not_canonical_json")
+        return {key: _normalize_json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_normalize_json_value(item) for item in value]
+    raise ValueError("record_not_canonical_json")
+
+
 def _canonical_records(
     records: Iterable[Mapping[str, object]],
     business_key_fields: Sequence[str],
@@ -120,8 +143,11 @@ def _canonical_records(
         if any(field not in record or record[field] in (None, "") for field in business_key_fields):
             raise ValueError("business_key_missing")
         try:
-            copied = json.loads(_canonical_json(dict(record)))
-        except (TypeError, ValueError) as error:
+            normalized_value = _normalize_json_value(dict(record))
+            copied = json.loads(_canonical_json(normalized_value))
+        except ValueError as error:
+            if str(error) in {"numeric_precision_unproven", "record_not_canonical_json"}:
+                raise
             raise ValueError("record_not_canonical_json") from error
         if not isinstance(copied, dict):
             raise ValueError("records_required")
@@ -172,15 +198,18 @@ FLOATING_IDENTIFIER_TOKEN_PATTERN = re.compile(
     r"(?:^|[._:/-])(?:latest|current)(?=$|[._:/-])", re.IGNORECASE
 )
 ISO_IDENTITY_TOKEN_PATTERN = re.compile(
-    r"(?:^|[._:/-])\d{4}-\d{2}-\d{2}"
+    r"\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])"
     r"(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)?"
-    r"(?=$|[._:/-])"
 )
 UNIX_IDENTITY_TOKEN_PATTERN = re.compile(
-    r"(?:^|[._:/-])(?:\d{10}|\d{13})(?=$|[._:/-])"
+    r"(?<!\d)(?:\d{10}|\d{13})(?!\d)"
+)
+BASIC_ISO_IDENTITY_TOKEN_PATTERN = re.compile(
+    r"\d{4}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])"
+    r"(?:T\d{6}(?:\.\d+)?(?:Z|[+-]\d{4})?)?"
 )
 GENERATED_SNAPSHOT_FIELDS = {
-    "快照记录编号", "快照版本标识", "输入资产集合指纹", "输入记录",
+    "快照记录编号", "快照版本标识", "输入资产集合指纹", "输入记录", "规范JSON版本",
 }
 
 
@@ -191,7 +220,7 @@ def _validate_stable_identifier(value: object, failure_code: str) -> str:
         raise ValueError(failure_code)
     if UNIX_IDENTITY_TOKEN_PATTERN.search(value):
         raise ValueError(failure_code)
-    if ISO_IDENTITY_TOKEN_PATTERN.search(value):
+    if ISO_IDENTITY_TOKEN_PATTERN.search(value) or BASIC_ISO_IDENTITY_TOKEN_PATTERN.search(value):
         raise ValueError(failure_code)
     if not STABLE_IDENTIFIER_PATTERN.fullmatch(value):
         raise ValueError(failure_code)
@@ -207,6 +236,9 @@ def _build_snapshot_identity(
 
     contract_version = source.get("快照合同版本", REPLAY_SNAPSHOT_CONTRACT_VERSION)
     if contract_version != REPLAY_SNAPSHOT_CONTRACT_VERSION:
+        raise ValueError("snapshot_contract_incomplete")
+    canonical_version = source.get("规范JSON版本", CANONICAL_JSON_VERSION)
+    if canonical_version != CANONICAL_JSON_VERSION:
         raise ValueError("snapshot_contract_incomplete")
     data_version = _validate_stable_identifier(
         source.get("输入数据版本"), "data_version_missing"
@@ -279,6 +311,7 @@ def _build_snapshot_identity(
     }).encode("utf-8"))
     version_content = {
         "快照合同版本": REPLAY_SNAPSHOT_CONTRACT_VERSION,
+        "规范JSON版本": CANONICAL_JSON_VERSION,
         "快照逻辑标识": logical_id,
         "历史时间": historical_time,
         "决策时间": decision_time,
@@ -642,6 +675,8 @@ def _evaluate_qualified_evidence(
     required_text = ("证据类型", "合同版本", "来源证据", "决策记录编号")
     if any(not isinstance(evidence.get(field), str) or not evidence[field] for field in required_text):
         raise ValueError("decision_record_missing")
+    if evidence.get("证据类型") != "smoke-only":
+        raise ValueError("source_provenance_unverified")
     if "三类时间合同状态" not in evidence:
         raise ValueError("snapshot_contract_incomplete")
     if evidence.get("三类时间合同状态") != "已证明":
@@ -846,6 +881,7 @@ def render_report(rows: Sequence[Mapping[str, str]], metadata: Mapping[str, str]
         "",
         f"- 验证器版本：`{REPLAY_VERSION}`",
         f"- 快照合同版本：`{REPLAY_SNAPSHOT_CONTRACT_VERSION}`",
+        f"- 规范JSON版本：`{CANONICAL_JSON_VERSION}`",
         f"- 验证批次：`{_redact(metadata['验证批次'])}`",
         f"- 质量审计批次：`{_redact(metadata['质量审计批次'])}`",
         f"- 清单指纹：`{_redact(metadata['清单指纹'])}`",
@@ -872,12 +908,16 @@ def render_report(rows: Sequence[Mapping[str, str]], metadata: Mapping[str, str]
         "## 快照与版本合同",
         "",
         f"- 合同版本：`{REPLAY_SNAPSHOT_CONTRACT_VERSION}`。",
-        "- 数据哈希：将完整输入记录按已冻结业务键稳定排序，序列化为 UTF-8 规范JSON，计算 SHA-256。",
+        f"- 规范JSON：`{CANONICAL_JSON_VERSION}`，UTF-8编码，键按Unicode排序，分隔符无多余空白，`allow_nan=false`。",
+        "- 整数按标准JSON整数表示；布尔值不作为整数；非整数浮点值禁止进入快照。",
+        "- 数据哈希：将完整输入记录按已冻结业务键稳定排序，序列化为上述规范JSON，计算 SHA-256。",
         "- 资产集合指纹：对排序、去重后的资产身份、输入数据版本与数据哈希规范JSON计算 SHA-256。",
         "- 逐资产单元的冻结资产集合必须严格等于当前资产编号单元集；混入任何额外资产均不进入第二门。",
         "- 重放前重新规范化全部快照身份，逐项核对资产指纹、内容指纹、版本标识与记录编号。",
         "- 重放结果哈希：对可见数量、未来拒绝状态和输出指纹计算独立 SHA-256。",
         "- 与知识版本合同一致：逻辑标识稳定，内容变化生成内容寻址的不可变版本标识，下游不得仅引用“最新版本”。",
+        "- 当前安全门：只有精确`smoke-only`可进入算法测试路径，且任何通过行均不得发布为正式产物。",
+        "- 解除条件：Phase 2建立独立可信的只读来源加载器或登记合同；调用方自报字符串不构成来源证明。",
         "",
         "## 不可重放原因分布",
         "",
@@ -953,8 +993,10 @@ def publish_outputs(
     if output_path.resolve() == report_path.resolve():
         raise ValueError("CSV与Markdown输出路径不得相同")
     serialized_rows = _canonical_json(list(rows))
-    if "smoke-only" in serialized_rows:
+    if SYNTHETIC_MARKER_PATTERN.search(serialized_rows):
         raise ValueError("smoke_only_formal_output_rejected")
+    if any(row.get("重放结论") == "通过" for row in rows):
+        raise ValueError("source_provenance_unverified")
     _assert_no_sensitive_content(serialized_rows)
     csv_buffer = io.StringIO(newline="")
     write_csv_stream(csv_buffer, rows)
