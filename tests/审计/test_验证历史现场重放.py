@@ -465,6 +465,24 @@ class SnapshotContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "snapshot_contract_incomplete"):
             self.replay.freeze_replay_snapshot(injected)
 
+    def test_整数浮点只允许IEEE754安全整数范围(self):
+        safe_value = float(2**53 - 1)
+        safe_records = [{"id": "1", "value": safe_value}]
+        expected = '[{"id":"1","value":9007199254740991}]'
+        normalized = self.replay._canonical_records(safe_records, ["id"])
+        self.assertEqual(expected, self.replay._canonical_json(normalized))
+        self.assertEqual(
+            hashlib.sha256(expected.encode("utf-8")).hexdigest(),
+            self.replay.calculate_data_sha256(safe_records, ["id"]),
+        )
+
+        unsafe_values = (float(2**53), 1e23, 9007199254740993.0)
+        for value in unsafe_values:
+            with self.subTest(value=repr(value)), self.assertRaisesRegex(
+                ValueError, "numeric_precision_unproven"
+            ):
+                self.replay.calculate_data_sha256([{"id": "1", "value": value}], ["id"])
+
 
 @unittest.skipUnless(MODULE_PATH.exists(), "等待历史重放实现")
 class ReplayEngineTests(unittest.TestCase):

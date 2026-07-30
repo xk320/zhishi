@@ -24,6 +24,7 @@ from typing import Iterable, Mapping, Sequence, TextIO
 REPLAY_VERSION = "historical-replay-1.0"
 REPLAY_SNAPSHOT_CONTRACT_VERSION = "replay-snapshot-contract-1.0"
 CANONICAL_JSON_VERSION = "canonical-json-v1"
+MAX_SAFE_INTEGER_FLOAT = 2**53 - 1
 UNREPLAYABLE_REMEDIATIONS = {
     "input_identity_drift": "修复建议：创建新审计批次并重新冻结输入身份。",
     "input_scan_incomplete": "修复建议：在不修改原始数据的前提下完成全量只读扫描。",
@@ -113,7 +114,11 @@ def _normalize_json_value(value: object) -> object:
     if value is None or isinstance(value, (str, bool, int)):
         return value
     if isinstance(value, float):
-        if not math.isfinite(value) or not value.is_integer():
+        if (
+            not math.isfinite(value)
+            or not value.is_integer()
+            or abs(value) > MAX_SAFE_INTEGER_FLOAT
+        ):
             raise ValueError("numeric_precision_unproven")
         return int(value)
     if isinstance(value, Mapping):
@@ -909,7 +914,8 @@ def render_report(rows: Sequence[Mapping[str, str]], metadata: Mapping[str, str]
         "",
         f"- 合同版本：`{REPLAY_SNAPSHOT_CONTRACT_VERSION}`。",
         f"- 规范JSON：`{CANONICAL_JSON_VERSION}`，UTF-8编码，键按Unicode排序，分隔符无多余空白，`allow_nan=false`。",
-        "- 整数按标准JSON整数表示；布尔值不作为整数；非整数浮点值禁止进入快照。",
+        "- 整数按标准JSON整数表示；布尔值不作为整数；浮点值仅在为整数且绝对值不超过2^53-1时规范为整数。",
+        "- 2^53及更大整数浮点、非整数浮点、NaN和Infinity以`numeric_precision_unproven`失败安全。",
         "- 数据哈希：将完整输入记录按已冻结业务键稳定排序，序列化为上述规范JSON，计算 SHA-256。",
         "- 资产集合指纹：对排序、去重后的资产身份、输入数据版本与数据哈希规范JSON计算 SHA-256。",
         "- 逐资产单元的冻结资产集合必须严格等于当前资产编号单元集；混入任何额外资产均不进入第二门。",
