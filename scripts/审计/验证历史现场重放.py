@@ -29,7 +29,7 @@ UNREPLAYABLE_REMEDIATIONS = {
     "snapshot_contract_incomplete": "修复建议：补全快照逻辑身份、历史时间、决策时间及不可变引用。",
     "data_version_missing": "修复建议：冻结确切输入数据版本，禁止latest、current或空值。",
     "data_hash_missing": "修复建议：提供按业务键稳定排序的完整输入规范JSON SHA-256。",
-    "data_hash_mismatch": "修复建议：停止重放，核对输入版本与完整内容后创建新快照。",
+    "data_hash_mismatch": "修复建议：停止重放，核对全部快照身份、输入版本与完整内容后创建新快照。",
     "input_asset_set_missing": "修复建议：显式冻结非空、去重的输入资产集合。",
     "available_fields_unproven": "修复建议：分别证明并冻结事件、到达和采集时间字段语义。",
     "output_hash_mismatch": "修复建议：拒绝当前结果，排查非确定输入、排序或重放逻辑后生成新版本。",
@@ -97,7 +97,9 @@ def _sha256_bytes(value: bytes) -> str:
 
 
 def _canonical_json(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+    )
 
 
 def _canonical_records(
@@ -163,37 +165,64 @@ def _deep_thaw(value: object) -> object:
     return value
 
 
-def freeze_replay_snapshot(evidence: Mapping[str, object]) -> Mapping[str, object]:
-    """创建内容寻址、深度不可变的历史重放输入快照。"""
+STABLE_IDENTIFIER_PATTERN = re.compile(
+    r"(?=.{1,128}\Z)[A-Za-z0-9\u4e00-\u9fff][A-Za-z0-9\u4e00-\u9fff._:/-]*"
+)
+GENERATED_SNAPSHOT_FIELDS = {
+    "快照记录编号", "快照版本标识", "输入资产集合指纹", "输入记录",
+}
 
-    data_version = evidence.get("输入数据版本")
-    if (
-        not isinstance(data_version, str)
-        or not data_version.strip()
-        or data_version.strip().lower() in {"latest", "current"}
-    ):
-        raise ValueError("data_version_missing")
-    supplied_hash = evidence.get("输入数据哈希")
+
+def _validate_stable_identifier(value: object, failure_code: str) -> str:
+    if not isinstance(value, str) or value != value.strip() or not value:
+        raise ValueError(failure_code)
+    if value.lower() in {"latest", "current"}:
+        raise ValueError(failure_code)
+    if re.fullmatch(r"\d{10}|\d{13}", value):
+        raise ValueError(failure_code)
+    if re.match(r"^\d{4}-\d{2}-\d{2}(?:T.*)?$", value):
+        raise ValueError(failure_code)
+    if not STABLE_IDENTIFIER_PATTERN.fullmatch(value):
+        raise ValueError(failure_code)
+    return value
+
+
+def _build_snapshot_identity(
+    source: Mapping[str, object],
+    *,
+    records_field: str,
+) -> dict[str, object]:
+    """规范化全部快照身份并生成唯一内容寻址版本。"""
+
+    contract_version = source.get("快照合同版本", REPLAY_SNAPSHOT_CONTRACT_VERSION)
+    if contract_version != REPLAY_SNAPSHOT_CONTRACT_VERSION:
+        raise ValueError("snapshot_contract_incomplete")
+    data_version = _validate_stable_identifier(
+        source.get("输入数据版本"), "data_version_missing"
+    )
+    supplied_hash = source.get("输入数据哈希")
     if not isinstance(supplied_hash, str) or not supplied_hash:
         raise ValueError("data_hash_missing")
     if not re.fullmatch(r"[0-9a-f]{64}", supplied_hash):
         raise ValueError("data_hash_missing")
-    assets = evidence.get("输入资产集合")
+    assets = source.get("输入资产集合")
     if (
         not isinstance(assets, (list, tuple))
         or not assets
         or not all(isinstance(asset, str) and asset.strip() for asset in assets)
     ):
         raise ValueError("input_asset_set_missing")
-    normalized_assets = sorted({asset.strip() for asset in assets})
+    if any(asset != asset.strip() for asset in assets):
+        raise ValueError("input_asset_set_missing")
+    normalized_assets = sorted({_validate_stable_identifier(asset, "input_asset_set_missing") for asset in assets})
     if len(normalized_assets) != len(assets):
         raise ValueError("input_asset_set_missing")
 
-    keys = evidence.get("业务键")
+    keys = source.get("业务键")
     if not isinstance(keys, (list, tuple)):
         raise ValueError("business_key_required")
     key_fields = tuple(keys)
-    records = evidence.get("记录")
+    records = source.get(records_field)
     if not isinstance(records, list):
         raise ValueError("records_required")
     normalized_records = _canonical_records(records, key_fields)
@@ -201,25 +230,25 @@ def freeze_replay_snapshot(evidence: Mapping[str, object]) -> Mapping[str, objec
     if actual_hash != supplied_hash:
         raise ValueError("data_hash_mismatch")
 
-    historical_time = evidence.get("历史时间")
-    decision_time = evidence.get("决策时间")
+    historical_time = source.get("历史时间")
+    decision_time = source.get("决策时间")
     if not isinstance(historical_time, str) or not isinstance(decision_time, str):
         raise ValueError("snapshot_contract_incomplete")
     _aware_datetime(historical_time)
     _aware_datetime(decision_time)
 
-    logical_id = evidence.get("快照逻辑标识")
-    if not isinstance(logical_id, str) or not logical_id.strip():
-        raise ValueError("snapshot_contract_incomplete")
-    event_field = evidence.get("事件时间字段")
-    arrival_field = evidence.get("到达时间字段")
-    collection_field = evidence.get("采集时间字段")
+    logical_id = _validate_stable_identifier(
+        source.get("快照逻辑标识"), "snapshot_contract_incomplete"
+    )
+    event_field = source.get("事件时间字段")
+    arrival_field = source.get("到达时间字段")
+    collection_field = source.get("采集时间字段")
     if (
         not all(isinstance(field, str) and field for field in (event_field, arrival_field, collection_field))
         or len({event_field, arrival_field, collection_field}) != 3
     ):
         raise ValueError("available_fields_unproven")
-    field_status = evidence.get("字段冻结状态")
+    field_status = source.get("字段冻结状态")
     required_fields = (event_field, arrival_field, collection_field)
     if (
         not isinstance(field_status, Mapping)
@@ -232,13 +261,17 @@ def freeze_replay_snapshot(evidence: Mapping[str, object]) -> Mapping[str, objec
                 raise ValueError("available_fields_unproven")
             _aware_datetime(str(record[field]))
 
-    asset_fingerprint = _sha256_bytes(_canonical_json(normalized_assets).encode("utf-8"))
+    asset_fingerprint = _sha256_bytes(_canonical_json({
+        "输入资产集合": normalized_assets,
+        "输入数据版本": data_version,
+        "输入数据哈希": actual_hash,
+    }).encode("utf-8"))
     version_content = {
         "快照合同版本": REPLAY_SNAPSHOT_CONTRACT_VERSION,
-        "快照逻辑标识": logical_id.strip(),
+        "快照逻辑标识": logical_id,
         "历史时间": historical_time,
         "决策时间": decision_time,
-        "输入数据版本": data_version.strip(),
+        "输入数据版本": data_version,
         "输入数据哈希": actual_hash,
         "输入资产集合": normalized_assets,
         "输入资产集合指纹": asset_fingerprint,
@@ -252,6 +285,15 @@ def freeze_replay_snapshot(evidence: Mapping[str, object]) -> Mapping[str, objec
     content_fingerprint = _sha256_bytes(_canonical_json(version_content).encode("utf-8"))
     version_content["快照版本标识"] = f"sha256:{content_fingerprint}"
     version_content["快照记录编号"] = f"ZS-历史重放-{content_fingerprint}"
+    return version_content
+
+
+def freeze_replay_snapshot(evidence: Mapping[str, object]) -> Mapping[str, object]:
+    """创建内容寻址、深度不可变的历史重放输入快照。"""
+
+    if GENERATED_SNAPSHOT_FIELDS & set(evidence):
+        raise ValueError("snapshot_contract_incomplete")
+    version_content = _build_snapshot_identity(evidence, records_field="记录")
     return _deep_freeze(version_content)  # type: ignore[return-value]
 
 
@@ -557,30 +599,35 @@ def execute_second_gate(
 def execute_snapshot_replay(snapshot: Mapping[str, object]) -> dict[str, object]:
     """仅从已冻结快照连续执行两次重放。"""
 
-    if snapshot.get("快照合同版本") != REPLAY_SNAPSHOT_CONTRACT_VERSION:
+    thawed = _deep_thaw(snapshot)
+    if not isinstance(thawed, dict):
         raise ValueError("snapshot_contract_incomplete")
-    records = _deep_thaw(snapshot.get("输入记录"))
-    keys = _deep_thaw(snapshot.get("业务键"))
+    expected = _build_snapshot_identity(thawed, records_field="输入记录")
+    if set(thawed) != set(expected):
+        raise ValueError("snapshot_contract_incomplete")
+    if _canonical_json(thawed) != _canonical_json(expected):
+        raise ValueError("data_hash_mismatch")
+    records = expected["输入记录"]
+    keys = expected["业务键"]
     if not isinstance(records, list) or not isinstance(keys, list):
         raise ValueError("snapshot_contract_incomplete")
-    if calculate_data_sha256(records, keys) != snapshot.get("输入数据哈希"):
-        raise ValueError("data_hash_mismatch")
     result = execute_second_gate(
         records,
-        str(snapshot.get("决策时间", "")),
-        str(snapshot.get("到达时间字段", "")),
+        str(expected["决策时间"]),
+        str(expected["到达时间字段"]),
         keys,
     )
-    result["快照版本标识"] = snapshot["快照版本标识"]
+    result["快照版本标识"] = expected["快照版本标识"]
     return result
 
 
 def _evaluate_qualified_evidence(
     quality: Mapping[str, str],
     evidence: Mapping[str, object],
+    asset_id: str,
 ) -> dict[str, object]:
     if quality["扫描完整性"] != "完整":
-        raise ValueError("complete_scan_required")
+        raise ValueError("input_scan_incomplete")
     required_text = ("证据类型", "合同版本", "来源证据", "决策记录编号")
     if any(not isinstance(evidence.get(field), str) or not evidence[field] for field in required_text):
         raise ValueError("decision_record_missing")
@@ -589,6 +636,8 @@ def _evaluate_qualified_evidence(
     if evidence.get("三类时间合同状态") != "已证明":
         raise ValueError("available_fields_unproven")
     snapshot = freeze_replay_snapshot(evidence)
+    if asset_id not in snapshot["输入资产集合"]:
+        raise ValueError("input_asset_set_missing")
     second_gate = execute_snapshot_replay(snapshot)
     evidence_fingerprint = _sha256_bytes(_canonical_json(evidence).encode("utf-8"))
     result: dict[str, object] = {
@@ -704,7 +753,9 @@ def build_formal_coverage(
         row.update(_unavailable_snapshot_fields(reason_code))
         if not identity_drift and replay_evidence and asset_id in replay_evidence:
             try:
-                row.update(_evaluate_qualified_evidence(quality, replay_evidence[asset_id]))
+                row.update(_evaluate_qualified_evidence(
+                    quality, replay_evidence[asset_id], asset_id
+                ))
             except ValueError as error:
                 failure_code = str(error)
                 if failure_code not in UNREPLAYABLE_REMEDIATIONS:
@@ -811,7 +862,8 @@ def render_report(rows: Sequence[Mapping[str, str]], metadata: Mapping[str, str]
         "",
         f"- 合同版本：`{REPLAY_SNAPSHOT_CONTRACT_VERSION}`。",
         "- 数据哈希：将完整输入记录按已冻结业务键稳定排序，序列化为 UTF-8 规范JSON，计算 SHA-256。",
-        "- 资产集合指纹：对排序、去重后的输入资产集合规范JSON计算 SHA-256。",
+        "- 资产集合指纹：对排序、去重后的资产身份、输入数据版本与数据哈希规范JSON计算 SHA-256。",
+        "- 重放前重新规范化全部快照身份，逐项核对资产指纹、内容指纹、版本标识与记录编号。",
         "- 重放结果哈希：对可见数量、未来拒绝状态和输出指纹计算独立 SHA-256。",
         "- 与知识版本合同一致：逻辑标识稳定，内容变化生成内容寻址的不可变版本标识，下游不得仅引用“最新版本”。",
         "",

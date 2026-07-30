@@ -138,7 +138,7 @@ def make_snapshot_evidence(replay: ModuleType) -> dict[str, object]:
         "决策时间": "2026-07-28T08:00:00+08:00",
         "输入数据版本": "smoke-data-v1",
         "输入数据哈希": replay.calculate_data_sha256(records, ["id"]),
-        "输入资产集合": ["BTC"],
+        "输入资产集合": ["DS-000001"],
         "事件时间字段": "event",
         "到达时间字段": "arrival",
         "采集时间字段": "collection",
@@ -313,6 +313,90 @@ class SnapshotContractTests(unittest.TestCase):
             self.replay.UNREPLAYABLE_REMEDIATIONS[code].startswith("修复建议：")
             for code in required
         ))
+
+    def test_重放前篡改任一快照身份必须失败安全(self):
+        frozen = self.replay.freeze_replay_snapshot(make_snapshot_evidence(self.replay))
+
+        def set_nested_field(snapshot: dict[str, object]) -> None:
+            snapshot["字段冻结状态"]["event"] = "未冻结"
+
+        cases = (
+            ("快照逻辑标识", lambda item: item.__setitem__("快照逻辑标识", "ZS-数据快照-OTHER")),
+            ("历史时间", lambda item: item.__setitem__("历史时间", "2026-07-28T07:59:59+08:00")),
+            ("决策时间", lambda item: item.__setitem__("决策时间", "2026-07-28T07:59:59+08:00")),
+            ("输入数据版本", lambda item: item.__setitem__("输入数据版本", "smoke-data-v2")),
+            ("输入资产集合", lambda item: item.__setitem__("输入资产集合", ["DS-000002"])),
+            ("字段冻结状态", set_nested_field),
+            ("业务键", lambda item: item.__setitem__("业务键", ["arrival"])),
+            ("事件时间字段", lambda item: item.__setitem__("事件时间字段", "arrival")),
+            ("到达时间字段", lambda item: item.__setitem__("到达时间字段", "event")),
+            ("采集时间字段", lambda item: item.__setitem__("采集时间字段", "arrival")),
+            ("输入数据哈希", lambda item: item.__setitem__("输入数据哈希", "f" * 64)),
+            ("快照合同版本", lambda item: item.__setitem__("快照合同版本", "replay-snapshot-contract-2.0")),
+            ("快照版本标识", lambda item: item.__setitem__("快照版本标识", "sha256:" + "f" * 64)),
+            ("快照记录编号", lambda item: item.__setitem__("快照记录编号", "ZS-历史重放-" + "f" * 64)),
+            ("输入资产集合指纹", lambda item: item.__setitem__("输入资产集合指纹", "f" * 64)),
+        )
+        for field, mutate in cases:
+            candidate = self.replay._deep_thaw(frozen)
+            mutate(candidate)
+            with self.subTest(field=field), self.assertRaisesRegex(
+                ValueError,
+                "data_hash_mismatch|snapshot_contract_incomplete|available_fields_unproven",
+            ):
+                self.replay.execute_snapshot_replay(candidate)
+
+    def test_逻辑标识与数据版本禁止猜测身份(self):
+        invalid_values = (
+            "", "latest", " Current ", "LATEST", "2026-07-28T08:00:00+08:00",
+            "1722134400", "1722134400000", "contains space",
+        )
+        for field in ("快照逻辑标识", "输入数据版本"):
+            for value in invalid_values:
+                evidence = make_snapshot_evidence(self.replay)
+                evidence[field] = value
+                with self.subTest(field=field, value=value), self.assertRaisesRegex(
+                    ValueError, "snapshot_contract_incomplete|data_version_missing"
+                ):
+                    self.replay.freeze_replay_snapshot(evidence)
+
+        valid = make_snapshot_evidence(self.replay)
+        valid["快照逻辑标识"] = "ZS-数据快照-知势_01"
+        valid["输入数据版本"] = "数据版本-v1.0"
+        frozen = self.replay.freeze_replay_snapshot(valid)
+        self.assertEqual("ZS-数据快照-知势_01", frozen["快照逻辑标识"])
+        self.assertEqual("数据版本-v1.0", frozen["输入数据版本"])
+
+    def test_快照版本标识不接受调用方注入(self):
+        evidence = make_snapshot_evidence(self.replay)
+        evidence["快照版本标识"] = "sha256:" + "f" * 64
+        with self.assertRaisesRegex(ValueError, "snapshot_contract_incomplete"):
+            self.replay.freeze_replay_snapshot(evidence)
+
+    def test_资产集合指纹绑定数据版本和数据哈希(self):
+        first = make_snapshot_evidence(self.replay)
+        second = make_snapshot_evidence(self.replay)
+        second["输入数据版本"] = "smoke-data-v2"
+        third = make_snapshot_evidence(self.replay)
+        third["记录"][0]["fixture"] = "smoke-only-v2"
+        third["输入数据哈希"] = self.replay.calculate_data_sha256(
+            third["记录"], third["业务键"]
+        )
+        fingerprints = {
+            self.replay.freeze_replay_snapshot(item)["输入资产集合指纹"]
+            for item in (first, second, third)
+        }
+        self.assertEqual(3, len(fingerprints))
+
+    def test_规范JSON拒绝NaN和Infinity(self):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=repr(value)), self.assertRaisesRegex(
+                ValueError, "record_not_canonical_json"
+            ):
+                self.replay.calculate_data_sha256(
+                    [{"id": "1", "arrival": "2026-07-28T08:00:00+08:00", "value": value}],
+                    ["id"],
+                )
 
 
 @unittest.skipUnless(MODULE_PATH.exists(), "等待历史重放实现")
@@ -594,6 +678,29 @@ class OutputTests(unittest.TestCase):
             )
         self.assertEqual("拒绝", rows[0]["重放结论"])
         self.assertEqual("data_hash_mismatch", rows[0]["不可重放原因代码"])
+
+    def test_不完整扫描不得被表面完整快照证据覆盖(self):
+        with tempfile.TemporaryDirectory() as directory:
+            inventory, quality = make_inputs(Path(directory))
+            frozen = self.replay.load_and_freeze_inputs(inventory, quality)
+            rows = self.replay.build_formal_coverage(
+                frozen, "replay-fixed",
+                replay_evidence={"DS-000002": make_snapshot_evidence(self.replay)},
+            )
+        self.assertEqual("无法判定", rows[1]["重放结论"])
+        self.assertEqual("input_scan_incomplete", rows[1]["不可重放原因代码"])
+
+    def test_快照输入资产集合必须绑定当前资产编号(self):
+        with tempfile.TemporaryDirectory() as directory:
+            inventory, quality = make_inputs(Path(directory))
+            frozen = self.replay.load_and_freeze_inputs(inventory, quality)
+            evidence = make_snapshot_evidence(self.replay)
+            evidence["输入资产集合"] = ["DS-999999"]
+            rows = self.replay.build_formal_coverage(
+                frozen, "replay-fixed", replay_evidence={"DS-000001": evidence}
+            )
+        self.assertEqual("无法判定", rows[0]["重放结论"])
+        self.assertEqual("input_asset_set_missing", rows[0]["不可重放原因代码"])
 
     def test_固定列公式防护与敏感发布失败保留旧版(self):
         row = {column: "无法判定" for column in self.replay.RESULT_COLUMNS}
