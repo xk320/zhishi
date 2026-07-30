@@ -612,6 +612,47 @@ class OutputTests(unittest.TestCase):
         self.assertIn("完整扫描不等于可见性合同", rows[0]["依据"])
         self.assertIn("仅元数据", rows[1]["依据"])
 
+    def test_v1正式构建器批次级拒绝任何调用方重放证据(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            inventory, quality = make_inputs(root)
+            frozen = self.replay.load_and_freeze_inputs(inventory, quality)
+            cases = {}
+
+            exact_smoke = make_snapshot_evidence(self.replay)
+            cases["精确smoke"] = exact_smoke
+
+            hash_drift = make_snapshot_evidence(self.replay)
+            hash_drift["输入数据哈希"] = "f" * 64
+            cases["哈希漂移"] = hash_drift
+
+            contract_missing = make_snapshot_evidence(self.replay)
+            del contract_missing["三类时间合同状态"]
+            cases["合同缺失"] = contract_missing
+
+            formal = make_snapshot_evidence(self.replay)
+            formal["证据类型"] = "formal invented"
+            cases["伪正式"] = formal
+
+            csv_path = root / "result.csv"
+            report_path = root / "report.md"
+            csv_path.write_text("old-csv", encoding="utf-8")
+            report_path.write_text("old-report", encoding="utf-8")
+            for label, evidence in cases.items():
+                with self.subTest(label=label), self.assertRaisesRegex(
+                    ValueError, "source_provenance_unverified"
+                ):
+                    rows = self.replay.build_formal_coverage(
+                        frozen, "replay-fixed", replay_evidence={"DS-000001": evidence}
+                    )
+                    self.replay.publish_outputs(csv_path, report_path, rows, "new-report")
+                self.assertEqual("old-csv", csv_path.read_text(encoding="utf-8"))
+                self.assertEqual("old-report", report_path.read_text(encoding="utf-8"))
+
+            rows = self.replay.build_formal_coverage(frozen, "replay-fixed", replay_evidence={})
+            self.assertEqual(3, len(rows))
+            self.assertTrue(all(row["重放结论"] == "无法判定" for row in rows))
+
     def test_任务000004已确认的输入漂移必须拒绝(self):
         with tempfile.TemporaryDirectory() as directory:
             inventory, quality = make_inputs(Path(directory))
@@ -638,18 +679,18 @@ class OutputTests(unittest.TestCase):
         self.assertIn("输入或重放拒绝：1 个", report)
         self.assertIn("证据不足无法判定：2 个", report)
 
-    def test_统一正式单元评估路径可进入第二门(self):
+    def test_受控smoke算法路径可进入第二门(self):
         with tempfile.TemporaryDirectory() as directory:
             inventory, quality = make_inputs(Path(directory))
             frozen = self.replay.load_and_freeze_inputs(inventory, quality)
-            evidence = {"DS-000001": make_snapshot_evidence(self.replay)}
-            rows = self.replay.build_formal_coverage(
-                frozen, "replay-fixed", replay_evidence=evidence
+            qualified = self.replay._evaluate_qualified_evidence(
+                frozen["质量记录"]["DS-000001"],
+                make_snapshot_evidence(self.replay),
+                "DS-000001",
             )
 
-        qualified = rows[0]
         self.assertEqual("通过", qualified["第一门状态"])
-        self.assertEqual("1", qualified["可见记录数"])
+        self.assertEqual(1, qualified["可见记录数"])
         self.assertEqual("通过", qualified["确定性状态"])
         self.assertEqual("通过（future_arrival_rejected）", qualified["未来数据拒绝状态"])
         self.assertEqual("通过", qualified["重放结论"])
@@ -662,7 +703,7 @@ class OutputTests(unittest.TestCase):
                 self.replay.publish_outputs(
                     Path(directory) / "result.csv",
                     Path(directory) / "report.md",
-                    rows,
+                    [qualified],
                     "safe report",
                 )
 
@@ -740,40 +781,38 @@ class OutputTests(unittest.TestCase):
         self.assertIn("逻辑标识", report)
         self.assertIn("不可变版本", report)
 
-    def test_正式证据合同不完整时失败安全分类(self):
+    def test_smoke算法入口在证据合同不完整时失败安全(self):
         with tempfile.TemporaryDirectory() as directory:
             inventory, quality = make_inputs(Path(directory))
             frozen = self.replay.load_and_freeze_inputs(inventory, quality)
             evidence = make_snapshot_evidence(self.replay)
             del evidence["三类时间合同状态"]
-            rows = self.replay.build_formal_coverage(
-                frozen, "replay-fixed", replay_evidence={"DS-000001": evidence}
-            )
-        self.assertEqual("无法判定", rows[0]["重放结论"])
-        self.assertEqual("snapshot_contract_incomplete", rows[0]["不可重放原因代码"])
+            with self.assertRaisesRegex(ValueError, "snapshot_contract_incomplete"):
+                self.replay._evaluate_qualified_evidence(
+                    frozen["质量记录"]["DS-000001"], evidence, "DS-000001"
+                )
 
-    def test_正式数据哈希漂移时拒绝(self):
+    def test_smoke算法入口在数据哈希漂移时拒绝(self):
         with tempfile.TemporaryDirectory() as directory:
             inventory, quality = make_inputs(Path(directory))
             frozen = self.replay.load_and_freeze_inputs(inventory, quality)
             evidence = make_snapshot_evidence(self.replay)
             evidence["输入数据哈希"] = "f" * 64
-            rows = self.replay.build_formal_coverage(
-                frozen, "replay-fixed", replay_evidence={"DS-000001": evidence}
-            )
-        self.assertEqual("拒绝", rows[0]["重放结论"])
-        self.assertEqual("data_hash_mismatch", rows[0]["不可重放原因代码"])
+            with self.assertRaisesRegex(ValueError, "data_hash_mismatch"):
+                self.replay._evaluate_qualified_evidence(
+                    frozen["质量记录"]["DS-000001"], evidence, "DS-000001"
+                )
 
     def test_不完整扫描不得被表面完整快照证据覆盖(self):
         with tempfile.TemporaryDirectory() as directory:
             inventory, quality = make_inputs(Path(directory))
             frozen = self.replay.load_and_freeze_inputs(inventory, quality)
-            rows = self.replay.build_formal_coverage(
-                frozen, "replay-fixed",
-                replay_evidence={"DS-000002": make_snapshot_evidence(self.replay)},
-            )
-        self.assertEqual("无法判定", rows[1]["重放结论"])
-        self.assertEqual("input_scan_incomplete", rows[1]["不可重放原因代码"])
+            with self.assertRaisesRegex(ValueError, "input_scan_incomplete"):
+                self.replay._evaluate_qualified_evidence(
+                    frozen["质量记录"]["DS-000002"],
+                    make_snapshot_evidence(self.replay),
+                    "DS-000002",
+                )
 
     def test_快照输入资产集合必须绑定当前资产编号(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -781,11 +820,10 @@ class OutputTests(unittest.TestCase):
             frozen = self.replay.load_and_freeze_inputs(inventory, quality)
             evidence = make_snapshot_evidence(self.replay)
             evidence["输入资产集合"] = ["DS-999999"]
-            rows = self.replay.build_formal_coverage(
-                frozen, "replay-fixed", replay_evidence={"DS-000001": evidence}
-            )
-        self.assertEqual("无法判定", rows[0]["重放结论"])
-        self.assertEqual("input_asset_set_missing", rows[0]["不可重放原因代码"])
+            with self.assertRaisesRegex(ValueError, "input_asset_set_missing"):
+                self.replay._evaluate_qualified_evidence(
+                    frozen["质量记录"]["DS-000001"], evidence, "DS-000001"
+                )
 
     def test_逐资产快照不得混入额外未知资产(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -793,11 +831,10 @@ class OutputTests(unittest.TestCase):
             frozen = self.replay.load_and_freeze_inputs(inventory, quality)
             evidence = make_snapshot_evidence(self.replay)
             evidence["输入资产集合"] = ["DS-000001", "DS-999999"]
-            rows = self.replay.build_formal_coverage(
-                frozen, "replay-fixed", replay_evidence={"DS-000001": evidence}
-            )
-        self.assertEqual("无法判定", rows[0]["重放结论"])
-        self.assertEqual("input_asset_set_missing", rows[0]["不可重放原因代码"])
+            with self.assertRaisesRegex(ValueError, "input_asset_set_missing"):
+                self.replay._evaluate_qualified_evidence(
+                    frozen["质量记录"]["DS-000001"], evidence, "DS-000001"
+                )
 
     def test_逐资产快照不得混入已知但扫描不完整资产(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -805,11 +842,10 @@ class OutputTests(unittest.TestCase):
             frozen = self.replay.load_and_freeze_inputs(inventory, quality)
             evidence = make_snapshot_evidence(self.replay)
             evidence["输入资产集合"] = ["DS-000001", "DS-000002"]
-            rows = self.replay.build_formal_coverage(
-                frozen, "replay-fixed", replay_evidence={"DS-000001": evidence}
-            )
-        self.assertEqual("无法判定", rows[0]["重放结论"])
-        self.assertEqual("input_asset_set_missing", rows[0]["不可重放原因代码"])
+            with self.assertRaisesRegex(ValueError, "input_asset_set_missing"):
+                self.replay._evaluate_qualified_evidence(
+                    frozen["质量记录"]["DS-000001"], evidence, "DS-000001"
+                )
 
     def test_自报正式或伪合成来源不得进入第二门(self):
         untrusted_types = ("formal", "mock", "SMOKE-ONLY", "smoke_only", "smoke-only-v2", "任意自报")
@@ -822,12 +858,11 @@ class OutputTests(unittest.TestCase):
                 with self.subTest(evidence_type=evidence_type), mock.patch.object(
                     self.replay, "execute_snapshot_replay", wraps=self.replay.execute_snapshot_replay
                 ) as replay_call:
-                    row = self.replay.build_formal_coverage(
-                        frozen, "replay-fixed", replay_evidence={"DS-000001": evidence}
-                    )[0]
+                    with self.assertRaisesRegex(ValueError, "source_provenance_unverified"):
+                        self.replay._evaluate_qualified_evidence(
+                            frozen["质量记录"]["DS-000001"], evidence, "DS-000001"
+                        )
                     self.assertEqual(0, replay_call.call_count)
-                    self.assertEqual("无法判定", row["重放结论"])
-                    self.assertEqual("source_provenance_unverified", row["不可重放原因代码"])
 
     def test_正式发布拒绝自报通过行和合成标记变体(self):
         base = {column: "无法判定" for column in self.replay.RESULT_COLUMNS}

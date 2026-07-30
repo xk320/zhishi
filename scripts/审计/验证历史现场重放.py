@@ -742,6 +742,8 @@ def build_formal_coverage(
     batch: str,
     replay_evidence: Mapping[str, Mapping[str, object]] | None = None,
 ) -> list[dict[str, str]]:
+    if replay_evidence:
+        raise ValueError("source_provenance_unverified")
     quality_index = frozen["质量记录"]
     if not isinstance(quality_index, dict):
         raise ValueError("冻结质量记录结构非法")
@@ -802,24 +804,6 @@ def build_formal_coverage(
             ),
         }
         row.update(_unavailable_snapshot_fields(reason_code))
-        if not identity_drift and replay_evidence and asset_id in replay_evidence:
-            try:
-                row.update(_evaluate_qualified_evidence(
-                    quality, replay_evidence[asset_id], asset_id
-                ))
-            except ValueError as error:
-                failure_code = str(error)
-                if failure_code not in UNREPLAYABLE_REMEDIATIONS:
-                    failure_code = "snapshot_contract_incomplete"
-                rejected = failure_code in {"data_hash_mismatch", "output_hash_mismatch"}
-                row["第一门状态"] = (
-                    "拒绝（重放证据未通过合同校验）" if rejected
-                    else "无法判定（重放证据未通过合同校验）"
-                )
-                row["重放结论"] = "拒绝" if rejected else "无法判定"
-                row["依据"] = f"重放证据合同校验失败：{failure_code}"
-                row["解除条件"] = "修复重放证据合同并创建新验证批次"
-                row.update(_unavailable_snapshot_fields(failure_code))
         rows.append({key: str(value) for key, value in row.items()})
     return rows
 
@@ -922,8 +906,9 @@ def render_report(rows: Sequence[Mapping[str, str]], metadata: Mapping[str, str]
         "- 重放前重新规范化全部快照身份，逐项核对资产指纹、内容指纹、版本标识与记录编号。",
         "- 重放结果哈希：对可见数量、未来拒绝状态和输出指纹计算独立 SHA-256。",
         "- 与知识版本合同一致：逻辑标识稳定，内容变化生成内容寻址的不可变版本标识，下游不得仅引用“最新版本”。",
-        "- 当前安全门：只有精确`smoke-only`可进入算法测试路径，且任何通过行均不得发布为正式产物。",
-        "- 解除条件：Phase 2建立独立可信的只读来源加载器或登记合同；调用方自报字符串不构成来源证明。",
+        "- v1正式构建器不接受任何调用方重放证据；任意非空证据批次均以`source_provenance_unverified`失败安全。",
+        "- 当前安全门：只有精确`smoke-only`可通过受控算法入口测试第二门，不经过正式构建器，且任何通过行均不得发布为正式产物。",
+        "- 解除条件：Phase 2建立独立可信的只读来源加载器或登记合同，再增加新的受控正式入口；调用方自报字符串不构成来源证明。",
         "",
         "## 不可重放原因分布",
         "",
