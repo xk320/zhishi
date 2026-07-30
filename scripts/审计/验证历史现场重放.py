@@ -329,7 +329,104 @@ def replay_visible_records(
     }
 
 
-def build_formal_coverage(frozen: Mapping[str, object], batch: str) -> list[dict[str, str]]:
+def execute_second_gate(
+    records: Iterable[Mapping[str, object]],
+    decision_time: str,
+    arrival_field: str,
+    business_key_fields: Sequence[str],
+) -> dict[str, object]:
+    frozen_records = [dict(record) for record in records]
+    first = replay_visible_records(
+        frozen_records, decision_time, arrival_field, business_key_fields
+    )
+    second = replay_visible_records(
+        frozen_records, decision_time, arrival_field, business_key_fields
+    )
+    deterministic = (
+        first["visible_count"] == second["visible_count"]
+        and first["snapshot_fingerprint"] == second["snapshot_fingerprint"]
+    )
+    future_rejected = (
+        first["future_rejection_code"] == "future_arrival_rejected"
+        and second["future_rejection_code"] == "future_arrival_rejected"
+    )
+    return {
+        "可见记录数": first["visible_count"],
+        "首次快照指纹": first["snapshot_fingerprint"],
+        "再次快照指纹": second["snapshot_fingerprint"],
+        "确定性状态": "通过" if deterministic else "拒绝（连续重放快照不一致）",
+        "未来数据拒绝状态": (
+            "通过（future_arrival_rejected）" if future_rejected
+            else "未触发（无未来到达记录）"
+        ),
+        "重放结论": "通过" if deterministic else "拒绝",
+    }
+
+
+def _evaluate_qualified_evidence(
+    quality: Mapping[str, str],
+    evidence: Mapping[str, object],
+) -> dict[str, object]:
+    if quality["扫描完整性"] != "完整":
+        raise ValueError("complete_scan_required")
+    required_text = (
+        "证据类型", "合同版本", "来源证据", "决策记录编号", "决策时间",
+        "事件时间字段", "到达时间字段", "采集时间字段", "三类时间合同状态",
+    )
+    if any(not isinstance(evidence.get(field), str) or not evidence[field] for field in required_text):
+        raise ValueError("replay_evidence_incomplete")
+    if evidence["三类时间合同状态"] != "已证明":
+        raise ValueError("time_contract_not_proven")
+    _aware_datetime(str(evidence["决策时间"]))
+    keys = evidence.get("业务键")
+    records = evidence.get("记录")
+    if not isinstance(keys, list) or not all(isinstance(key, str) and key for key in keys):
+        raise ValueError("business_key_required")
+    if not isinstance(records, list) or not all(isinstance(record, dict) for record in records):
+        raise ValueError("records_required")
+    event_field = str(evidence["事件时间字段"])
+    arrival_field = str(evidence["到达时间字段"])
+    collection_field = str(evidence["采集时间字段"])
+    if len({event_field, arrival_field, collection_field}) != 3:
+        raise ValueError("three_time_fields_must_be_distinct")
+    for record in records:
+        for field in (event_field, arrival_field, collection_field):
+            if field not in record:
+                raise ValueError("three_time_fields_missing")
+            _aware_datetime(str(record[field]))
+    second_gate = execute_second_gate(
+        records,
+        str(evidence["决策时间"]),
+        arrival_field,
+        keys,
+    )
+    evidence_fingerprint = _sha256_bytes(_canonical_json(evidence).encode("utf-8"))
+    result: dict[str, object] = {
+        "决策记录编号": evidence["决策记录编号"],
+        "决策时间": evidence["决策时间"],
+        "事件时间字段": event_field,
+        "到达时间字段": arrival_field,
+        "采集时间字段": collection_field,
+        "可见性合同状态": f"通过（{evidence['合同版本']}）",
+        "输入身份状态": "一致（冻结清单、质量证据与重放证据）",
+        "第一门状态": "通过",
+        "依据": f"来源与时间合同证据指纹{evidence_fingerprint}；连续执行两次第二门",
+        "限制": (
+            "smoke-only合成证据，禁止发布为正式产物"
+            if evidence["证据类型"] == "smoke-only"
+            else "仅对冻结决策时点、证据版本和资产身份有效"
+        ),
+        "解除条件": "无需（本验证单元已执行双门重放）",
+    }
+    result.update(second_gate)
+    return result
+
+
+def build_formal_coverage(
+    frozen: Mapping[str, object],
+    batch: str,
+    replay_evidence: Mapping[str, Mapping[str, object]] | None = None,
+) -> list[dict[str, str]]:
     quality_index = frozen["质量记录"]
     if not isinstance(quality_index, dict):
         raise ValueError("冻结质量记录结构非法")
@@ -337,15 +434,18 @@ def build_formal_coverage(frozen: Mapping[str, object], batch: str) -> list[dict
     for asset_id in sorted(quality_index):
         quality = quality_index[asset_id]
         completeness = quality["扫描完整性"]
-        if completeness == "完整":
-            scan_basis = "完整扫描不等于可见性合同，且未发现带来源证据的真实决策记录"
+        identity_drift = quality["扫描状态"] == "输入漂移"
+        if identity_drift:
+            scan_basis = "任务-000004已确认结构阶段与质量阶段之间输入漂移，禁止进入重放"
+        elif completeness == "完整":
+            scan_basis = "完整扫描不等于可见性合同，且冻结输入合同未提供带来源证据的真实决策记录"
         else:
             scan_basis = f"扫描完整性为{completeness}，仅保留覆盖记录，禁止读取正文"
         basis = (
             f"{scan_basis}；事件、到达、采集时间状态均未形成可验证语义合同；"
             "字段名候选证据未被提升为时间语义"
         )
-        rows.append({
+        row: dict[str, object] = {
             "验证批次": batch,
             "清单指纹": str(frozen["清单指纹"]),
             "质量审计批次": str(frozen["质量审计批次"]),
@@ -357,18 +457,38 @@ def build_formal_coverage(frozen: Mapping[str, object], batch: str) -> list[dict
             "到达时间字段": "无法判定",
             "采集时间字段": "无法判定",
             "可见性合同状态": "无法判定（缺少已证明的到达时间合同）",
-            "输入身份状态": "一致（冻结清单与质量证据）",
-            "第一门状态": "无法判定（缺少真实决策记录与已证明到达时间合同）",
+            "输入身份状态": (
+                "拒绝（任务-000004已确认输入漂移）"
+                if identity_drift else "一致（冻结清单与质量证据）"
+            ),
+            "第一门状态": (
+                "拒绝（输入身份漂移）" if identity_drift
+                else "无法判定（缺少真实决策记录与已证明到达时间合同）"
+            ),
             "可见记录数": "无法判定",
             "首次快照指纹": "无法判定",
             "再次快照指纹": "无法判定",
             "确定性状态": "未执行（第一门未通过）",
             "未来数据拒绝状态": "未执行（第一门未通过）",
-            "重放结论": "无法判定",
+            "重放结论": "拒绝" if identity_drift else "无法判定",
             "依据": basis,
             "限制": "本结果不得用于预测研究、胜率或收益声称、交易许可或真实下单",
-            "解除条件": "提供带来源证据和明确时区的历史决策记录，冻结三类时间语义、稳定业务键与到达可见性合同",
-        })
+            "解除条件": (
+                "在新审计批次重新冻结输入，证明结构、质量与重放阶段身份一致；"
+                "再提供带来源证据和明确时区的历史决策记录，冻结三类时间语义、"
+                "稳定业务键与到达可见性合同"
+                if identity_drift else
+                "提供带来源证据和明确时区的历史决策记录，冻结三类时间语义、稳定业务键与到达可见性合同"
+            ),
+        }
+        if not identity_drift and replay_evidence and asset_id in replay_evidence:
+            try:
+                row.update(_evaluate_qualified_evidence(quality, replay_evidence[asset_id]))
+            except ValueError as error:
+                row["第一门状态"] = "无法判定（重放证据未通过合同校验）"
+                row["依据"] = f"重放证据合同校验失败：{error}"
+                row["解除条件"] = "修复重放证据合同并创建新验证批次"
+        rows.append({key: str(value) for key, value in row.items()})
     return rows
 
 
@@ -377,17 +497,51 @@ def _scope_contains(scope: str, symbol: str) -> bool:
     return symbol in tokens
 
 
+def summarize_formal_conclusion(rows: Sequence[Mapping[str, str]]) -> str:
+    conclusions = {row.get("重放结论", "") for row in rows}
+    allowed_order = ("拒绝", "无法判定", "通过")
+    if not conclusions or not conclusions.issubset(set(allowed_order)):
+        raise ValueError("正式重放结论集合非法")
+    return "与".join(value for value in allowed_order if value in conclusions)
+
+
 def render_report(rows: Sequence[Mapping[str, str]], metadata: Mapping[str, str]) -> str:
     symbol_counts = {
         symbol: sum(_scope_contains(row.get("候选标的范围", ""), symbol) for row in rows)
         for symbol in ("BTC", "ETH", "SOL")
     }
-    conclusions = {
-        symbol: "无法判定（缺少已证明的历史决策时点与到达可见性合同）"
-        for symbol in ("BTC", "ETH", "SOL")
-    }
+    conclusions = {}
+    for symbol in ("BTC", "ETH", "SOL"):
+        symbol_rows = [
+            row for row in rows
+            if _scope_contains(row.get("候选标的范围", ""), symbol)
+        ]
+        symbol_statuses = {row.get("重放结论") for row in symbol_rows}
+        if "拒绝" in symbol_statuses:
+            conclusions[symbol] = "拒绝（候选验证单元存在输入或重放拒绝）"
+        elif symbol_rows and symbol_statuses == {"通过"}:
+            conclusions[symbol] = "通过（全部候选验证单元通过双门重放）"
+        elif "通过" in symbol_statuses:
+            conclusions[symbol] = "无法判定（仅部分候选验证单元通过，其余证据不足）"
+        else:
+            conclusions[symbol] = "无法判定（缺少已证明的历史决策时点与到达可见性合同）"
+    rejected_count = sum(row.get("重放结论") == "拒绝" for row in rows)
+    unavailable_count = sum(row.get("重放结论") == "无法判定" for row in rows)
+    passed_count = sum(row.get("重放结论") == "通过" for row in rows)
+    evidence_statement = (
+        "通过单元仅处理已冻结的重放证据，正式产物不保存原始业务记录。"
+        if passed_count else
+        "没有读取无资格业务正文，也没有生成虚假决策时点或快照。"
+    )
+    first_limitation = (
+        "1. 通过仅对对应决策时点、合同版本和冻结身份有效，不得外推。"
+        if passed_count else
+        "1. 当前只能证明验证器能失败安全地阻断无证据输入，不能证明任一历史交易决策可重放。"
+    )
     lines = [
         "# 历史现场重放验证",
+        "",
+        "<!-- markdownlint-disable MD013 -->",
         "",
         "> 宁可停止或无法判定，也不得让未来数据进入历史决策现场。",
         "",
@@ -403,9 +557,8 @@ def render_report(rows: Sequence[Mapping[str, str]], metadata: Mapping[str, str]
         "## 总体结论",
         "",
         "冻结输入的资产编号、审计批次、规则指纹与清单指纹一致。"
-        "但全部验证单元都缺少带来源证据的真实决策记录，且任务-000004未证明"
-        "到达时间语义。因此第一门全部保守终止，正式结论均为“无法判定”，"
-        "没有读取业务正文，也没有生成虚假决策时点或快照。",
+        f"统一双门评估结果：第二门通过：{passed_count} 个；输入或重放拒绝：{rejected_count} 个；"
+        f"证据不足无法判定：{unavailable_count} 个。{evidence_statement}",
         "",
         "## 标的独立结论",
         "",
@@ -427,10 +580,11 @@ def render_report(rows: Sequence[Mapping[str, str]], metadata: Mapping[str, str]
         "",
         "## 限制与解除条件",
         "",
-        "1. 当前只能证明验证器能失败安全地阻断无证据输入，不能证明任一历史交易决策可重放。",
-        "2. 需要提供带来源证据、唯一记录编号和明确时区的历史决策时点。",
-        "3. 需要版本化冻结事件、到达和采集时间语义，以及业务键、排序和去重合同。",
-        "4. 本结果不得提升研究准入、模型状态或交易许可，不涉及真实资金。",
+        first_limitation,
+        "2. 输入漂移单元必须在新审计批次重新冻结，证明结构、质量与重放阶段身份一致。",
+        "3. 需要提供带来源证据、唯一记录编号和明确时区的历史决策时点。",
+        "4. 需要版本化冻结事件、到达和采集时间语义，以及业务键、排序和去重合同。",
+        "5. 本结果不得提升研究准入、模型状态或交易许可，不涉及真实资金。",
         "",
     ])
     return "\n".join(lines)
@@ -452,6 +606,19 @@ def _validate_output_path(path: Path) -> None:
         raise ValueError("输出目录不得为符号链接")
 
 
+def validate_output_separation(
+    output_path: Path,
+    report_path: Path,
+    protected_inputs: Sequence[Path],
+) -> None:
+    outputs = {Path(output_path).resolve(), Path(report_path).resolve()}
+    if len(outputs) != 2:
+        raise ValueError("output_paths_overlap")
+    protected = {Path(path).resolve() for path in protected_inputs}
+    if outputs & protected:
+        raise ValueError("protected_input_path_overlap")
+
+
 def publish_outputs(
     output_path: Path,
     report_path: Path,
@@ -468,7 +635,10 @@ def publish_outputs(
         raise ValueError("历史重放产物扩展名与合同不一致")
     if output_path.resolve() == report_path.resolve():
         raise ValueError("CSV与Markdown输出路径不得相同")
-    _assert_no_sensitive_content(_canonical_json(list(rows)))
+    serialized_rows = _canonical_json(list(rows))
+    if "smoke-only" in serialized_rows:
+        raise ValueError("smoke_only_formal_output_rejected")
+    _assert_no_sensitive_content(serialized_rows)
     csv_buffer = io.StringIO(newline="")
     write_csv_stream(csv_buffer, rows)
     csv_text = csv_buffer.getvalue()
@@ -570,6 +740,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         if quality_path.parent.name != "审计" or quality_path.parent.parent.name != "artifacts":
             raise ValueError("非标准仓库路径必须显式提供数据质量审计报告")
         audit_report = quality_path.parents[2] / "docs" / "审计" / "数据质量审计报告.md"
+    validate_output_separation(
+        arguments.output,
+        arguments.report,
+        (
+            arguments.inventory,
+            arguments.quality,
+            arguments.quality.with_name("数据断档结果.csv"),
+            arguments.quality.with_name("数据异常结果.csv"),
+            audit_report,
+        ),
+    )
     frozen = load_and_freeze_inputs(arguments.inventory, arguments.quality, audit_report)
     remote = run_remote_preflight(arguments.ssh_target, arguments.timeout)
     batch = arguments.batch or _default_batch()
@@ -587,7 +768,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(
         _canonical_json({
             "status": "ok", "batch": batch, "covered_units": len(rows),
-            "formal_conclusion": "无法判定", "remote_preflight": "passed",
+            "formal_conclusion": summarize_formal_conclusion(rows),
+            "remote_preflight": "passed",
         })
     )
     return 0

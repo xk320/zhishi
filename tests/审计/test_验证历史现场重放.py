@@ -257,6 +257,42 @@ class ReplayEngineTests(unittest.TestCase):
                 "2026-07-28T08:00:00Z", "arrival", ["id"]
             )
 
+    def test_第二门编排连续重放两次并拒绝未来到达(self):
+        records = [
+            {"id": "visible", "arrival": "2026-07-28T08:00:00+08:00", "fixture": "smoke-only"},
+            {"id": "future", "arrival": "2026-07-28T08:00:01+08:00", "fixture": "smoke-only"},
+        ]
+        with mock.patch.object(
+            self.replay,
+            "replay_visible_records",
+            wraps=self.replay.replay_visible_records,
+        ) as replay_call:
+            result = self.replay.execute_second_gate(
+                records, "2026-07-28T08:00:00+08:00", "arrival", ["id"]
+            )
+
+        self.assertEqual(2, replay_call.call_count)
+        self.assertEqual("通过", result["确定性状态"])
+        self.assertEqual("通过（future_arrival_rejected）", result["未来数据拒绝状态"])
+        self.assertEqual("通过", result["重放结论"])
+        self.assertEqual(result["首次快照指纹"], result["再次快照指纹"])
+
+    def test_第二门连续重放指纹不同时必须拒绝(self):
+        first = {
+            "visible_count": 1, "rejected_count": 1,
+            "future_rejection_code": "future_arrival_rejected",
+            "snapshot_json": "[]", "snapshot_fingerprint": "a" * 64,
+        }
+        second = {**first, "snapshot_fingerprint": "b" * 64}
+        with mock.patch.object(
+            self.replay, "replay_visible_records", side_effect=[first, second]
+        ):
+            result = self.replay.execute_second_gate(
+                [], "2026-07-28T08:00:00+08:00", "arrival", ["id"]
+            )
+        self.assertEqual("拒绝（连续重放快照不一致）", result["确定性状态"])
+        self.assertEqual("拒绝", result["重放结论"])
+
 
 @unittest.skipUnless(MODULE_PATH.exists(), "等待历史重放实现")
 class OutputTests(unittest.TestCase):
@@ -279,6 +315,77 @@ class OutputTests(unittest.TestCase):
         self.assertIn("完整扫描不等于可见性合同", rows[0]["依据"])
         self.assertIn("仅元数据", rows[1]["依据"])
 
+    def test_任务000004已确认的输入漂移必须拒绝(self):
+        with tempfile.TemporaryDirectory() as directory:
+            inventory, quality = make_inputs(Path(directory))
+            frozen = self.replay.load_and_freeze_inputs(inventory, quality)
+            frozen["质量记录"]["DS-000001"]["扫描状态"] = "输入漂移"
+            frozen["质量记录"]["DS-000001"]["扫描完整性"] = "未执行"
+            rows = self.replay.build_formal_coverage(frozen, "replay-fixed")
+
+        drift = rows[0]
+        self.assertEqual("拒绝（任务-000004已确认输入漂移）", drift["输入身份状态"])
+        self.assertEqual("拒绝（输入身份漂移）", drift["第一门状态"])
+        self.assertEqual("拒绝", drift["重放结论"])
+        self.assertIn("输入漂移", drift["依据"])
+        self.assertEqual("无法判定", drift["可见记录数"])
+        self.assertIn("重新冻结", drift["解除条件"])
+        self.assertIn("身份一致", drift["解除条件"])
+        self.assertEqual("拒绝与无法判定", self.replay.summarize_formal_conclusion(rows))
+
+        report = self.replay.render_report(
+            rows,
+            {"验证批次": "replay-fixed", "清单指纹": "a" * 64,
+             "质量审计批次": "audit-fixed", "远端预检": "通过"},
+        )
+        self.assertIn("输入或重放拒绝：1 个", report)
+        self.assertIn("证据不足无法判定：2 个", report)
+
+    def test_统一正式单元评估路径可进入第二门(self):
+        with tempfile.TemporaryDirectory() as directory:
+            inventory, quality = make_inputs(Path(directory))
+            frozen = self.replay.load_and_freeze_inputs(inventory, quality)
+            evidence = {
+                "DS-000001": {
+                    "证据类型": "smoke-only",
+                    "合同版本": "fixture-v1",
+                    "来源证据": "smoke-only fixed fixture",
+                    "决策记录编号": "DEC-SMOKE-001",
+                    "决策时间": "2026-07-28T08:00:00+08:00",
+                    "事件时间字段": "event",
+                    "到达时间字段": "arrival",
+                    "采集时间字段": "collection",
+                    "三类时间合同状态": "已证明",
+                    "业务键": ["id"],
+                    "记录": [
+                        {"id": "visible", "event": "2026-07-28T07:00:00+08:00",
+                         "arrival": "2026-07-28T08:00:00+08:00",
+                         "collection": "2026-07-28T07:30:00+08:00", "fixture": "smoke-only"},
+                        {"id": "future", "event": "2026-07-28T07:00:00+08:00",
+                         "arrival": "2026-07-28T08:00:01+08:00",
+                         "collection": "2026-07-28T07:30:00+08:00", "fixture": "smoke-only"},
+                    ],
+                }
+            }
+            rows = self.replay.build_formal_coverage(
+                frozen, "replay-fixed", replay_evidence=evidence
+            )
+
+        qualified = rows[0]
+        self.assertEqual("通过", qualified["第一门状态"])
+        self.assertEqual("1", qualified["可见记录数"])
+        self.assertEqual("通过", qualified["确定性状态"])
+        self.assertEqual("通过（future_arrival_rejected）", qualified["未来数据拒绝状态"])
+        self.assertEqual("通过", qualified["重放结论"])
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "smoke_only_formal_output_rejected"):
+                self.replay.publish_outputs(
+                    Path(directory) / "result.csv",
+                    Path(directory) / "report.md",
+                    rows,
+                    "safe report",
+                )
+
     def test_报告独立统计BTC_ETH_SOL且不外推(self):
         rows = [
             {"资产编号": "DS-000001", "候选标的范围": "BTC", "重放结论": "无法判定"},
@@ -294,6 +401,25 @@ class OutputTests(unittest.TestCase):
         self.assertIn("| SOL | 0 |", report)
         self.assertIn("不得外推", report)
         self.assertIn("smoke-only", report)
+        self.assertIn("<!-- markdownlint-disable MD013 -->", report)
+
+    def test_报告正确呈现通过拒绝与无法判定分支(self):
+        rows = [
+            {"资产编号": "DS-000001", "候选标的范围": "BTC", "重放结论": "通过"},
+            {"资产编号": "DS-000002", "候选标的范围": "ETH", "重放结论": "无法判定"},
+            {"资产编号": "DS-000003", "候选标的范围": "SOL", "重放结论": "拒绝"},
+        ]
+        report = self.replay.render_report(
+            rows,
+            {"验证批次": "replay-fixed", "清单指纹": "a" * 64,
+             "质量审计批次": "audit-fixed", "远端预检": "通过"},
+        )
+        self.assertIn("第二门通过：1 个", report)
+        self.assertIn("输入或重放拒绝：1 个", report)
+        self.assertIn("证据不足无法判定：1 个", report)
+        self.assertIn("| BTC | 1 | 通过（全部候选验证单元通过双门重放） |", report)
+        self.assertIn("| ETH | 1 | 无法判定", report)
+        self.assertIn("| SOL | 1 | 拒绝", report)
 
     def test_固定列公式防护与敏感发布失败保留旧版(self):
         row = {column: "无法判定" for column in self.replay.RESULT_COLUMNS}
@@ -314,6 +440,12 @@ class OutputTests(unittest.TestCase):
                 self.replay.publish_outputs(
                     csv_path, report_path, [row], "password=do-not-write"
                 )
+            self.assertEqual("old-csv", csv_path.read_text(encoding="utf-8"))
+            self.assertEqual("old-report", report_path.read_text(encoding="utf-8"))
+
+            row["依据"] = "token=do-not-redact-and-publish"
+            with self.assertRaisesRegex(ValueError, "sensitive_content_detected"):
+                self.replay.publish_outputs(csv_path, report_path, [row], "safe report")
             self.assertEqual("old-csv", csv_path.read_text(encoding="utf-8"))
             self.assertEqual("old-report", report_path.read_text(encoding="utf-8"))
 
@@ -338,11 +470,28 @@ class OutputTests(unittest.TestCase):
             self.assertEqual("old-csv", csv_path.read_text(encoding="utf-8"))
             self.assertEqual("old-report", report_path.read_text(encoding="utf-8"))
 
-            row["依据"] = "token=do-not-redact-and-publish"
-            with self.assertRaisesRegex(ValueError, "sensitive_content_detected"):
-                self.replay.publish_outputs(csv_path, report_path, [row], "safe report")
-            self.assertEqual("old-csv", csv_path.read_text(encoding="utf-8"))
-            self.assertEqual("old-report", report_path.read_text(encoding="utf-8"))
+    def test_输出路径不得覆盖任务000003或000004输入(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            protected = [
+                root / "数据源清单.csv",
+                root / "数据质量结果.csv",
+                root / "数据断档结果.csv",
+                root / "数据异常结果.csv",
+                root / "数据质量审计报告.md",
+            ]
+            for path in protected:
+                path.write_text("protected", encoding="utf-8")
+
+            for target in protected:
+                with self.subTest(target=target), self.assertRaisesRegex(
+                    ValueError, "protected_input_path"
+                ):
+                    self.replay.validate_output_separation(
+                        target if target.suffix == ".csv" else root / "result.csv",
+                        target if target.suffix == ".md" else root / "report.md",
+                        protected,
+                    )
 
     def test_cli只读生成同一批次两份产物(self):
         with tempfile.TemporaryDirectory() as directory:
