@@ -16,10 +16,24 @@ import sys
 import tempfile
 import textwrap
 from pathlib import Path
+from types import MappingProxyType
 from typing import Iterable, Mapping, Sequence, TextIO
 
 
 REPLAY_VERSION = "historical-replay-1.0"
+REPLAY_SNAPSHOT_CONTRACT_VERSION = "replay-snapshot-contract-1.0"
+UNREPLAYABLE_REMEDIATIONS = {
+    "input_identity_drift": "修复建议：创建新审计批次并重新冻结输入身份。",
+    "input_scan_incomplete": "修复建议：在不修改原始数据的前提下完成全量只读扫描。",
+    "decision_record_missing": "修复建议：提供带来源证据、唯一编号和时区的历史决策记录。",
+    "snapshot_contract_incomplete": "修复建议：补全快照逻辑身份、历史时间、决策时间及不可变引用。",
+    "data_version_missing": "修复建议：冻结确切输入数据版本，禁止latest、current或空值。",
+    "data_hash_missing": "修复建议：提供按业务键稳定排序的完整输入规范JSON SHA-256。",
+    "data_hash_mismatch": "修复建议：停止重放，核对输入版本与完整内容后创建新快照。",
+    "input_asset_set_missing": "修复建议：显式冻结非空、去重的输入资产集合。",
+    "available_fields_unproven": "修复建议：分别证明并冻结事件、到达和采集时间字段语义。",
+    "output_hash_mismatch": "修复建议：拒绝当前结果，排查非确定输入、排序或重放逻辑后生成新版本。",
+}
 ALLOWED_SSH_TARGETS = {"ubuntu"}
 SSH_TARGET_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
@@ -54,11 +68,15 @@ ANOMALY_COLUMNS = (
     "审计批次", "规则版本", "规则指纹", "清单指纹", "资产编号", "候选标的范围", "规则编号",
     "异常类型", "异常数量", "异常比例", "严重度", "规则状态", "证据", "处置",
 )
-RESULT_COLUMNS = (
+LEGACY_RESULT_COLUMNS = (
     "验证批次", "清单指纹", "质量审计批次", "资产编号", "候选标的范围", "决策记录编号",
     "决策时间", "事件时间字段", "到达时间字段", "采集时间字段", "可见性合同状态", "输入身份状态",
     "第一门状态", "可见记录数", "首次快照指纹", "再次快照指纹", "确定性状态", "未来数据拒绝状态",
     "重放结论", "依据", "限制", "解除条件",
+)
+RESULT_COLUMNS = LEGACY_RESULT_COLUMNS + (
+    "快照记录编号", "快照合同版本", "快照逻辑标识", "快照版本标识", "输入数据版本",
+    "输入数据哈希", "输入资产集合指纹", "重放结果哈希", "不可重放原因代码", "修复建议",
 )
 
 REMOTE_PREFLIGHT_PROGRAM = textwrap.dedent(
@@ -80,6 +98,161 @@ def _sha256_bytes(value: bytes) -> str:
 
 def _canonical_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _canonical_records(
+    records: Iterable[Mapping[str, object]],
+    business_key_fields: Sequence[str],
+) -> list[dict[str, object]]:
+    """深拷贝并按业务键稳定排序完整记录。"""
+
+    if not business_key_fields or any(not isinstance(field, str) or not field for field in business_key_fields):
+        raise ValueError("business_key_required")
+    if len(set(business_key_fields)) != len(business_key_fields):
+        raise ValueError("business_key_duplicate_field")
+    normalized: list[dict[str, object]] = []
+    seen_keys: set[tuple[str, ...]] = set()
+    for record in records:
+        if not isinstance(record, Mapping):
+            raise ValueError("records_required")
+        if any(field not in record or record[field] in (None, "") for field in business_key_fields):
+            raise ValueError("business_key_missing")
+        try:
+            copied = json.loads(_canonical_json(dict(record)))
+        except (TypeError, ValueError) as error:
+            raise ValueError("record_not_canonical_json") from error
+        if not isinstance(copied, dict):
+            raise ValueError("records_required")
+        business_key = tuple(_canonical_json(copied[field]) for field in business_key_fields)
+        if business_key in seen_keys:
+            raise ValueError("business_key_duplicate")
+        seen_keys.add(business_key)
+        normalized.append(copied)
+    normalized.sort(
+        key=lambda record: (
+            tuple(_canonical_json(record[field]) for field in business_key_fields),
+            _canonical_json(record),
+        )
+    )
+    return normalized
+
+
+def calculate_data_sha256(
+    records: Iterable[Mapping[str, object]],
+    business_key_fields: Sequence[str],
+) -> str:
+    """对按业务键稳定排序的完整输入记录计算SHA-256。"""
+
+    normalized = _canonical_records(records, business_key_fields)
+    return _sha256_bytes(_canonical_json(normalized).encode("utf-8"))
+
+
+def _deep_freeze(value: object) -> object:
+    if isinstance(value, Mapping):
+        return MappingProxyType({str(key): _deep_freeze(item) for key, item in value.items()})
+    if isinstance(value, list) or isinstance(value, tuple):
+        return tuple(_deep_freeze(item) for item in value)
+    return value
+
+
+def _deep_thaw(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {str(key): _deep_thaw(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_deep_thaw(item) for item in value]
+    return value
+
+
+def freeze_replay_snapshot(evidence: Mapping[str, object]) -> Mapping[str, object]:
+    """创建内容寻址、深度不可变的历史重放输入快照。"""
+
+    data_version = evidence.get("输入数据版本")
+    if (
+        not isinstance(data_version, str)
+        or not data_version.strip()
+        or data_version.strip().lower() in {"latest", "current"}
+    ):
+        raise ValueError("data_version_missing")
+    supplied_hash = evidence.get("输入数据哈希")
+    if not isinstance(supplied_hash, str) or not supplied_hash:
+        raise ValueError("data_hash_missing")
+    if not re.fullmatch(r"[0-9a-f]{64}", supplied_hash):
+        raise ValueError("data_hash_missing")
+    assets = evidence.get("输入资产集合")
+    if (
+        not isinstance(assets, (list, tuple))
+        or not assets
+        or not all(isinstance(asset, str) and asset.strip() for asset in assets)
+    ):
+        raise ValueError("input_asset_set_missing")
+    normalized_assets = sorted({asset.strip() for asset in assets})
+    if len(normalized_assets) != len(assets):
+        raise ValueError("input_asset_set_missing")
+
+    keys = evidence.get("业务键")
+    if not isinstance(keys, (list, tuple)):
+        raise ValueError("business_key_required")
+    key_fields = tuple(keys)
+    records = evidence.get("记录")
+    if not isinstance(records, list):
+        raise ValueError("records_required")
+    normalized_records = _canonical_records(records, key_fields)
+    actual_hash = _sha256_bytes(_canonical_json(normalized_records).encode("utf-8"))
+    if actual_hash != supplied_hash:
+        raise ValueError("data_hash_mismatch")
+
+    historical_time = evidence.get("历史时间")
+    decision_time = evidence.get("决策时间")
+    if not isinstance(historical_time, str) or not isinstance(decision_time, str):
+        raise ValueError("snapshot_contract_incomplete")
+    _aware_datetime(historical_time)
+    _aware_datetime(decision_time)
+
+    logical_id = evidence.get("快照逻辑标识")
+    if not isinstance(logical_id, str) or not logical_id.strip():
+        raise ValueError("snapshot_contract_incomplete")
+    event_field = evidence.get("事件时间字段")
+    arrival_field = evidence.get("到达时间字段")
+    collection_field = evidence.get("采集时间字段")
+    if (
+        not all(isinstance(field, str) and field for field in (event_field, arrival_field, collection_field))
+        or len({event_field, arrival_field, collection_field}) != 3
+    ):
+        raise ValueError("available_fields_unproven")
+    field_status = evidence.get("字段冻结状态")
+    required_fields = (event_field, arrival_field, collection_field)
+    if (
+        not isinstance(field_status, Mapping)
+        or any(field_status.get(field) != "已冻结" for field in required_fields)
+    ):
+        raise ValueError("available_fields_unproven")
+    for record in normalized_records:
+        for field in required_fields:
+            if field not in record or record[field] in (None, ""):
+                raise ValueError("available_fields_unproven")
+            _aware_datetime(str(record[field]))
+
+    asset_fingerprint = _sha256_bytes(_canonical_json(normalized_assets).encode("utf-8"))
+    version_content = {
+        "快照合同版本": REPLAY_SNAPSHOT_CONTRACT_VERSION,
+        "快照逻辑标识": logical_id.strip(),
+        "历史时间": historical_time,
+        "决策时间": decision_time,
+        "输入数据版本": data_version.strip(),
+        "输入数据哈希": actual_hash,
+        "输入资产集合": normalized_assets,
+        "输入资产集合指纹": asset_fingerprint,
+        "业务键": list(key_fields),
+        "事件时间字段": event_field,
+        "到达时间字段": arrival_field,
+        "采集时间字段": collection_field,
+        "字段冻结状态": {field: "已冻结" for field in required_fields},
+        "输入记录": normalized_records,
+    }
+    content_fingerprint = _sha256_bytes(_canonical_json(version_content).encode("utf-8"))
+    version_content["快照版本标识"] = f"sha256:{content_fingerprint}"
+    version_content["快照记录编号"] = f"ZS-历史重放-{content_fingerprint}"
+    return _deep_freeze(version_content)  # type: ignore[return-value]
 
 
 def _redact(value: object) -> str:
@@ -320,12 +493,20 @@ def replay_visible_records(
         )
     )
     snapshot_json = _canonical_json(visible)
+    snapshot_fingerprint = _sha256_bytes(snapshot_json.encode("utf-8"))
+    output_payload = {
+        "visible_count": len(visible),
+        "rejected_count": rejected,
+        "future_rejection_code": "future_arrival_rejected" if rejected else "no_future_arrival",
+        "snapshot_fingerprint": snapshot_fingerprint,
+    }
     return {
         "visible_count": len(visible),
         "rejected_count": rejected,
         "future_rejection_code": "future_arrival_rejected" if rejected else "no_future_arrival",
         "snapshot_json": snapshot_json,
-        "snapshot_fingerprint": _sha256_bytes(snapshot_json.encode("utf-8")),
+        "snapshot_fingerprint": snapshot_fingerprint,
+        "output_fingerprint": _sha256_bytes(_canonical_json(output_payload).encode("utf-8")),
     }
 
 
@@ -344,12 +525,19 @@ def execute_second_gate(
     )
     deterministic = (
         first["visible_count"] == second["visible_count"]
-        and first["snapshot_fingerprint"] == second["snapshot_fingerprint"]
+        and first.get("output_fingerprint", first["snapshot_fingerprint"])
+        == second.get("output_fingerprint", second["snapshot_fingerprint"])
     )
     future_rejected = (
         first["future_rejection_code"] == "future_arrival_rejected"
         and second["future_rejection_code"] == "future_arrival_rejected"
     )
+    result_hash = _sha256_bytes(_canonical_json({
+        "visible_count": first["visible_count"],
+        "rejected_count": first["rejected_count"],
+        "future_rejection_code": first["future_rejection_code"],
+        "output_fingerprint": first.get("output_fingerprint", first["snapshot_fingerprint"]),
+    }).encode("utf-8"))
     return {
         "可见记录数": first["visible_count"],
         "首次快照指纹": first["snapshot_fingerprint"],
@@ -360,7 +548,31 @@ def execute_second_gate(
             else "未触发（无未来到达记录）"
         ),
         "重放结论": "通过" if deterministic else "拒绝",
+        "重放结果哈希": result_hash if deterministic else "无法判定（output_hash_mismatch）",
+        "不可重放原因代码": "无" if deterministic else "output_hash_mismatch",
+        "修复建议": "无需修复" if deterministic else UNREPLAYABLE_REMEDIATIONS["output_hash_mismatch"],
     }
+
+
+def execute_snapshot_replay(snapshot: Mapping[str, object]) -> dict[str, object]:
+    """仅从已冻结快照连续执行两次重放。"""
+
+    if snapshot.get("快照合同版本") != REPLAY_SNAPSHOT_CONTRACT_VERSION:
+        raise ValueError("snapshot_contract_incomplete")
+    records = _deep_thaw(snapshot.get("输入记录"))
+    keys = _deep_thaw(snapshot.get("业务键"))
+    if not isinstance(records, list) or not isinstance(keys, list):
+        raise ValueError("snapshot_contract_incomplete")
+    if calculate_data_sha256(records, keys) != snapshot.get("输入数据哈希"):
+        raise ValueError("data_hash_mismatch")
+    result = execute_second_gate(
+        records,
+        str(snapshot.get("决策时间", "")),
+        str(snapshot.get("到达时间字段", "")),
+        keys,
+    )
+    result["快照版本标识"] = snapshot["快照版本标识"]
+    return result
 
 
 def _evaluate_qualified_evidence(
@@ -369,44 +581,22 @@ def _evaluate_qualified_evidence(
 ) -> dict[str, object]:
     if quality["扫描完整性"] != "完整":
         raise ValueError("complete_scan_required")
-    required_text = (
-        "证据类型", "合同版本", "来源证据", "决策记录编号", "决策时间",
-        "事件时间字段", "到达时间字段", "采集时间字段", "三类时间合同状态",
-    )
+    required_text = ("证据类型", "合同版本", "来源证据", "决策记录编号")
     if any(not isinstance(evidence.get(field), str) or not evidence[field] for field in required_text):
-        raise ValueError("replay_evidence_incomplete")
-    if evidence["三类时间合同状态"] != "已证明":
-        raise ValueError("time_contract_not_proven")
-    _aware_datetime(str(evidence["决策时间"]))
-    keys = evidence.get("业务键")
-    records = evidence.get("记录")
-    if not isinstance(keys, list) or not all(isinstance(key, str) and key for key in keys):
-        raise ValueError("business_key_required")
-    if not isinstance(records, list) or not all(isinstance(record, dict) for record in records):
-        raise ValueError("records_required")
-    event_field = str(evidence["事件时间字段"])
-    arrival_field = str(evidence["到达时间字段"])
-    collection_field = str(evidence["采集时间字段"])
-    if len({event_field, arrival_field, collection_field}) != 3:
-        raise ValueError("three_time_fields_must_be_distinct")
-    for record in records:
-        for field in (event_field, arrival_field, collection_field):
-            if field not in record:
-                raise ValueError("three_time_fields_missing")
-            _aware_datetime(str(record[field]))
-    second_gate = execute_second_gate(
-        records,
-        str(evidence["决策时间"]),
-        arrival_field,
-        keys,
-    )
+        raise ValueError("decision_record_missing")
+    if "三类时间合同状态" not in evidence:
+        raise ValueError("snapshot_contract_incomplete")
+    if evidence.get("三类时间合同状态") != "已证明":
+        raise ValueError("available_fields_unproven")
+    snapshot = freeze_replay_snapshot(evidence)
+    second_gate = execute_snapshot_replay(snapshot)
     evidence_fingerprint = _sha256_bytes(_canonical_json(evidence).encode("utf-8"))
     result: dict[str, object] = {
         "决策记录编号": evidence["决策记录编号"],
-        "决策时间": evidence["决策时间"],
-        "事件时间字段": event_field,
-        "到达时间字段": arrival_field,
-        "采集时间字段": collection_field,
+        "决策时间": snapshot["决策时间"],
+        "事件时间字段": snapshot["事件时间字段"],
+        "到达时间字段": snapshot["到达时间字段"],
+        "采集时间字段": snapshot["采集时间字段"],
         "可见性合同状态": f"通过（{evidence['合同版本']}）",
         "输入身份状态": "一致（冻结清单、质量证据与重放证据）",
         "第一门状态": "通过",
@@ -417,9 +607,34 @@ def _evaluate_qualified_evidence(
             else "仅对冻结决策时点、证据版本和资产身份有效"
         ),
         "解除条件": "无需（本验证单元已执行双门重放）",
+        "快照记录编号": snapshot["快照记录编号"],
+        "快照合同版本": snapshot["快照合同版本"],
+        "快照逻辑标识": snapshot["快照逻辑标识"],
+        "快照版本标识": snapshot["快照版本标识"],
+        "输入数据版本": snapshot["输入数据版本"],
+        "输入数据哈希": snapshot["输入数据哈希"],
+        "输入资产集合指纹": snapshot["输入资产集合指纹"],
     }
     result.update(second_gate)
     return result
+
+
+def _unavailable_snapshot_fields(reason_code: str) -> dict[str, str]:
+    if reason_code not in UNREPLAYABLE_REMEDIATIONS:
+        reason_code = "snapshot_contract_incomplete"
+    unavailable = f"无法判定（{reason_code}）"
+    return {
+        "快照记录编号": unavailable,
+        "快照合同版本": REPLAY_SNAPSHOT_CONTRACT_VERSION,
+        "快照逻辑标识": unavailable,
+        "快照版本标识": unavailable,
+        "输入数据版本": unavailable,
+        "输入数据哈希": unavailable,
+        "输入资产集合指纹": unavailable,
+        "重放结果哈希": unavailable,
+        "不可重放原因代码": reason_code,
+        "修复建议": UNREPLAYABLE_REMEDIATIONS[reason_code],
+    }
 
 
 def build_formal_coverage(
@@ -435,6 +650,11 @@ def build_formal_coverage(
         quality = quality_index[asset_id]
         completeness = quality["扫描完整性"]
         identity_drift = quality["扫描状态"] == "输入漂移"
+        reason_code = (
+            "input_identity_drift" if identity_drift
+            else "input_scan_incomplete" if completeness != "完整"
+            else "decision_record_missing"
+        )
         if identity_drift:
             scan_basis = "任务-000004已确认结构阶段与质量阶段之间输入漂移，禁止进入重放"
         elif completeness == "完整":
@@ -481,13 +701,23 @@ def build_formal_coverage(
                 "提供带来源证据和明确时区的历史决策记录，冻结三类时间语义、稳定业务键与到达可见性合同"
             ),
         }
+        row.update(_unavailable_snapshot_fields(reason_code))
         if not identity_drift and replay_evidence and asset_id in replay_evidence:
             try:
                 row.update(_evaluate_qualified_evidence(quality, replay_evidence[asset_id]))
             except ValueError as error:
-                row["第一门状态"] = "无法判定（重放证据未通过合同校验）"
-                row["依据"] = f"重放证据合同校验失败：{error}"
+                failure_code = str(error)
+                if failure_code not in UNREPLAYABLE_REMEDIATIONS:
+                    failure_code = "snapshot_contract_incomplete"
+                rejected = failure_code in {"data_hash_mismatch", "output_hash_mismatch"}
+                row["第一门状态"] = (
+                    "拒绝（重放证据未通过合同校验）" if rejected
+                    else "无法判定（重放证据未通过合同校验）"
+                )
+                row["重放结论"] = "拒绝" if rejected else "无法判定"
+                row["依据"] = f"重放证据合同校验失败：{failure_code}"
                 row["解除条件"] = "修复重放证据合同并创建新验证批次"
+                row.update(_unavailable_snapshot_fields(failure_code))
         rows.append({key: str(value) for key, value in row.items()})
     return rows
 
@@ -528,6 +758,11 @@ def render_report(rows: Sequence[Mapping[str, str]], metadata: Mapping[str, str]
     rejected_count = sum(row.get("重放结论") == "拒绝" for row in rows)
     unavailable_count = sum(row.get("重放结论") == "无法判定" for row in rows)
     passed_count = sum(row.get("重放结论") == "通过" for row in rows)
+    reason_counts: dict[str, int] = {}
+    for row in rows:
+        reason = row.get("不可重放原因代码", "")
+        if reason and reason != "无":
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
     evidence_statement = (
         "通过单元仅处理已冻结的重放证据，正式产物不保存原始业务记录。"
         if passed_count else
@@ -548,6 +783,7 @@ def render_report(rows: Sequence[Mapping[str, str]], metadata: Mapping[str, str]
         "## 验证身份",
         "",
         f"- 验证器版本：`{REPLAY_VERSION}`",
+        f"- 快照合同版本：`{REPLAY_SNAPSHOT_CONTRACT_VERSION}`",
         f"- 验证批次：`{_redact(metadata['验证批次'])}`",
         f"- 质量审计批次：`{_redact(metadata['质量审计批次'])}`",
         f"- 清单指纹：`{_redact(metadata['清单指纹'])}`",
@@ -571,6 +807,21 @@ def render_report(rows: Sequence[Mapping[str, str]], metadata: Mapping[str, str]
         "",
         "“未限定”或其他标的的证据不得外推给 BTC、ETH 或 SOL；BTC 和 ETH 的结果也不得外推给 SOL。",
         "",
+        "## 快照与版本合同",
+        "",
+        f"- 合同版本：`{REPLAY_SNAPSHOT_CONTRACT_VERSION}`。",
+        "- 数据哈希：将完整输入记录按已冻结业务键稳定排序，序列化为 UTF-8 规范JSON，计算 SHA-256。",
+        "- 资产集合指纹：对排序、去重后的输入资产集合规范JSON计算 SHA-256。",
+        "- 重放结果哈希：对可见数量、未来拒绝状态和输出指纹计算独立 SHA-256。",
+        "- 与知识版本合同一致：逻辑标识稳定，内容变化生成内容寻址的不可变版本标识，下游不得仅引用“最新版本”。",
+        "",
+        "## 不可重放原因分布",
+        "",
+        (
+            "、".join(f"`{code}`：{reason_counts[code]}" for code in sorted(reason_counts))
+            if reason_counts else "未提供原因分类记录。"
+        ),
+        "",
         "## 验证器机制证据",
         "",
         "- 带时区的决策时间和到达时间才能进入比较。",
@@ -591,7 +842,9 @@ def render_report(rows: Sequence[Mapping[str, str]], metadata: Mapping[str, str]
 
 
 def write_csv_stream(handle: TextIO, rows: Sequence[Mapping[str, str]]) -> None:
-    writer = csv.DictWriter(handle, fieldnames=RESULT_COLUMNS, extrasaction="raise")
+    writer = csv.DictWriter(
+        handle, fieldnames=RESULT_COLUMNS, extrasaction="raise", lineterminator="\n"
+    )
     writer.writeheader()
     for row in sorted(rows, key=lambda item: (item["资产编号"], item["决策记录编号"])):
         if set(row) != set(RESULT_COLUMNS):

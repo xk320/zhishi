@@ -119,6 +119,38 @@ def make_inputs(root: Path, count: int = 3) -> tuple[Path, Path]:
     return inventory, quality
 
 
+def make_snapshot_evidence(replay: ModuleType) -> dict[str, object]:
+    records = [
+        {"id": "visible", "event": "2026-07-28T07:00:00+08:00",
+         "arrival": "2026-07-28T08:00:00+08:00",
+         "collection": "2026-07-28T07:30:00+08:00", "fixture": "smoke-only"},
+        {"id": "future", "event": "2026-07-28T07:00:00+08:00",
+         "arrival": "2026-07-28T08:00:01+08:00",
+         "collection": "2026-07-28T07:30:00+08:00", "fixture": "smoke-only"},
+    ]
+    return {
+        "证据类型": "smoke-only",
+        "合同版本": "fixture-v1",
+        "来源证据": "smoke-only fixed fixture",
+        "决策记录编号": "DEC-SMOKE-001",
+        "快照逻辑标识": "ZS-数据快照-SMOKE-001",
+        "历史时间": "2026-07-28T08:00:00+08:00",
+        "决策时间": "2026-07-28T08:00:00+08:00",
+        "输入数据版本": "smoke-data-v1",
+        "输入数据哈希": replay.calculate_data_sha256(records, ["id"]),
+        "输入资产集合": ["BTC"],
+        "事件时间字段": "event",
+        "到达时间字段": "arrival",
+        "采集时间字段": "collection",
+        "字段冻结状态": {
+            "event": "已冻结", "arrival": "已冻结", "collection": "已冻结",
+        },
+        "三类时间合同状态": "已证明",
+        "业务键": ["id"],
+        "记录": records,
+    }
+
+
 @unittest.skipUnless(MODULE_PATH.exists(), "等待历史重放实现")
 class ContractTests(unittest.TestCase):
     @classmethod
@@ -205,6 +237,85 @@ class ContractTests(unittest.TestCase):
 
 
 @unittest.skipUnless(MODULE_PATH.exists(), "等待历史重放实现")
+class SnapshotContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.replay = load_module()
+
+    def test_快照合同缺版本哈希资产集合或字段状态失败(self):
+        evidence = make_snapshot_evidence(self.replay)
+        cases = (
+            ("输入数据版本", "", "data_version_missing"),
+            ("输入数据版本", "latest", "data_version_missing"),
+            ("输入数据哈希", "", "data_hash_missing"),
+            ("输入资产集合", [], "input_asset_set_missing"),
+            ("字段冻结状态", {"event": "已冻结"}, "available_fields_unproven"),
+        )
+        for field, value, code in cases:
+            candidate = dict(evidence)
+            candidate[field] = value
+            with self.subTest(field=field, value=value), self.assertRaisesRegex(ValueError, code):
+                self.replay.freeze_replay_snapshot(candidate)
+
+    def test_数据哈希必须与完整输入规范JSON一致(self):
+        evidence = make_snapshot_evidence(self.replay)
+        evidence["输入数据哈希"] = "f" * 64
+        with self.assertRaisesRegex(ValueError, "data_hash_mismatch"):
+            self.replay.freeze_replay_snapshot(evidence)
+
+    def test_输入顺序不影响内容寻址版本(self):
+        first = make_snapshot_evidence(self.replay)
+        second = make_snapshot_evidence(self.replay)
+        second["记录"] = list(reversed(second["记录"]))
+        second["输入数据哈希"] = self.replay.calculate_data_sha256(
+            second["记录"], second["业务键"]
+        )
+        frozen_first = self.replay.freeze_replay_snapshot(first)
+        frozen_second = self.replay.freeze_replay_snapshot(second)
+        self.assertEqual(frozen_first["输入数据哈希"], frozen_second["输入数据哈希"])
+        self.assertEqual(frozen_first["快照版本标识"], frozen_second["快照版本标识"])
+
+    def test_冻结后原始对象突变不影响快照(self):
+        evidence = make_snapshot_evidence(self.replay)
+        frozen = self.replay.freeze_replay_snapshot(evidence)
+        version = frozen["快照版本标识"]
+        frozen_value = frozen["输入记录"][0]["id"]
+        evidence["记录"][0]["id"] = "mutated"
+        evidence["输入资产集合"].append("ETH")
+        evidence["字段冻结状态"]["event"] = "未冻结"
+        self.assertEqual(version, frozen["快照版本标识"])
+        self.assertEqual(frozen_value, frozen["输入记录"][0]["id"])
+        with self.assertRaises(TypeError):
+            frozen["快照逻辑标识"] = "changed"
+        with self.assertRaises(TypeError):
+            frozen["输入记录"][0]["id"] = "changed"
+
+    def test_快照显式绑定双时点三时间字段和业务键(self):
+        frozen = self.replay.freeze_replay_snapshot(make_snapshot_evidence(self.replay))
+        self.assertEqual("replay-snapshot-contract-1.0", frozen["快照合同版本"])
+        self.assertEqual("2026-07-28T08:00:00+08:00", frozen["历史时间"])
+        self.assertEqual("2026-07-28T08:00:00+08:00", frozen["决策时间"])
+        self.assertEqual(("id",), frozen["业务键"])
+        self.assertEqual(
+            {"event": "已冻结", "arrival": "已冻结", "collection": "已冻结"},
+            dict(frozen["字段冻结状态"]),
+        )
+
+    def test_原因码和中文修复建议覆盖固定合同(self):
+        required = {
+            "input_identity_drift", "input_scan_incomplete", "decision_record_missing",
+            "snapshot_contract_incomplete", "data_version_missing", "data_hash_missing",
+            "data_hash_mismatch", "input_asset_set_missing", "available_fields_unproven",
+            "output_hash_mismatch",
+        }
+        self.assertTrue(required.issubset(self.replay.UNREPLAYABLE_REMEDIATIONS))
+        self.assertTrue(all(
+            self.replay.UNREPLAYABLE_REMEDIATIONS[code].startswith("修复建议：")
+            for code in required
+        ))
+
+
+@unittest.skipUnless(MODULE_PATH.exists(), "等待历史重放实现")
 class ReplayEngineTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -282,8 +393,9 @@ class ReplayEngineTests(unittest.TestCase):
             "visible_count": 1, "rejected_count": 1,
             "future_rejection_code": "future_arrival_rejected",
             "snapshot_json": "[]", "snapshot_fingerprint": "a" * 64,
+            "output_fingerprint": "c" * 64,
         }
-        second = {**first, "snapshot_fingerprint": "b" * 64}
+        second = {**first, "snapshot_fingerprint": "b" * 64, "output_fingerprint": "d" * 64}
         with mock.patch.object(
             self.replay, "replay_visible_records", side_effect=[first, second]
         ):
@@ -292,6 +404,22 @@ class ReplayEngineTests(unittest.TestCase):
             )
         self.assertEqual("拒绝（连续重放快照不一致）", result["确定性状态"])
         self.assertEqual("拒绝", result["重放结论"])
+        self.assertEqual("output_hash_mismatch", result["不可重放原因代码"])
+        self.assertIn("修复", result["修复建议"])
+
+    def test_冻结快照连续重放两次生成独立结果哈希(self):
+        frozen = self.replay.freeze_replay_snapshot(make_snapshot_evidence(self.replay))
+        with mock.patch.object(
+            self.replay,
+            "replay_visible_records",
+            wraps=self.replay.replay_visible_records,
+        ) as replay_call:
+            result = self.replay.execute_snapshot_replay(frozen)
+        self.assertEqual(2, replay_call.call_count)
+        self.assertEqual("通过", result["重放结论"])
+        self.assertEqual(64, len(result["重放结果哈希"]))
+        self.assertEqual("无", result["不可重放原因代码"])
+        self.assertEqual(frozen["快照版本标识"], result["快照版本标识"])
 
 
 @unittest.skipUnless(MODULE_PATH.exists(), "等待历史重放实现")
@@ -345,28 +473,7 @@ class OutputTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             inventory, quality = make_inputs(Path(directory))
             frozen = self.replay.load_and_freeze_inputs(inventory, quality)
-            evidence = {
-                "DS-000001": {
-                    "证据类型": "smoke-only",
-                    "合同版本": "fixture-v1",
-                    "来源证据": "smoke-only fixed fixture",
-                    "决策记录编号": "DEC-SMOKE-001",
-                    "决策时间": "2026-07-28T08:00:00+08:00",
-                    "事件时间字段": "event",
-                    "到达时间字段": "arrival",
-                    "采集时间字段": "collection",
-                    "三类时间合同状态": "已证明",
-                    "业务键": ["id"],
-                    "记录": [
-                        {"id": "visible", "event": "2026-07-28T07:00:00+08:00",
-                         "arrival": "2026-07-28T08:00:00+08:00",
-                         "collection": "2026-07-28T07:30:00+08:00", "fixture": "smoke-only"},
-                        {"id": "future", "event": "2026-07-28T07:00:00+08:00",
-                         "arrival": "2026-07-28T08:00:01+08:00",
-                         "collection": "2026-07-28T07:30:00+08:00", "fixture": "smoke-only"},
-                    ],
-                }
-            }
+            evidence = {"DS-000001": make_snapshot_evidence(self.replay)}
             rows = self.replay.build_formal_coverage(
                 frozen, "replay-fixed", replay_evidence=evidence
             )
@@ -377,6 +484,10 @@ class OutputTests(unittest.TestCase):
         self.assertEqual("通过", qualified["确定性状态"])
         self.assertEqual("通过（future_arrival_rejected）", qualified["未来数据拒绝状态"])
         self.assertEqual("通过", qualified["重放结论"])
+        self.assertEqual("replay-snapshot-contract-1.0", qualified["快照合同版本"])
+        self.assertRegex(qualified["快照记录编号"], r"^ZS-历史重放-[0-9a-f]{64}$")
+        self.assertRegex(qualified["重放结果哈希"], r"^[0-9a-f]{64}$")
+        self.assertEqual("无", qualified["不可重放原因代码"])
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "smoke_only_formal_output_rejected"):
                 self.replay.publish_outputs(
@@ -421,11 +532,75 @@ class OutputTests(unittest.TestCase):
         self.assertIn("| ETH | 1 | 无法判定", report)
         self.assertIn("| SOL | 1 | 拒绝", report)
 
+    def test_正式原因分类和扩展列完整(self):
+        with tempfile.TemporaryDirectory() as directory:
+            inventory, quality = make_inputs(Path(directory))
+            frozen = self.replay.load_and_freeze_inputs(inventory, quality)
+            frozen["质量记录"]["DS-000001"]["扫描状态"] = "输入漂移"
+            frozen["质量记录"]["DS-000001"]["扫描完整性"] = "未执行"
+            frozen["质量记录"]["DS-000003"]["扫描完整性"] = "完整"
+            rows = self.replay.build_formal_coverage(frozen, "replay-fixed")
+
+        self.assertEqual(
+            ["input_identity_drift", "input_scan_incomplete", "decision_record_missing"],
+            [row["不可重放原因代码"] for row in rows],
+        )
+        self.assertTrue(all(row["快照合同版本"] == "replay-snapshot-contract-1.0" for row in rows))
+        self.assertTrue(all(row["修复建议"].startswith("修复建议：") for row in rows))
+        self.assertTrue(all(set(row) == set(self.replay.RESULT_COLUMNS) for row in rows))
+        self.assertEqual(tuple(self.replay.LEGACY_RESULT_COLUMNS), tuple(self.replay.RESULT_COLUMNS[:22]))
+        self.assertEqual(
+            ("快照记录编号", "快照合同版本", "快照逻辑标识", "快照版本标识",
+             "输入数据版本", "输入数据哈希", "输入资产集合指纹", "重放结果哈希",
+             "不可重放原因代码", "修复建议"),
+            tuple(self.replay.RESULT_COLUMNS[22:]),
+        )
+        self.assertFalse(any(value in ("", "0") for row in rows for value in row.values()))
+
+        report = self.replay.render_report(
+            rows,
+            {"验证批次": "replay-fixed", "清单指纹": "a" * 64,
+             "质量审计批次": "audit-fixed", "远端预检": "通过"},
+        )
+        self.assertIn("replay-snapshot-contract-1.0", report)
+        self.assertIn("规范JSON", report)
+        self.assertIn("SHA-256", report)
+        self.assertIn("`input_identity_drift`：1", report)
+        self.assertIn("`input_scan_incomplete`：1", report)
+        self.assertIn("`decision_record_missing`：1", report)
+        self.assertIn("逻辑标识", report)
+        self.assertIn("不可变版本", report)
+
+    def test_正式证据合同不完整时失败安全分类(self):
+        with tempfile.TemporaryDirectory() as directory:
+            inventory, quality = make_inputs(Path(directory))
+            frozen = self.replay.load_and_freeze_inputs(inventory, quality)
+            evidence = make_snapshot_evidence(self.replay)
+            del evidence["三类时间合同状态"]
+            rows = self.replay.build_formal_coverage(
+                frozen, "replay-fixed", replay_evidence={"DS-000001": evidence}
+            )
+        self.assertEqual("无法判定", rows[0]["重放结论"])
+        self.assertEqual("snapshot_contract_incomplete", rows[0]["不可重放原因代码"])
+
+    def test_正式数据哈希漂移时拒绝(self):
+        with tempfile.TemporaryDirectory() as directory:
+            inventory, quality = make_inputs(Path(directory))
+            frozen = self.replay.load_and_freeze_inputs(inventory, quality)
+            evidence = make_snapshot_evidence(self.replay)
+            evidence["输入数据哈希"] = "f" * 64
+            rows = self.replay.build_formal_coverage(
+                frozen, "replay-fixed", replay_evidence={"DS-000001": evidence}
+            )
+        self.assertEqual("拒绝", rows[0]["重放结论"])
+        self.assertEqual("data_hash_mismatch", rows[0]["不可重放原因代码"])
+
     def test_固定列公式防护与敏感发布失败保留旧版(self):
         row = {column: "无法判定" for column in self.replay.RESULT_COLUMNS}
         row.update({"资产编号": "DS-000001", "候选标的范围": "=cmd", "决策记录编号": "无法判定"})
         output = io.StringIO()
         self.replay.write_csv_stream(output, [row])
+        self.assertNotIn("\r\n", output.getvalue())
         output.seek(0)
         parsed = list(csv.DictReader(output))
         self.assertEqual(list(self.replay.RESULT_COLUMNS), list(parsed[0]))
