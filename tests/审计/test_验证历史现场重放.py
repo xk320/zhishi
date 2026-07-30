@@ -367,6 +367,29 @@ class SnapshotContractTests(unittest.TestCase):
         self.assertEqual("ZS-数据快照-知势_01", frozen["快照逻辑标识"])
         self.assertEqual("数据版本-v1.0", frozen["输入数据版本"])
 
+    def test_带命名空间的浮动版本和时间令牌仍必须拒绝(self):
+        invalid_values = (
+            "dataset/current", "dataset:latest", "x-latest", "dataset/LATEST",
+            "data-2026-07-28", "data:2026-07-28T08:00:00Z",
+            "data-1722134400", "data:1722134400000",
+        )
+        for field in ("快照逻辑标识", "输入数据版本"):
+            for value in invalid_values:
+                evidence = make_snapshot_evidence(self.replay)
+                evidence[field] = value
+                with self.subTest(field=field, value=value), self.assertRaisesRegex(
+                    ValueError, "snapshot_contract_incomplete|data_version_missing"
+                ):
+                    self.replay.freeze_replay_snapshot(evidence)
+
+        for valid_value in ("smoke-data-v1", "DS-000001", "知势-数据_v1.0"):
+            evidence = make_snapshot_evidence(self.replay)
+            evidence["输入数据版本"] = valid_value
+            self.assertEqual(
+                valid_value,
+                self.replay.freeze_replay_snapshot(evidence)["输入数据版本"],
+            )
+
     def test_快照版本标识不接受调用方注入(self):
         evidence = make_snapshot_evidence(self.replay)
         evidence["快照版本标识"] = "sha256:" + "f" * 64
@@ -696,6 +719,30 @@ class OutputTests(unittest.TestCase):
             frozen = self.replay.load_and_freeze_inputs(inventory, quality)
             evidence = make_snapshot_evidence(self.replay)
             evidence["输入资产集合"] = ["DS-999999"]
+            rows = self.replay.build_formal_coverage(
+                frozen, "replay-fixed", replay_evidence={"DS-000001": evidence}
+            )
+        self.assertEqual("无法判定", rows[0]["重放结论"])
+        self.assertEqual("input_asset_set_missing", rows[0]["不可重放原因代码"])
+
+    def test_逐资产快照不得混入额外未知资产(self):
+        with tempfile.TemporaryDirectory() as directory:
+            inventory, quality = make_inputs(Path(directory))
+            frozen = self.replay.load_and_freeze_inputs(inventory, quality)
+            evidence = make_snapshot_evidence(self.replay)
+            evidence["输入资产集合"] = ["DS-000001", "DS-999999"]
+            rows = self.replay.build_formal_coverage(
+                frozen, "replay-fixed", replay_evidence={"DS-000001": evidence}
+            )
+        self.assertEqual("无法判定", rows[0]["重放结论"])
+        self.assertEqual("input_asset_set_missing", rows[0]["不可重放原因代码"])
+
+    def test_逐资产快照不得混入已知但扫描不完整资产(self):
+        with tempfile.TemporaryDirectory() as directory:
+            inventory, quality = make_inputs(Path(directory))
+            frozen = self.replay.load_and_freeze_inputs(inventory, quality)
+            evidence = make_snapshot_evidence(self.replay)
+            evidence["输入资产集合"] = ["DS-000001", "DS-000002"]
             rows = self.replay.build_formal_coverage(
                 frozen, "replay-fixed", replay_evidence={"DS-000001": evidence}
             )

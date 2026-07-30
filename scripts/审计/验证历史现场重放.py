@@ -168,6 +168,17 @@ def _deep_thaw(value: object) -> object:
 STABLE_IDENTIFIER_PATTERN = re.compile(
     r"(?=.{1,128}\Z)[A-Za-z0-9\u4e00-\u9fff][A-Za-z0-9\u4e00-\u9fff._:/-]*"
 )
+FLOATING_IDENTIFIER_TOKEN_PATTERN = re.compile(
+    r"(?:^|[._:/-])(?:latest|current)(?=$|[._:/-])", re.IGNORECASE
+)
+ISO_IDENTITY_TOKEN_PATTERN = re.compile(
+    r"(?:^|[._:/-])\d{4}-\d{2}-\d{2}"
+    r"(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)?"
+    r"(?=$|[._:/-])"
+)
+UNIX_IDENTITY_TOKEN_PATTERN = re.compile(
+    r"(?:^|[._:/-])(?:\d{10}|\d{13})(?=$|[._:/-])"
+)
 GENERATED_SNAPSHOT_FIELDS = {
     "快照记录编号", "快照版本标识", "输入资产集合指纹", "输入记录",
 }
@@ -176,11 +187,11 @@ GENERATED_SNAPSHOT_FIELDS = {
 def _validate_stable_identifier(value: object, failure_code: str) -> str:
     if not isinstance(value, str) or value != value.strip() or not value:
         raise ValueError(failure_code)
-    if value.lower() in {"latest", "current"}:
+    if FLOATING_IDENTIFIER_TOKEN_PATTERN.search(value):
         raise ValueError(failure_code)
-    if re.fullmatch(r"\d{10}|\d{13}", value):
+    if UNIX_IDENTITY_TOKEN_PATTERN.search(value):
         raise ValueError(failure_code)
-    if re.match(r"^\d{4}-\d{2}-\d{2}(?:T.*)?$", value):
+    if ISO_IDENTITY_TOKEN_PATTERN.search(value):
         raise ValueError(failure_code)
     if not STABLE_IDENTIFIER_PATTERN.fullmatch(value):
         raise ValueError(failure_code)
@@ -636,7 +647,7 @@ def _evaluate_qualified_evidence(
     if evidence.get("三类时间合同状态") != "已证明":
         raise ValueError("available_fields_unproven")
     snapshot = freeze_replay_snapshot(evidence)
-    if asset_id not in snapshot["输入资产集合"]:
+    if tuple(snapshot["输入资产集合"]) != (asset_id,):
         raise ValueError("input_asset_set_missing")
     second_gate = execute_snapshot_replay(snapshot)
     evidence_fingerprint = _sha256_bytes(_canonical_json(evidence).encode("utf-8"))
@@ -863,6 +874,7 @@ def render_report(rows: Sequence[Mapping[str, str]], metadata: Mapping[str, str]
         f"- 合同版本：`{REPLAY_SNAPSHOT_CONTRACT_VERSION}`。",
         "- 数据哈希：将完整输入记录按已冻结业务键稳定排序，序列化为 UTF-8 规范JSON，计算 SHA-256。",
         "- 资产集合指纹：对排序、去重后的资产身份、输入数据版本与数据哈希规范JSON计算 SHA-256。",
+        "- 逐资产单元的冻结资产集合必须严格等于当前资产编号单元集；混入任何额外资产均不进入第二门。",
         "- 重放前重新规范化全部快照身份，逐项核对资产指纹、内容指纹、版本标识与记录编号。",
         "- 重放结果哈希：对可见数量、未来拒绝状态和输出指纹计算独立 SHA-256。",
         "- 与知识版本合同一致：逻辑标识稳定，内容变化生成内容寻址的不可变版本标识，下游不得仅引用“最新版本”。",
