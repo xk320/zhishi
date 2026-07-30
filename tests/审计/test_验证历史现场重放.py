@@ -653,6 +653,51 @@ class OutputTests(unittest.TestCase):
             self.assertEqual(3, len(rows))
             self.assertTrue(all(row["重放结论"] == "无法判定" for row in rows))
 
+    def test_v1正式证据参数只允许None或内建空字典(self):
+        class FalsyDict(dict):
+            def __bool__(self) -> bool:
+                return False
+
+        class EmptyDictSubclass(dict):
+            pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            inventory, quality = make_inputs(root)
+            frozen = self.replay.load_and_freeze_inputs(inventory, quality)
+            csv_path = root / "result.csv"
+            report_path = root / "report.md"
+            csv_path.write_text("old-csv", encoding="utf-8")
+            report_path.write_text("old-report", encoding="utf-8")
+
+            invalid_values = {
+                "含证据但伪值的字典子类": FalsyDict(
+                    {"DS-000001": make_snapshot_evidence(self.replay)}
+                ),
+                "空列表": [],
+                "空字典子类": EmptyDictSubclass(),
+            }
+            for label, replay_evidence in invalid_values.items():
+                with self.subTest(label=label), self.assertRaisesRegex(
+                    ValueError, "source_provenance_unverified"
+                ):
+                    rows = self.replay.build_formal_coverage(
+                        frozen, "replay-fixed", replay_evidence=replay_evidence
+                    )
+                    self.replay.publish_outputs(csv_path, report_path, rows, "new-report")
+                self.assertEqual("old-csv", csv_path.read_text(encoding="utf-8"))
+                self.assertEqual("old-report", report_path.read_text(encoding="utf-8"))
+
+            for replay_evidence in (None, {}):
+                with self.subTest(valid=repr(replay_evidence)):
+                    rows = self.replay.build_formal_coverage(
+                        frozen, "replay-fixed", replay_evidence=replay_evidence
+                    )
+                    self.assertEqual(3, len(rows))
+                    self.assertTrue(
+                        all(row["重放结论"] == "无法判定" for row in rows)
+                    )
+
     def test_任务000004已确认的输入漂移必须拒绝(self):
         with tempfile.TemporaryDirectory() as directory:
             inventory, quality = make_inputs(Path(directory))
@@ -722,6 +767,7 @@ class OutputTests(unittest.TestCase):
         self.assertIn("| SOL | 0 |", report)
         self.assertIn("不得外推", report)
         self.assertIn("smoke-only", report)
+        self.assertIn("None或精确内建空字典", report)
         self.assertIn("<!-- markdownlint-disable MD013 -->", report)
 
     def test_报告正确呈现通过拒绝与无法判定分支(self):
