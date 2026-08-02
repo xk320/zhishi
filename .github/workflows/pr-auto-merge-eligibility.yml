@@ -2,7 +2,7 @@ name: PR 自动合并资格
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
 
 permissions:
   contents: read
@@ -18,12 +18,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: 检出待评审提交
+      - name: 检出main基线上的可信检查器
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: 获取待评审提交但不执行其中代码
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch --no-tags origin "$BASE_SHA" "$HEAD_SHA"
+          git cat-file -e "${BASE_SHA}^{commit}"
+          git cat-file -e "${HEAD_SHA}^{commit}"
 
       - name: 生成只读评审元数据
         env:
@@ -35,9 +44,7 @@ jobs:
           import os
           from pathlib import Path
 
-          event = json.loads(
-              Path(os.environ["EVENT_PATH"]).read_text(encoding="utf-8")
-          )
+          event = json.loads(Path(os.environ["EVENT_PATH"]).read_text(encoding="utf-8"))
           pull_request = event["pull_request"]
           metadata = {
               "body": pull_request.get("body") or "",
@@ -46,8 +53,7 @@ jobs:
               "head_repository": pull_request["head"]["repo"]["full_name"],
           }
           Path(os.environ["METADATA_PATH"]).write_text(
-              json.dumps(metadata, ensure_ascii=False),
-              encoding="utf-8",
+              json.dumps(metadata, ensure_ascii=False), encoding="utf-8"
           )
           PY
 
@@ -57,21 +63,8 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           METADATA_PATH: ${{ runner.temp }}/pr-auto-merge-metadata.json
         run: |
-          set +e
           python3 scripts/研发中心/验证自动合并资格.py \
             --repo-root . \
             --base-ref "$BASE_SHA" \
             --head-ref "$HEAD_SHA" \
-            --metadata "$METADATA_PATH" \
-            | tee "$RUNNER_TEMP/pr-auto-merge-eligibility.json"
-          status=${PIPESTATUS[0]}
-          set -e
-
-          if [[ "$status" -eq 0 ]]; then
-            echo "自动合并资格：符合"
-          elif [[ "$status" -eq 1 ]]; then
-            echo "自动合并资格：不符合，保留人工合并"
-          else
-            echo "资格检查执行异常，退出码：$status"
-            exit "$status"
-          fi
+            --metadata "$METADATA_PATH"
