@@ -100,10 +100,10 @@ class TaskCenterMappingTests(unittest.TestCase):
     def test_当前任务数量和缺号事实准确(self):
         # 任务-000026或新任务以后合法进入main时，必须与任务中心事实同步调整该基线。
         tasks = task_documents()
-        self.assertEqual(len(tasks), 36)
+        self.assertEqual(len(tasks), 37)
         self.assertNotIn("任务-000026", tasks)
         task_28 = tasks["任务-000028"][2]
-        self.assertIn("36个任务文件", task_28)
+        self.assertIn("PR #38合并时36个任务文件", task_28)
         self.assertNotIn("37个任务文件", task_28)
 
     def test_每个任务在看板中恰好出现一次(self):
@@ -197,9 +197,39 @@ class TaskContractTests(unittest.TestCase):
         for heading in required_headings:
             self.assertIn(f"## {heading}", text, f"任务-000028缺少{heading}")
 
+    def test_任务000038具有完整自动评审合同(self):
+        _, title, text = task_documents()["任务-000038"]
+        self.assertEqual(title, "建立子智能体评审、自动修复与自动合并治理")
+        self.assertEqual(metadata(text, "状态"), "待执行")
+        self.assertEqual(metadata(text, "类型"), "治理")
+        self.assertEqual(metadata(text, "方案状态"), "已批准执行")
+        self.assertIn("最多同时运行两个只读子智能体", text)
+        self.assertIn("最多自动修复三轮", text)
+        self.assertIn("精确头SHA", text)
+        self.assertIn("不再等待人工批准", text)
+        self.assertIn("Node最大堆256 MiB", text)
+
+        for heading in (
+            "依赖与阻塞条件",
+            "背景",
+            "任务目标",
+            "输入合同",
+            "输出合同",
+            "固定执行方案",
+            "默认工程决策",
+            "允许停止条件",
+            "工作范围",
+            "不在范围",
+            "安全边界",
+            "验收标准",
+            "验证命令",
+            "完成定义",
+        ):
+            self.assertIn(f"## {heading}", text, f"任务-000038缺少{heading}")
+
     def test_阶段1修复任务链具有完整批准合同(self):
         expected = {
-            "任务-000029": ("冻结数据来源与资产身份合同", "任务-000028"),
+            "任务-000029": ("冻结数据来源与资产身份合同", "任务-000038"),
             "任务-000030": ("建立三类时间与数据质量合同", "任务-000029"),
             "任务-000031": ("完成不可变输入与全量只读质量审计", "任务-000030"),
             "任务-000032": ("建立可信重放来源与历史决策现场", "任务-000031"),
