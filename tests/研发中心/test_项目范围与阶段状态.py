@@ -180,6 +180,54 @@ class TaskContractTests(unittest.TestCase):
         for heading in required_headings:
             self.assertIn(f"## {heading}", text, f"任务-000028缺少{heading}")
 
+    def test_阶段1修复任务链具有完整批准合同(self):
+        expected = {
+            "任务-000029": ("冻结数据来源与资产身份合同", "任务-000028"),
+            "任务-000030": ("建立三类时间与数据质量合同", "任务-000029"),
+            "任务-000031": ("完成不可变输入与全量只读质量审计", "任务-000030"),
+            "任务-000032": ("建立可信重放来源与历史决策现场", "任务-000031"),
+            "任务-000033": ("建立成本、流动性与执行数据闭环", "任务-000032"),
+            "任务-000034": ("建立BTC与ETH独立数据闭环", "任务-000033"),
+            "任务-000035": ("实施最小数据闭环试点", "任务-000034"),
+            "任务-000036": ("完成容量试采与隔离恢复演练", "任务-000035"),
+            "任务-000037": ("完成阶段1最终审计与阶段2门禁裁决", "任务-000036"),
+        }
+        tasks = task_documents()
+        required_headings = (
+            "依赖与阻塞条件",
+            "背景",
+            "任务目标",
+            "固定执行方案",
+            "默认工程决策",
+            "允许停止条件",
+            "输入合同",
+            "输出合同",
+            "工作范围",
+            "不在范围",
+            "安全边界",
+            "验收标准",
+            "验证命令",
+            "完成定义",
+        )
+
+        for task_id, (expected_title, dependency) in expected.items():
+            self.assertIn(task_id, tasks, f"缺少{task_id}任务文件")
+            _, title, text = tasks[task_id]
+            self.assertEqual(title, expected_title)
+            self.assertEqual(metadata(text, "状态"), "阻塞")
+            self.assertEqual(metadata(text, "方案状态"), "已批准执行")
+            self.assertEqual(
+                metadata(text, "执行授权"),
+                "Codex直接执行，不得再次要求用户选择方案",
+            )
+            self.assertEqual(metadata(text, "并行规则"), "禁止并行；只在前序任务合并后认领")
+            self.assertIn(dependency, text, f"{task_id}未引用唯一前序依赖{dependency}")
+            self.assertIn("BTC", text)
+            self.assertIn("ETH", text)
+            self.assertNotIn("SOL", text)
+            for heading in required_headings:
+                self.assertIn(f"## {heading}", text, f"{task_id}缺少{heading}")
+
     def test_看板当前阶段反映阶段1证据修复(self):
         board = BOARD_PATH.read_text(encoding="utf-8")
         self.assertIn("阶段1数据闭环证据修复", board)
