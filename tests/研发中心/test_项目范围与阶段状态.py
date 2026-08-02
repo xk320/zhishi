@@ -1,3 +1,4 @@
+import hashlib
 import re
 import unittest
 from pathlib import Path
@@ -15,6 +16,50 @@ STANDARD_STATUSES = {
     "需修复",
     "已完成",
     "已取消",
+}
+
+FORWARD_SCOPE_FILES = (
+    "AGENTS.md",
+    "README.md",
+    "《知势宣言》.md",
+    "docs/白皮书/知势白皮书.md",
+    "docs/决策/AI决策推理规范.md",
+    "docs/决策/交易许可协议.md",
+    "docs/决策/决策卡模板.md",
+    "docs/决策/知势决策委员会.md",
+    "docs/决策/知势决策标准.md",
+    "docs/方法论/知势词典.md",
+    "docs/架构/历史事件回放与结果统计体系.md",
+    "docs/架构/最小数据闭环.md",
+    "docs/架构/市场事件层架构.md",
+    "docs/架构/市场状态架构.md",
+    "docs/架构/知势知识图谱.md",
+    "docs/架构/知识图谱运行时设计.md",
+    "docs/架构/系统蓝图.md",
+    "docs/研究/决策复盘规范.md",
+    "docs/研究/市场状态—事件关联分析合同.md",
+    "docs/研究/数据验证阶段执行规范.md",
+    "docs/研究/研究准入规范.md",
+    "docs/研究/研究数据合同与实验记录规范.md",
+    "docs/研究/研究模板.md",
+    "docs/审计/数据缺口与补采清单.md",
+    "docs/治理/任务与验收规范.md",
+    "docs/路线图/第一阶段路线图.md",
+    "docs/风控/风险预算规范.md",
+)
+
+CURRENT_STATE_FILES = FORWARD_SCOPE_FILES + (
+    "docs/研发中心/README.md",
+    "docs/研发中心/总体计划.md",
+    "docs/研发中心/Codex自动执行提示词.md",
+)
+
+HISTORICAL_EVIDENCE_HASHES = {
+    "docs/审计/数据资产审计报告.md": "6468e1537ddb4170c4527df008a8235abe37d8d8cc384d361dd318952a33c8aa",
+    "docs/审计/数据质量审计报告.md": "5954106f25920937b1bece689ac0afe07fc24a43bbe5b0039048b74b3df1bcb8",
+    "docs/审计/历史现场重放验证.md": "3c62e7dea4e11e65e4834b39cf289abe783a13cd2acd00ce3002dce165ac4a16",
+    "artifacts/审计/数据质量持续验证/dqv-20260803T035557+0800-87273a8d253a/验证清单.json": "8cc36b5243fc6cc8bf1e5372035600e3df2375297c7f15f398603c950857cac9",
+    "artifacts/审计/数据质量持续验证/批次索引.csv": "aafc925f412925e2affe86dbe5621655414d5e0a242e398e5d2309590d481c1d",
 }
 
 
@@ -139,6 +184,55 @@ class TaskContractTests(unittest.TestCase):
         board = BOARD_PATH.read_text(encoding="utf-8")
         self.assertIn("阶段1数据闭环证据修复", board)
         self.assertNotIn("进入研究数据闭环真实化阶段", board)
+
+
+class ProjectScopeAndStageTests(unittest.TestCase):
+    def test_前向规范只允许BTC和ETH(self):
+        for relative_path in FORWARD_SCOPE_FILES:
+            text = (ROOT / relative_path).read_text(encoding="utf-8")
+            self.assertNotIn("SOL", text, f"{relative_path}仍包含SOL前向范围")
+
+    def test_现行文档不保留失效状态(self):
+        forbidden = (
+            "等待服务器恢复",
+            "服务器恢复前",
+            "服务器恢复后",
+            "任务-000003至任务-000006尚未完成",
+            "数据资产审计尚未完成",
+        )
+        for relative_path in CURRENT_STATE_FILES:
+            text = (ROOT / relative_path).read_text(encoding="utf-8")
+            for phrase in forbidden:
+                self.assertNotIn(phrase, text, f"{relative_path}仍包含失效状态：{phrase}")
+
+    def test_三个阶段入口使用同一当前结论(self):
+        expected = (
+            "阶段0：已完成",
+            "阶段0.5：核心理论合同已完成",
+            "阶段1：数据闭环证据修复中",
+            "阶段2：被阶段1证据门阻塞",
+            "阶段3至阶段7：仅完成部分理论合同，运行能力未解锁",
+        )
+        for relative_path in (
+            "README.md",
+            "docs/研发中心/总体计划.md",
+            "docs/路线图/第一阶段路线图.md",
+        ):
+            text = (ROOT / relative_path).read_text(encoding="utf-8")
+            for line in expected:
+                self.assertIn(line, text, f"{relative_path}缺少统一阶段结论：{line}")
+
+    def test_旧市场状态设计明确标记为历史草案(self):
+        path = ROOT / "docs" / "架构设计" / "市场状态层（Market Regime）顶层架构设计.md"
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("历史草案", text)
+        self.assertIn("../架构/市场状态架构.md", text)
+        self.assertNotIn("当前交易系统已经具备", text)
+
+    def test_历史审计证据指纹保持不变(self):
+        for relative_path, expected_hash in HISTORICAL_EVIDENCE_HASHES.items():
+            digest = hashlib.sha256((ROOT / relative_path).read_bytes()).hexdigest()
+            self.assertEqual(digest, expected_hash, f"历史证据被改写：{relative_path}")
 
 
 if __name__ == "__main__":
