@@ -100,10 +100,10 @@ class TaskCenterMappingTests(unittest.TestCase):
     def test_当前任务数量和缺号事实准确(self):
         # 任务-000026或新任务以后合法进入main时，必须与任务中心事实同步调整该基线。
         tasks = task_documents()
-        self.assertEqual(len(tasks), 36)
+        self.assertEqual(len(tasks), 37)
         self.assertNotIn("任务-000026", tasks)
         task_28 = tasks["任务-000028"][2]
-        self.assertIn("36个任务文件", task_28)
+        self.assertIn("PR #38合并时36个任务文件", task_28)
         self.assertNotIn("37个任务文件", task_28)
 
     def test_每个任务在看板中恰好出现一次(self):
@@ -159,7 +159,11 @@ class TaskContractTests(unittest.TestCase):
     def test_任务000028具有完整治理合同(self):
         _, title, text = task_documents()["任务-000028"]
         self.assertEqual(title, "统一阶段状态与BTC、ETH研究范围")
-        self.assertIn(metadata(text, "状态"), {"执行中", "待评审", "已完成"})
+        self.assertEqual(metadata(text, "状态"), "已完成")
+        self.assertEqual(
+            metadata(text, "合并提交SHA"),
+            "`e138bd589a5bde38c81f48d38b7c449f6f13df37`",
+        )
         self.assertEqual(metadata(text, "方案状态"), "已批准执行")
         self.assertEqual(metadata(text, "阶段"), "阶段1 数据闭环修复与范围治理")
 
@@ -197,9 +201,76 @@ class TaskContractTests(unittest.TestCase):
         for heading in required_headings:
             self.assertIn(f"## {heading}", text, f"任务-000028缺少{heading}")
 
+    def test_任务000038具有完整自动评审合同(self):
+        tasks = task_documents()
+        _, title, text = tasks["任务-000038"]
+        task_28 = tasks["任务-000028"][2]
+        self.assertEqual(title, "建立子智能体评审、自动修复与自动合并治理")
+        self.assertEqual(metadata(task_28, "状态"), "已完成")
+        self.assertEqual(
+            metadata(task_28, "合并提交SHA"),
+            "`e138bd589a5bde38c81f48d38b7c449f6f13df37`",
+        )
+        self.assertEqual(metadata(task_28, "合并时间"), "2026-08-03 07:30:24 +0800")
+        self.assertEqual(metadata(text, "状态"), "待执行")
+        self.assertEqual(metadata(text, "类型"), "治理")
+        self.assertEqual(metadata(text, "方案状态"), "已批准执行")
+        self.assertIn("唯一前序依赖：任务-000028已", text)
+        self.assertIn("当前依赖已满足", text)
+        self.assertIn("最多同时运行两个只读子智能体", text)
+        self.assertIn("最多自动修复三轮", text)
+        self.assertIn("精确头SHA", text)
+        self.assertIn("不再等待人工批准", text)
+        self.assertIn("Node最大堆256 MiB", text)
+        self.assertIn("所有规则和可执行脚本必须来自受信任的`main`", text)
+        self.assertIn("PR头提交、PR正文", text)
+        self.assertIn("基线SHA或头SHA变化", text)
+        self.assertIn("来源仓库必须为`xk320/zhishi`", text)
+        self.assertIn("目标分支必须为`main`", text)
+        self.assertIn("PR必须非草稿", text)
+        self.assertIn("未解决评审线程", text)
+        self.assertIn("CHANGES_REQUESTED", text)
+        self.assertIn("测试单进程", text)
+        self.assertIn("不创建额外工作树", text)
+        self.assertIn("可用内存低于20%", text)
+        self.assertIn("可用磁盘", text)
+        self.assertIn("低于5 GiB", text)
+        self.assertIn("合并后状态闭环", text)
+
+        plan = (ROOT / "docs/研发中心/总体计划.md").read_text(encoding="utf-8")
+        roadmap = (ROOT / "docs/路线图/第一阶段路线图.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("当前先执行任务-000038", plan)
+        self.assertIn("任务-000029至任务-000037", plan)
+        self.assertNotIn("当前按任务-000028至任务-000037", plan)
+        self.assertIn("任务-000038建立自动评审", roadmap)
+        self.assertIn("任务-000029至任务-000037", roadmap)
+
+        task_29 = tasks["任务-000029"][2]
+        self.assertIn("任务-000038合并后的自动评审治理版本", task_29)
+
+        for heading in (
+            "依赖与阻塞条件",
+            "背景",
+            "任务目标",
+            "输入合同",
+            "输出合同",
+            "固定执行方案",
+            "默认工程决策",
+            "允许停止条件",
+            "工作范围",
+            "不在范围",
+            "安全边界",
+            "验收标准",
+            "验证命令",
+            "完成定义",
+        ):
+            self.assertIn(f"## {heading}", text, f"任务-000038缺少{heading}")
+
     def test_阶段1修复任务链具有完整批准合同(self):
         expected = {
-            "任务-000029": ("冻结数据来源与资产身份合同", "任务-000028"),
+            "任务-000029": ("冻结数据来源与资产身份合同", "任务-000038"),
             "任务-000030": ("建立三类时间与数据质量合同", "任务-000029"),
             "任务-000031": ("完成不可变输入与全量只读质量审计", "任务-000030"),
             "任务-000032": ("建立可信重放来源与历史决策现场", "任务-000031"),
