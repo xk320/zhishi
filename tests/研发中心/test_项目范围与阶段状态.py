@@ -56,8 +56,12 @@ CURRENT_STATE_FILES = FORWARD_SCOPE_FILES + (
 
 HISTORICAL_EVIDENCE_HASHES = {
     "docs/审计/数据资产审计报告.md": "6468e1537ddb4170c4527df008a8235abe37d8d8cc384d361dd318952a33c8aa",
+    "docs/审计/数据源清单.md": "e15ce622af0d8f1efdb68a36e9f8c39f3740d63fb9a340d52a1c34b17e6a4bd0",
+    "artifacts/审计/数据源清单.csv": "019010d64fe47d89c81bfaedafd458f1d886025bb34292c0c32eafcfa4392657",
     "docs/审计/数据质量审计报告.md": "5954106f25920937b1bece689ac0afe07fc24a43bbe5b0039048b74b3df1bcb8",
+    "artifacts/审计/数据质量结果.csv": "30358415ff997a759f784dd509af75e944b80231d61d5f9841ed7437218f6bb4",
     "docs/审计/历史现场重放验证.md": "3c62e7dea4e11e65e4834b39cf289abe783a13cd2acd00ce3002dce165ac4a16",
+    "artifacts/审计/历史重放结果.csv": "56a4c928a39911bd6da5dc97e1d8fcdfa7211784f2c9decb8aeedcd91f431895",
     "artifacts/审计/数据质量持续验证/dqv-20260803T035557+0800-87273a8d253a/验证清单.json": "8cc36b5243fc6cc8bf1e5372035600e3df2375297c7f15f398603c950857cac9",
 }
 HISTORICAL_INDEX_PREFIX_HASH = "aafc925f412925e2affe86dbe5621655414d5e0a242e398e5d2309590d481c1d"
@@ -94,6 +98,7 @@ class TaskCenterMappingTests(unittest.TestCase):
             self.assertEqual(path.stem, task_id, f"任务文件名与标题不一致：{path}")
 
     def test_当前任务数量和缺号事实准确(self):
+        # 任务-000026或新任务以后合法进入main时，必须与任务中心事实同步调整该基线。
         tasks = task_documents()
         self.assertEqual(len(tasks), 36)
         self.assertNotIn("任务-000026", tasks)
