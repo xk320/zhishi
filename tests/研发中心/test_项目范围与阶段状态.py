@@ -212,12 +212,16 @@ class TaskContractTests(unittest.TestCase):
             "`e138bd589a5bde38c81f48d38b7c449f6f13df37`",
         )
         self.assertEqual(metadata(task_28, "合并时间"), "2026-08-03 07:30:24 +0800")
-        self.assertEqual(metadata(text, "状态"), "执行中")
+        self.assertEqual(metadata(text, "状态"), "待评审")
         self.assertEqual(
             metadata(text, "执行分支"),
             "`codex/000038-agent-review-auto-merge-implementation-v1`",
         )
         self.assertEqual(metadata(text, "开始时间"), "2026-08-03 07:42:38 +0800")
+        self.assertEqual(
+            metadata(text, "Pull Request"),
+            "[#40](https://github.com/xk320/zhishi/pull/40)",
+        )
         self.assertEqual(metadata(text, "类型"), "治理")
         self.assertEqual(metadata(text, "方案状态"), "已批准执行")
         self.assertIn("唯一前序依赖：任务-000028已", text)
