@@ -59,8 +59,8 @@ HISTORICAL_EVIDENCE_HASHES = {
     "docs/审计/数据质量审计报告.md": "5954106f25920937b1bece689ac0afe07fc24a43bbe5b0039048b74b3df1bcb8",
     "docs/审计/历史现场重放验证.md": "3c62e7dea4e11e65e4834b39cf289abe783a13cd2acd00ce3002dce165ac4a16",
     "artifacts/审计/数据质量持续验证/dqv-20260803T035557+0800-87273a8d253a/验证清单.json": "8cc36b5243fc6cc8bf1e5372035600e3df2375297c7f15f398603c950857cac9",
-    "artifacts/审计/数据质量持续验证/批次索引.csv": "aafc925f412925e2affe86dbe5621655414d5e0a242e398e5d2309590d481c1d",
 }
+HISTORICAL_INDEX_PREFIX_HASH = "aafc925f412925e2affe86dbe5621655414d5e0a242e398e5d2309590d481c1d"
 
 
 def task_documents():
@@ -89,6 +89,18 @@ def board_sections(text):
 
 
 class TaskCenterMappingTests(unittest.TestCase):
+    def test_任务文件名与标题编号一致(self):
+        for task_id, (path, _, _) in task_documents().items():
+            self.assertEqual(path.stem, task_id, f"任务文件名与标题不一致：{path}")
+
+    def test_当前任务数量和缺号事实准确(self):
+        tasks = task_documents()
+        self.assertEqual(len(tasks), 36)
+        self.assertNotIn("任务-000026", tasks)
+        task_28 = tasks["任务-000028"][2]
+        self.assertIn("36个任务文件", task_28)
+        self.assertNotIn("37个任务文件", task_28)
+
     def test_每个任务在看板中恰好出现一次(self):
         tasks = task_documents()
         board = BOARD_PATH.read_text(encoding="utf-8")
@@ -281,6 +293,36 @@ class ProjectScopeAndStageTests(unittest.TestCase):
         for relative_path, expected_hash in HISTORICAL_EVIDENCE_HASHES.items():
             digest = hashlib.sha256((ROOT / relative_path).read_bytes()).hexdigest()
             self.assertEqual(digest, expected_hash, f"历史证据被改写：{relative_path}")
+
+    def test_追加式批次索引只保护既有历史前缀(self):
+        path = ROOT / "artifacts/审计/数据质量持续验证/批次索引.csv"
+        lines = path.read_bytes().splitlines(keepends=True)
+        self.assertGreaterEqual(len(lines), 2)
+        digest = hashlib.sha256(b"".join(lines[:2])).hexdigest()
+        self.assertEqual(digest, HISTORICAL_INDEX_PREFIX_HASH)
+
+    def test_现行阶段2只由任务000037裁决(self):
+        plan = (ROOT / "docs/研发中心/总体计划.md").read_text(encoding="utf-8")
+        validation = (ROOT / "docs/研究/数据验证阶段执行规范.md").read_text(
+            encoding="utf-8"
+        )
+        task_34 = (ROOT / "docs/研发中心/任务/任务-000034.md").read_text(
+            encoding="utf-8"
+        )
+        combined = "\n".join((plan, validation))
+        self.assertNotIn("在任务-000006完成前", combined)
+        self.assertNotIn("任务-000006明确允许进入基准阶段", combined)
+        self.assertNotIn("由任务-000006决定是否进入基准模型阶段", combined)
+        self.assertIn("只有任务-000037", combined)
+        self.assertIn("任务-000034无权解锁阶段2", task_34)
+        self.assertNotIn("除非两个标的允许范围由证据精确限定", task_34)
+
+    def test_持续验证合同现行章节不含旧标的范围(self):
+        text = (ROOT / "docs/研究/数据质量持续验证合同.md").read_text(
+            encoding="utf-8"
+        )
+        current_contract = text.split("## 十、初始真实批次", maxsplit=1)[0]
+        self.assertNotIn("SOL", current_contract)
 
 
 if __name__ == "__main__":
