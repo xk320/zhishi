@@ -43,6 +43,10 @@ TASK_TYPE_PATTERN = re.compile(r"^- 类型：(.+)$", re.MULTILINE)
 TASK_STATUS_PATTERN = re.compile(r"^- 状态：(.+)$", re.MULTILINE)
 TASK_PRIORITY_PATTERN = re.compile(r"^- 优先级：(.+)$", re.MULTILINE)
 TASK_TITLE_PATTERN = re.compile(r"^# 任务-\d{6}：(.+)$", re.MULTILINE)
+TASK_TITLE_WITH_ID_PATTERN = re.compile(
+    r"^# 任务-(\d{6})：(.+)$", re.MULTILINE
+)
+BLOCKER_PATTERN = re.compile(r"^- 当前阻塞原因：(.+)$", re.MULTILINE)
 BOARD_TASK_ROW_PATTERN = re.compile(
     r"^\|\s*(?:P[0-3]\s*\|\s*)?任务-(\d{6})\s*\|"
 )
@@ -80,7 +84,42 @@ DEPENDENCY_PATTERN = re.compile(r"^- 唯一前序依赖：任务-(\d{6})(?:[^\r\
 TASK_REFERENCE_LINE = re.compile(
     r"^\s*-\s*任务-(\d{6})(?:\s*[（(][^\r\n]*[）)])?\s*$"
 )
-CHANGE_TYPES = frozenset({"任务交付", "合并后状态闭环"})
+CHANGE_TYPES = frozenset({"任务登记", "任务交付", "合并后状态闭环"})
+REGISTRATION_STATUSES = frozenset({"待执行", "阻塞"})
+REQUIRED_TASK_FIELDS = (
+    "状态",
+    "类型",
+    "阶段",
+    "优先级",
+    "执行方案",
+    "方案状态",
+    "执行授权",
+    "并行规则",
+)
+REQUIRED_TASK_HEADINGS = (
+    "依赖与阻塞条件",
+    "背景",
+    "任务目标",
+    "固定执行方案",
+    "默认工程决策",
+    "允许停止条件",
+    "输入合同",
+    "输出合同",
+    "工作范围",
+    "不在范围",
+    "安全边界",
+    "验收标准",
+    "验证命令",
+    "完成定义",
+)
+HISTORICAL_MISSING_TASK_IDS = frozenset({"000026"})
+REGISTRATION_BOARD_PATH = "docs/研发中心/看板.md"
+REGISTRATION_MAPPING_TEST_PATH = (
+    "tests/研发中心/test_项目范围与阶段状态.py"
+)
+REGISTRATION_DESIGN_PATTERN = re.compile(
+    r"^docs/superpowers/specs/[^/]+-design\.md$"
+)
 STATE_CLOSURE_TRANSITIONS = frozenset(
     {
         ("待评审", "已完成"),
@@ -98,6 +137,8 @@ MAX_FILE_SIZE = 5 * 1024 * 1024
 MAX_TOTAL_SIZE = 25 * 1024 * 1024
 MAX_PATH_BYTES = 4096
 MAX_PATH_LENGTH = 4096
+MAX_BASE_TASK_TREE_BYTES = 4 * 1024 * 1024
+MAX_BASE_TASK_COUNT = 10000
 SENSITIVE_TEXT_PATTERNS = (
     re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----", re.IGNORECASE),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b"),
@@ -975,6 +1016,226 @@ def _validate_delivery_tasks(
     return automation_authorized, controlled_rd_authorized
 
 
+def _registration_field_value(text: str, field: str) -> str | None:
+    """读取任务头部严格唯一且非空的合同字段。"""
+
+    lines = text.splitlines()
+    first_section = next(
+        (index for index, line in enumerate(lines) if line.startswith("## ")),
+        len(lines),
+    )
+    prefix = f"- {field}："
+    locations = [
+        index for index, line in enumerate(lines) if line.startswith(prefix)
+    ]
+    if len(locations) != 1 or locations[0] >= first_section:
+        return None
+    value = lines[locations[0]][len(prefix):].strip()
+    return value or None
+
+
+def _validate_registration_board(
+    *,
+    task_id: str,
+    task: str,
+    base_board: str | None,
+    head_board: str | None,
+    reasons: list[str],
+) -> None:
+    """验证看板仅新增一条可由任务合同复算的映射。"""
+
+    mapping_reason = f"任务-{task_id}在看板中不是唯一可复算新增映射"
+    if base_board is None or head_board is None:
+        _append_reason(reasons, mapping_reason)
+        return
+    base_rows = _board_rows(base_board)
+    head_rows = _board_rows(head_board)
+    if (
+        task_id in base_rows
+        or _board_static_lines(base_board) != _board_static_lines(head_board)
+        or {
+            key: value for key, value in base_rows.items() if key != task_id
+        }
+        != {
+            key: value for key, value in head_rows.items() if key != task_id
+        }
+    ):
+        _append_reason(reasons, mapping_reason)
+
+    title_matches = TASK_TITLE_WITH_ID_PATTERN.findall(task)
+    status = _registration_field_value(task, "状态")
+    priority = _registration_field_value(task, "优先级")
+    dependency = _task_field(DEPENDENCY_PATTERN, task)
+    expected_row = ""
+    if (
+        len(title_matches) == 1
+        and title_matches[0][0] == task_id
+        and title_matches[0][1].strip()
+        and priority is not None
+        and dependency is not None
+    ):
+        title = title_matches[0][1].strip()
+        if status == "待执行":
+            expected_row = (
+                f"| {priority} | 任务-{task_id} | {title} | {dependency} |"
+            )
+        elif status == "阻塞":
+            blocker = _task_field(BLOCKER_PATTERN, task)
+            if blocker is not None:
+                blocker = blocker.rstrip("；。")
+                expected_row = (
+                    f"| {priority} | 任务-{task_id} | {title} | "
+                    f"{dependency} | {blocker} |"
+                )
+    row = head_rows.get(task_id)
+    if (
+        row is None
+        or row[0] == "重复"
+        or row[0] != status
+        or not expected_row
+        or row[1] != expected_row
+    ):
+        _append_reason(reasons, mapping_reason)
+
+
+def _validate_task_registration(
+    *,
+    task_ids: Sequence[str],
+    changed_paths: Sequence[str],
+    base_tasks: Mapping[str, str],
+    head_tasks: Mapping[str, str],
+    base_task_ids: Sequence[str] | None,
+    base_board: str | None,
+    head_board: str | None,
+    path_facts: Sequence[PathFact] | None,
+    reasons: list[str],
+) -> None:
+    """按基线Git事实验证单个完整新任务合同登记。"""
+
+    if len(task_ids) != 1:
+        _append_reason(reasons, "任务登记必须且只能引用一个新任务")
+        return
+    task_id = task_ids[0]
+    task_path = f"docs/研发中心/任务/任务-{task_id}.md"
+
+    raw_base_ids = tuple(base_task_ids) if base_task_ids is not None else tuple(base_tasks)
+    valid_base_ids = (
+        bool(raw_base_ids)
+        and len(raw_base_ids) == len(set(raw_base_ids))
+        and all(re.fullmatch(r"\d{6}", item) for item in raw_base_ids)
+    )
+    if not valid_base_ids:
+        _append_reason(reasons, "基线任务编号事实无效")
+    else:
+        maximum = max(int(item) for item in raw_base_ids)
+        expected = maximum + 1
+        if task_id in HISTORICAL_MISSING_TASK_IDS:
+            _append_reason(reasons, f"任务-{task_id}历史缺号禁止复用")
+        if int(task_id) != expected:
+            _append_reason(
+                reasons,
+                f"任务-{task_id}编号必须为基线最大编号"
+                f"{maximum:06d}的下一编号{expected:06d}",
+            )
+
+    if task_id in base_tasks or task_id in raw_base_ids:
+        _append_reason(reasons, f"任务-{task_id}已在基线main中登记")
+    task = head_tasks.get(task_id)
+    if task is None:
+        _append_reason(reasons, f"任务-{task_id}未包含在PR头提交中")
+    else:
+        for field in REQUIRED_TASK_FIELDS:
+            if _registration_field_value(task, field) is None:
+                _append_reason(
+                    reasons,
+                    f"任务-{task_id}合同字段“{field}”必须且只能出现一次",
+                )
+        for heading in REQUIRED_TASK_HEADINGS:
+            count = sum(
+                line == f"## {heading}" for line in task.splitlines()
+            )
+            if count != 1:
+                _append_reason(
+                    reasons,
+                    f"任务-{task_id}合同章节“{heading}”必须且只能出现一次",
+                )
+        title_matches = TASK_TITLE_WITH_ID_PATTERN.findall(task)
+        if (
+            len(title_matches) != 1
+            or title_matches[0][0] != task_id
+            or not title_matches[0][1].strip()
+        ):
+            _append_reason(reasons, f"任务-{task_id}合同标题与文件编号不一致")
+        status = _registration_field_value(task, "状态")
+        if status not in REGISTRATION_STATUSES:
+            _append_reason(
+                reasons,
+                f"任务-{task_id}在PR中的状态“{status}”不可登记",
+            )
+        if _registration_field_value(task, "方案状态") != "已批准执行":
+            _append_reason(
+                reasons,
+                f"任务-{task_id}方案状态不是“已批准执行”",
+            )
+
+    if REGISTRATION_BOARD_PATH not in changed_paths:
+        _append_reason(reasons, "任务登记必须同步看板")
+
+    design_paths = tuple(
+        path
+        for path in changed_paths
+        if REGISTRATION_DESIGN_PATTERN.fullmatch(path)
+    )
+    allowed_paths = {
+        task_path,
+        REGISTRATION_BOARD_PATH,
+        REGISTRATION_MAPPING_TEST_PATH,
+        *design_paths,
+    }
+    for path in changed_paths:
+        if path not in allowed_paths:
+            _append_reason(reasons, f"任务登记包含不允许路径“{path}”")
+    if len(design_paths) != 1:
+        _append_reason(reasons, "任务登记必须且只能新增一个对应设计文档")
+
+    facts_by_path = (
+        {fact.path: fact for fact in path_facts}
+        if path_facts is not None
+        else {}
+    )
+    task_fact = facts_by_path.get(task_path)
+    if task_fact is None or task_fact.status != "A":
+        _append_reason(reasons, f"任务-{task_id}任务文件必须是新增普通文件")
+    for design_path in design_paths:
+        design_fact = facts_by_path.get(design_path)
+        if design_fact is None or design_fact.status != "A":
+            _append_reason(reasons, "任务登记对应设计文档必须是新增普通文件")
+        elif re.search(
+            rf"(?<!\d)任务-{re.escape(task_id)}(?!\d)",
+            design_fact.text or "",
+        ) is None:
+            _append_reason(reasons, f"任务登记设计文档未对应任务-{task_id}")
+    board_fact = facts_by_path.get(REGISTRATION_BOARD_PATH)
+    if REGISTRATION_BOARD_PATH in changed_paths and (
+        board_fact is None or board_fact.status != "M"
+    ):
+        _append_reason(reasons, "任务登记看板必须是对基线看板的修改")
+    mapping_fact = facts_by_path.get(REGISTRATION_MAPPING_TEST_PATH)
+    if REGISTRATION_MAPPING_TEST_PATH in changed_paths and (
+        mapping_fact is None or mapping_fact.status != "M"
+    ):
+        _append_reason(reasons, "任务登记映射测试只允许同步更新")
+
+    if task is not None:
+        _validate_registration_board(
+            task_id=task_id,
+            task=task,
+            base_board=base_board,
+            head_board=head_board,
+            reasons=reasons,
+        )
+
+
 def _validate_state_closure(
     *,
     task_ids: Sequence[str],
@@ -1086,6 +1347,7 @@ def evaluate_eligibility(
     pr_body: str,
     base_tasks: Mapping[str, str],
     head_tasks: Mapping[str, str],
+    base_task_ids: Sequence[str] | None = None,
     base_branch: str,
     repository: str,
     head_repository: str,
@@ -1115,7 +1377,19 @@ def evaluate_eligibility(
 
     automation_authorized = False
     controlled_rd_authorized = False
-    if change_type == "任务交付":
+    if change_type == "任务登记":
+        _validate_task_registration(
+            task_ids=task_ids,
+            changed_paths=changed_paths,
+            base_tasks=base_tasks,
+            head_tasks=head_tasks,
+            base_task_ids=base_task_ids,
+            base_board=base_board,
+            head_board=head_board,
+            path_facts=path_facts,
+            reasons=reasons,
+        )
+    elif change_type == "任务交付":
         automation_authorized, controlled_rd_authorized = (
             _validate_delivery_tasks(
                 task_ids=task_ids,
@@ -1204,6 +1478,36 @@ def _load_ref_tasks(
     return tasks
 
 
+def _load_ref_task_ids(repo_root: Path, ref: str) -> tuple[str, ...]:
+    """从基线Git树有界加载全部任务编号，不读取合同正文。"""
+
+    output = _read_git_output_bounded(
+        repo_root,
+        [
+            "ls-tree",
+            "-r",
+            "-z",
+            "--name-only",
+            ref,
+            "--",
+            "docs/研发中心/任务",
+        ],
+        MAX_BASE_TASK_TREE_BYTES,
+        literal_paths=True,
+    )
+    paths = parse_nul_paths(output)
+    if len(paths) > MAX_BASE_TASK_COUNT:
+        raise ValueError("基线任务文件数超出上限")
+    task_ids = tuple(
+        match.group(1)
+        for path in paths
+        if (match := TASK_FILE_PATTERN.fullmatch(path)) is not None
+    )
+    if not task_ids or len(task_ids) != len(set(task_ids)):
+        raise ValueError("基线任务编号事实无效")
+    return tuple(sorted(task_ids))
+
+
 def _git_text(repo_root: Path, arguments: Sequence[str]) -> str | None:
     result = subprocess.run(
         ["git", *arguments],
@@ -1277,6 +1581,10 @@ def main() -> int:
             arguments.base_ref,
             arguments.head_ref,
         )
+        base_task_ids = _load_ref_task_ids(
+            repo_root,
+            arguments.base_ref,
+        )
     except (OSError, subprocess.SubprocessError, UnicodeError, ValueError):
         print(
             json.dumps(
@@ -1305,6 +1613,7 @@ def main() -> int:
         pr_body=str(metadata.get("body", "")),
         base_tasks=base_tasks,
         head_tasks=head_tasks,
+        base_task_ids=base_task_ids,
         base_branch=str(metadata.get("base_ref", "")),
         repository=str(metadata.get("repository", "")),
         head_repository=str(metadata.get("head_repository", "")),

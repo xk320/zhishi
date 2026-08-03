@@ -97,12 +97,21 @@ class TaskCenterMappingTests(unittest.TestCase):
         for task_id, (path, _, _) in task_documents().items():
             self.assertEqual(path.stem, task_id, f"任务文件名与标题不一致：{path}")
 
-    def test_当前任务数量和缺号事实准确(self):
-        # 任务-000026或新任务以后合法进入main时，必须与任务中心事实同步调整该基线。
+    def test_任务编号唯一且只保留历史缺号(self):
         tasks = task_documents()
-        self.assertEqual(len(tasks), 38)
-        self.assertNotIn("任务-000026", tasks)
-        self.assertIn("任务-000039", tasks)
+        numbers = sorted(
+            int(task_id.removeprefix("任务-")) for task_id in tasks
+        )
+        self.assertEqual(len(numbers), len(set(numbers)))
+        self.assertEqual(
+            [
+                number
+                for number in range(1, max(numbers) + 1)
+                if number not in numbers
+            ],
+            [26],
+        )
+        self.assertGreaterEqual(numbers[-1], 39)
         task_28 = tasks["任务-000028"][2]
         self.assertIn("PR #38合并时36个任务文件", task_28)
         self.assertNotIn("37个任务文件", task_28)

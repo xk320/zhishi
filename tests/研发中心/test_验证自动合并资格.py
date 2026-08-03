@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -120,6 +121,118 @@ def closure_board(*, completed: bool) -> str:
         f"## 待评审\n\n{review}\n\n"
         f"## 已完成\n\n{done}\n"
     )
+
+
+REGISTRATION_REQUIRED_FIELDS = (
+    "状态",
+    "类型",
+    "阶段",
+    "优先级",
+    "执行方案",
+    "方案状态",
+    "执行授权",
+    "并行规则",
+)
+REGISTRATION_REQUIRED_HEADINGS = (
+    "依赖与阻塞条件",
+    "背景",
+    "任务目标",
+    "固定执行方案",
+    "默认工程决策",
+    "允许停止条件",
+    "输入合同",
+    "输出合同",
+    "工作范围",
+    "不在范围",
+    "安全边界",
+    "验收标准",
+    "验证命令",
+    "完成定义",
+)
+
+
+def registration_task(
+    *,
+    task_id: str = "000040",
+    status: str = "待执行",
+    title: str = "新增自动任务登记资格",
+) -> str:
+    blocker = (
+        "- 当前阻塞原因：任务-000039尚未完成\n"
+        if status == "阻塞"
+        else "- 当前阻塞原因：无\n"
+    )
+    sections = {
+        "依赖与阻塞条件": (
+            "- 唯一前序依赖：任务-000039完成后执行\n" + blocker
+        ),
+        **{
+            heading: f"- {heading}的可验证合同。\n"
+            for heading in REGISTRATION_REQUIRED_HEADINGS[1:]
+        },
+    }
+    return (
+        f"# 任务-{task_id}：{title}\n\n"
+        f"- 状态：{status}\n"
+        "- 类型：治理\n"
+        "- 阶段：阶段1研发自动化治理\n"
+        "- 优先级：P1\n"
+        "- 执行方案：方案A“完整合同登记”\n"
+        "- 方案状态：已批准执行\n"
+        "- 执行授权：Codex直接执行\n"
+        "- 并行规则：禁止并行\n"
+        + "".join(
+            f"\n## {heading}\n\n{sections[heading]}"
+            for heading in REGISTRATION_REQUIRED_HEADINGS
+        )
+    )
+
+
+def registration_board(
+    *,
+    status: str | None,
+    task_id: str = "000040",
+    title: str = "新增自动任务登记资格",
+    priority: str = "P1",
+    duplicate: bool = False,
+) -> str:
+    pending_schema = (
+        "| 优先级 | 任务 | 名称 | 唯一前序依赖 |\n"
+        "| --- | --- | --- | --- |\n"
+    )
+    blocked_schema = (
+        "| 优先级 | 任务 | 名称 | 唯一前序依赖 | 阻塞原因 |\n"
+        "| --- | --- | --- | --- | --- |\n"
+    )
+    if status == "待执行":
+        row = f"| {priority} | 任务-{task_id} | {title} | 000039 |"
+        pending = pending_schema + row
+        blocked = "无。"
+    elif status == "阻塞":
+        row = (
+            f"| {priority} | 任务-{task_id} | {title} | 000039 | "
+            "任务-000039尚未完成 |"
+        )
+        pending = "无。"
+        blocked = blocked_schema + row
+    else:
+        row = ""
+        pending = "无。"
+        blocked = "无。"
+    if duplicate and row:
+        pending = pending_schema + row + "\n" + row
+        blocked = "无。"
+    return (
+        "# 看板\n\n"
+        f"## 待执行\n\n{pending}\n\n"
+        f"## 阻塞\n\n{blocked}\n\n"
+        "## 已完成\n\n"
+        "| 任务 | 名称 | 完成证据 |\n"
+        "| --- | --- | --- |\n"
+        "| 任务-000039 | 基线任务 | 基线证据 |\n"
+    )
+
+
 class ImplementationPresenceTest(unittest.TestCase):
     def test_实现文件存在(self):
         self.assertTrue(MODULE_PATH.exists(), f"实现文件尚不存在：{MODULE_PATH}")
@@ -178,6 +291,321 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         }
         values.update(overrides)
         return self.policy.PathFact(path=path, **values)
+
+    def registration_inputs(
+        self,
+        *,
+        task_id: str = "000040",
+        status: str = "待执行",
+        task: str | None = None,
+        changed_paths: list[str] | None = None,
+        base_tasks: dict[str, str] | None = None,
+        head_tasks: dict[str, str] | None = None,
+        base_board: str | None = None,
+        head_board: str | None = None,
+        path_facts=None,
+        pr_body: str | None = None,
+    ) -> dict:
+        task_path = f"docs/研发中心/任务/任务-{task_id}.md"
+        design_path = (
+            f"docs/superpowers/specs/2026-08-04-task-{task_id}-design.md"
+        )
+        task = task if task is not None else registration_task(
+            task_id=task_id,
+            status=status,
+        )
+        changed_paths = changed_paths or [
+            task_path,
+            "docs/研发中心/看板.md",
+            design_path,
+        ]
+        base_tasks = base_tasks if base_tasks is not None else {
+            f"{number:06d}": "基线任务\n"
+            for number in range(1, 40)
+            if number != 26
+        }
+        head_tasks = head_tasks if head_tasks is not None else {task_id: task}
+        base_board = (
+            registration_board(status=None)
+            if base_board is None
+            else base_board
+        )
+        head_board = (
+            registration_board(status=status, task_id=task_id)
+            if head_board is None
+            else head_board
+        )
+        if path_facts is None:
+            texts = {
+                task_path: task,
+                "docs/研发中心/看板.md": head_board,
+                design_path: f"# 任务-{task_id}设计\n",
+                "tests/研发中心/test_项目范围与阶段状态.py": "safe test\n",
+            }
+            path_facts = [
+                self.path_fact(
+                    path,
+                    status=(
+                        "A"
+                        if path in {task_path, design_path}
+                        else "M"
+                    ),
+                    size=len(texts.get(path, "safe text").encode()),
+                    text=texts.get(path, "safe text"),
+                )
+                for path in changed_paths
+            ]
+        return {
+            "changed_paths": changed_paths,
+            "pr_body": pr_body or (
+                "## 关联任务\n\n"
+                f"- 任务-{task_id}\n\n"
+                "## 变更类型\n\n"
+                "- 任务登记\n"
+            ),
+            "base_tasks": base_tasks,
+            "head_tasks": head_tasks,
+            "base_branch": "main",
+            "repository": "xk320/zhishi",
+            "head_repository": "xk320/zhishi",
+            "base_board": base_board,
+            "head_board": head_board,
+            "path_facts": path_facts,
+        }
+
+    def evaluate_registration(self, **overrides):
+        return self.policy.evaluate_eligibility(
+            **self.registration_inputs(**overrides)
+        )
+
+    def test_完整单任务登记允许(self):
+        for status in ("待执行", "阻塞"):
+            with self.subTest(status=status):
+                result = self.evaluate_registration(status=status)
+
+                self.assertTrue(result.eligible, result.reasons)
+                self.assertEqual((), result.reasons)
+
+        result = self.evaluate_registration(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000040.md",
+                "docs/研发中心/看板.md",
+                "docs/superpowers/specs/2026-08-04-task-000040-design.md",
+                "tests/研发中心/test_项目范围与阶段状态.py",
+            ]
+        )
+        self.assertTrue(result.eligible, result.reasons)
+
+    def test_任务登记拒绝夹带和不完整合同(self):
+        multiple_body = (
+            "## 关联任务\n\n"
+            "- 任务-000040\n"
+            "- 任务-000041\n\n"
+            "## 变更类型\n\n"
+            "- 任务登记\n"
+        )
+        result = self.evaluate_registration(pr_body=multiple_body)
+        self.assertFalse(result.eligible)
+        self.assertIn("任务登记必须且只能引用一个新任务", result.reasons)
+
+        existing_tasks = self.registration_inputs()["base_tasks"]
+        existing_tasks["000040"] = registration_task()
+        result = self.evaluate_registration(base_tasks=existing_tasks)
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000040已在基线main中登记", result.reasons)
+
+        result = self.evaluate_registration(head_tasks={})
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000040未包含在PR头提交中", result.reasons)
+
+        for status in ("执行中", "待评审", "已完成"):
+            with self.subTest(status=status):
+                result = self.evaluate_registration(status=status)
+                self.assertFalse(result.eligible)
+                self.assertIn(
+                    f"任务-000040在PR中的状态“{status}”不可登记",
+                    result.reasons,
+                )
+
+        complete_task = registration_task()
+        for field in REGISTRATION_REQUIRED_FIELDS:
+            field_line = next(
+                line
+                for line in complete_task.splitlines()
+                if line.startswith(f"- {field}：")
+            )
+            for mutation, task in (
+                ("缺失", complete_task.replace(field_line + "\n", "", 1)),
+                (
+                    "重复",
+                    complete_task.replace(
+                        "\n## 依赖与阻塞条件",
+                        f"\n{field_line}\n## 依赖与阻塞条件",
+                        1,
+                    ),
+                ),
+            ):
+                with self.subTest(field=field, mutation=mutation):
+                    result = self.evaluate_registration(task=task)
+                    self.assertFalse(result.eligible)
+                    self.assertIn(
+                        f"任务-000040合同字段“{field}”必须且只能出现一次",
+                        result.reasons,
+                    )
+
+        for heading in REGISTRATION_REQUIRED_HEADINGS:
+            marker = f"## {heading}"
+            section_pattern = re.compile(
+                rf"\n{re.escape(marker)}\n.*?(?=\n## |\Z)",
+                re.DOTALL,
+            )
+            for mutation, task in (
+                ("缺失", section_pattern.sub("", complete_task, count=1)),
+                ("重复", complete_task + f"\n## {heading}\n\n- 伪造重复章节。\n"),
+            ):
+                with self.subTest(heading=heading, mutation=mutation):
+                    result = self.evaluate_registration(task=task)
+                    self.assertFalse(result.eligible)
+                    self.assertIn(
+                        f"任务-000040合同章节“{heading}”必须且只能出现一次",
+                        result.reasons,
+                    )
+
+        unapproved = complete_task.replace(
+            "- 方案状态：已批准执行",
+            "- 方案状态：待批准",
+        )
+        result = self.evaluate_registration(task=unapproved)
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000040方案状态不是“已批准执行”", result.reasons)
+
+        result = self.evaluate_registration(task_id="000041")
+        self.assertFalse(result.eligible)
+        self.assertIn(
+            "任务-000041编号必须为基线最大编号000039的下一编号000040",
+            result.reasons,
+        )
+
+        result = self.evaluate_registration(task_id="000026")
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000026历史缺号禁止复用", result.reasons)
+
+        for rejected_path in (
+            "scripts/研发中心/夹带实现.py",
+            "config/研发/夹带配置.json",
+            "artifacts/研发/夹带产物.json",
+            "docs/治理/非设计文档.md",
+            "tests/研发中心/test_验证自动合并资格.py",
+        ):
+            with self.subTest(rejected_path=rejected_path):
+                paths = self.registration_inputs()["changed_paths"] + [rejected_path]
+                result = self.evaluate_registration(changed_paths=paths)
+                self.assertFalse(result.eligible)
+                self.assertIn(
+                    f"任务登记包含不允许路径“{rejected_path}”",
+                    result.reasons,
+                )
+
+        result = self.evaluate_registration(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000040.md",
+                "docs/研发中心/看板.md",
+            ]
+        )
+        self.assertFalse(result.eligible)
+        self.assertIn(
+            "任务登记必须且只能新增一个对应设计文档",
+            result.reasons,
+        )
+
+        inputs = self.registration_inputs()
+        design_path = "docs/superpowers/specs/2026-08-04-task-000040-design.md"
+        inputs["path_facts"] = [
+            self.path_fact(
+                fact.path,
+                status=fact.status,
+                size=fact.size,
+                text=(
+                    "# 未关联任务的设计\n"
+                    if fact.path == design_path
+                    else fact.text
+                ),
+            )
+            for fact in inputs["path_facts"]
+        ]
+        result = self.policy.evaluate_eligibility(**inputs)
+        self.assertFalse(result.eligible)
+        self.assertIn("任务登记设计文档未对应任务-000040", result.reasons)
+
+        result = self.evaluate_registration(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000040.md",
+                "docs/superpowers/specs/2026-08-04-task-000040-design.md",
+            ]
+        )
+        self.assertFalse(result.eligible)
+        self.assertIn("任务登记必须同步看板", result.reasons)
+
+        board_cases = (
+            ("缺行", registration_board(status=None)),
+            ("重复行", registration_board(status="待执行", duplicate=True)),
+            ("分区错误", registration_board(status="阻塞")),
+            (
+                "名称不一致",
+                registration_board(status="待执行", title="被篡改的名称"),
+            ),
+            (
+                "优先级不一致",
+                registration_board(status="待执行", priority="P0"),
+            ),
+            (
+                "依赖不一致",
+                registration_board(status="待执行").replace(
+                    "| 000039 |", "| 000038 |", 1
+                ),
+            ),
+            (
+                "夹带无关看板行改写",
+                registration_board(status="待执行").replace(
+                    "基线证据", "被篡改的证据"
+                ),
+            ),
+        )
+        for case, head_board in board_cases:
+            with self.subTest(board=case):
+                result = self.evaluate_registration(head_board=head_board)
+                self.assertFalse(result.eligible)
+                self.assertIn(
+                    "任务-000040在看板中不是唯一可复算新增映射",
+                    result.reasons,
+                )
+
+        result = self.evaluate_registration(
+            status="阻塞",
+            head_board=registration_board(status="阻塞").replace(
+                "任务-000039尚未完成", "伪造阻塞原因", 1
+            ),
+        )
+        self.assertFalse(result.eligible)
+        self.assertIn(
+            "任务-000040在看板中不是唯一可复算新增映射",
+            result.reasons,
+        )
+
+        inputs = self.registration_inputs()
+        task_path = "docs/研发中心/任务/任务-000040.md"
+        inputs["path_facts"] = [
+            self.path_fact(
+                fact.path,
+                status=("M" if fact.path == task_path else fact.status),
+                size=fact.size,
+                text=fact.text,
+            )
+            for fact in inputs["path_facts"]
+        ]
+        result = self.policy.evaluate_eligibility(**inputs)
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000040任务文件必须是新增普通文件", result.reasons)
 
     def test_低风险治理文档且任务待评审时允许(self):
         result = self.evaluate()
@@ -1412,12 +1840,18 @@ class GitPathFactIntegrationTests(unittest.TestCase):
         self._git("commit", "-qm", "head")
         return self._git("rev-parse", "HEAD").stdout.decode().strip()
 
-    def _run_cli(self, head_ref: str) -> tuple[subprocess.CompletedProcess[str], dict]:
+    def _run_cli(
+        self,
+        head_ref: str,
+        *,
+        body: str | None = None,
+        base_ref: str | None = None,
+    ) -> tuple[subprocess.CompletedProcess[str], dict]:
         metadata_path = self.repo / "metadata.json"
         metadata_path.write_text(
             json.dumps(
                 {
-                    "body": (
+                    "body": body or (
                         "## 关联任务\n\n"
                         "- 任务-000013\n\n"
                         "## 变更类型\n\n"
@@ -1438,7 +1872,7 @@ class GitPathFactIntegrationTests(unittest.TestCase):
                 "--repo-root",
                 str(self.repo),
                 "--base-ref",
-                self.base_ref,
+                base_ref or self.base_ref,
                 "--head-ref",
                 head_ref,
                 "--metadata",
@@ -1449,6 +1883,45 @@ class GitPathFactIntegrationTests(unittest.TestCase):
             text=True,
         )
         return result, json.loads(result.stdout)
+
+    def test_cli任务登记从基线git树加载全部任务编号(self):
+        self._write(
+            "docs/研发中心/任务/任务-000039.md",
+            task_text(status="已完成"),
+        )
+        self._write("docs/研发中心/看板.md", registration_board(status=None))
+        self._git("add", "--", ".")
+        self._git("commit", "-qm", "registration base")
+        base_ref = self._git("rev-parse", "HEAD").stdout.decode().strip()
+
+        self._write(
+            "docs/研发中心/任务/任务-000040.md",
+            registration_task(),
+        )
+        self._write(
+            "docs/研发中心/看板.md",
+            registration_board(status="待执行"),
+        )
+        self._write(
+            "docs/superpowers/specs/2026-08-04-task-000040-design.md",
+            "# 任务-000040设计\n",
+        )
+        self._git("add", "--", ".")
+        head_ref = self._commit_head()
+
+        result, payload = self._run_cli(
+            head_ref,
+            base_ref=base_ref,
+            body=(
+                "## 关联任务\n\n"
+                "- 任务-000040\n\n"
+                "## 变更类型\n\n"
+                "- 任务登记\n"
+            ),
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue(payload["eligible"], payload["reasons"])
 
     def test_普通中文路径新增修改能生成事实并通过cli(self):
         self._prepare_task_delivery()
