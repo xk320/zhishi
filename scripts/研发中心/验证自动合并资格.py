@@ -655,6 +655,20 @@ def _is_automation_path(path: str) -> bool:
     )
 
 
+def _is_governance_control_path(path: str) -> bool:
+    """识别只有治理自动化任务才能修改的可信控制面路径。"""
+
+    if path in AUTOMATION_FILES:
+        return True
+    pure_path = PurePosixPath(path)
+    return (
+        len(pure_path.parts) == 3
+        and pure_path.parts[0] == "scripts"
+        and pure_path.parts[1] == "研发中心"
+        and pure_path.suffix.lower() == ".py"
+    )
+
+
 def _is_controlled_rd_path(path: str) -> bool:
     if path in ALLOWED_ROOT_MARKDOWN:
         return True
@@ -1571,6 +1585,7 @@ def evaluate_eligibility(
                 if automation_authorized
                 else (
                     _is_controlled_rd_path(path)
+                    and not _is_governance_control_path(path)
                     if controlled_rd_authorized
                     else _is_low_risk_path(path)
                 )

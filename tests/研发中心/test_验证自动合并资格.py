@@ -1577,6 +1577,26 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             result.reasons,
         )
 
+    def test_普通受控研发不能修改可信研发中心脚本(self):
+        result = self.evaluate(
+            changed_paths=[
+                "scripts/研发中心/验证自动合并资格.py",
+                "docs/研发中心/任务/任务-000013.md",
+            ],
+            base_tasks={
+                "000013": task_text(status="待执行", task_type="工具")
+            },
+            head_tasks={
+                "000013": task_text(status="待评审", task_type="工具")
+            },
+        )
+
+        self.assertFalse(result.eligible)
+        self.assertIn(
+            "变更路径“scripts/研发中心/验证自动合并资格.py”不允许自动合并",
+            result.reasons,
+        )
+
     def test_基线明确授权的治理自动化可修改受限自动化路径(self):
         result = self.evaluate(
             changed_paths=[
