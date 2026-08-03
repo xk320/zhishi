@@ -157,6 +157,345 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         self.assertTrue(result.eligible)
         self.assertEqual((), result.reasons)
 
+    def test_受控研发任务类型可修改受控源码路径(self):
+        allowed_types = (
+            "数据治理",
+            "数据审计",
+            "数据工程",
+            "基础设施验证",
+            "策略研究",
+            "研究工程",
+            "模拟交易",
+            "测试",
+            "工具",
+        )
+
+        for task_type in allowed_types:
+            with self.subTest(task_type=task_type):
+                result = self.evaluate(
+                    changed_paths=[
+                        "src/策略/信号.py",
+                        "docs/研发中心/任务/任务-000013.md",
+                    ],
+                    base_tasks={
+                        "000013": task_text(
+                            status="待执行",
+                            task_type=task_type,
+                        )
+                    },
+                    head_tasks={
+                        "000013": task_text(
+                            status="待评审",
+                            task_type=task_type,
+                        )
+                    },
+                )
+
+                self.assertTrue(result.eligible, result.reasons)
+
+    def test_pr44数据治理九条精确路径可自动合并(self):
+        changed_paths = [
+            (
+                "artifacts/数据/来源身份/"
+                "source-identity-20260803T131620+0800-e7bc65038f21/"
+                "来源身份清单.csv"
+            ),
+            (
+                "artifacts/数据/来源身份/"
+                "source-identity-20260803T131620+0800-e7bc65038f21/"
+                "身份清单.json"
+            ),
+            "config/数据/数据来源与资产身份.json",
+            "docs/数据/数据来源与资产身份合同.md",
+            "docs/研发中心/任务/任务-000029.md",
+            "docs/研发中心/看板.md",
+            "scripts/数据/冻结数据来源身份.py",
+            "tests/数据/test_冻结数据来源身份.py",
+            "tests/研发中心/test_项目范围与阶段状态.py",
+        ]
+        result = self.evaluate(
+            changed_paths=changed_paths,
+            pr_body=(
+                "## 关联任务\n\n"
+                "- 任务-000029\n\n"
+                "## 变更类型\n\n"
+                "- 任务交付\n"
+            ),
+            base_tasks={
+                "000029": task_text(status="待执行", task_type="数据治理")
+            },
+            head_tasks={
+                "000029": task_text(status="待评审", task_type="数据治理")
+            },
+        )
+
+        self.assertTrue(result.eligible, result.reasons)
+
+    def test_受控研发路径只允许指定根目录和扩展名(self):
+        allowed_paths = (
+            "docs/研究/合同.md",
+            "config/研究/参数.json",
+            "config/研究/参数.yaml",
+            "config/研究/参数.yml",
+            "config/研究/参数.toml",
+            "src/研究/信号.py",
+            "src/研究/信号.js",
+            "src/研究/信号.jsx",
+            "src/研究/信号.ts",
+            "src/研究/信号.tsx",
+            "src/研究/定义.json",
+            "scripts/数据/冻结.py",
+            "scripts/数据/冻结.sh",
+            "tests/研究/test_信号.py",
+            "tests/研究/信号.test.js",
+            "tests/研究/信号.test.jsx",
+            "tests/研究/信号.test.ts",
+            "tests/研究/信号.test.tsx",
+            "tests/研究/用例.json",
+            "artifacts/研究/结果.json",
+            "artifacts/研究/结果.csv",
+            "artifacts/研究/结果.md",
+        )
+
+        for allowed_path in allowed_paths:
+            with self.subTest(path=allowed_path):
+                result = self.evaluate(
+                    changed_paths=[
+                        allowed_path,
+                        "docs/研发中心/任务/任务-000013.md",
+                    ],
+                    base_tasks={
+                        "000013": task_text(
+                            status="待执行",
+                            task_type="数据工程",
+                        )
+                    },
+                    head_tasks={
+                        "000013": task_text(
+                            status="待评审",
+                            task_type="数据工程",
+                        )
+                    },
+                )
+
+                self.assertTrue(result.eligible, result.reasons)
+
+    def test_高风险和未知任务类型不能获得受控研发资格(self):
+        rejected_types = (
+            "真实交易",
+            "资金管理",
+            "生产运维",
+            "凭据管理",
+            "未知",
+        )
+
+        for task_type in rejected_types:
+            with self.subTest(task_type=task_type):
+                result = self.evaluate(
+                    changed_paths=[
+                        "src/策略/信号.py",
+                        "docs/研发中心/任务/任务-000013.md",
+                    ],
+                    base_tasks={
+                        "000013": task_text(
+                            status="待执行",
+                            task_type=task_type,
+                        )
+                    },
+                    head_tasks={
+                        "000013": task_text(
+                            status="待评审",
+                            task_type=task_type,
+                        )
+                    },
+                )
+
+                self.assertFalse(result.eligible)
+                self.assertIn(
+                    f"任务-000013类型“{task_type}”不允许自动合并",
+                    result.reasons,
+                )
+
+    def test_受控研发拒绝越权路径和非法扩展名(self):
+        rejected_paths = (
+            ".github/workflows/部署.yml",
+            "deploy/production.sh",
+            "secrets/account.env",
+            "artifacts/数据/cache.db",
+            "artifacts/模型/model.pt",
+            "artifacts/归档/source.zip",
+            "artifacts/媒体/chart.png",
+        )
+
+        for rejected_path in rejected_paths:
+            with self.subTest(path=rejected_path):
+                result = self.evaluate(
+                    changed_paths=[
+                        rejected_path,
+                        "docs/研发中心/任务/任务-000013.md",
+                    ],
+                    base_tasks={
+                        "000013": task_text(
+                            status="待执行",
+                            task_type="数据治理",
+                        )
+                    },
+                    head_tasks={
+                        "000013": task_text(
+                            status="待评审",
+                            task_type="数据治理",
+                        )
+                    },
+                )
+
+                self.assertFalse(result.eligible)
+                self.assertIn(
+                    f"变更路径“{rejected_path}”不允许自动合并",
+                    result.reasons,
+                )
+
+    def test_受控研发拒绝交易部署和生产脚本目录(self):
+        for rejected_path in (
+            "scripts/交易/下单.py",
+            "scripts/部署/release.sh",
+            "scripts/生产/迁移.py",
+        ):
+            with self.subTest(path=rejected_path):
+                result = self.evaluate(
+                    changed_paths=[
+                        rejected_path,
+                        "docs/研发中心/任务/任务-000013.md",
+                    ],
+                    base_tasks={
+                        "000013": task_text(
+                            status="待执行",
+                            task_type="模拟交易",
+                        )
+                    },
+                    head_tasks={
+                        "000013": task_text(
+                            status="待评审",
+                            task_type="模拟交易",
+                        )
+                    },
+                )
+
+                self.assertFalse(result.eligible)
+                self.assertIn(
+                    f"变更路径“{rejected_path}”不允许自动合并",
+                    result.reasons,
+                )
+
+    def test_多任务只有全部受控研发类型才允许受控路径(self):
+        body = (
+            "## 关联任务\n\n"
+            "- 任务-000013\n"
+            "- 任务-000014\n\n"
+            "## 变更类型\n\n"
+            "- 任务交付\n"
+        )
+        changed_paths = [
+            "src/策略/信号.py",
+            "docs/研发中心/任务/任务-000013.md",
+            "docs/研发中心/任务/任务-000014.md",
+        ]
+        result = self.evaluate(
+            changed_paths=changed_paths,
+            pr_body=body,
+            base_tasks={
+                "000013": task_text(status="待执行", task_type="数据治理"),
+                "000014": task_text(status="待执行", task_type="治理"),
+            },
+            head_tasks={
+                "000013": task_text(status="待评审", task_type="数据治理"),
+                "000014": task_text(status="待评审", task_type="治理"),
+            },
+        )
+
+        self.assertFalse(result.eligible)
+        self.assertIn(
+            "变更路径“src/策略/信号.py”不允许自动合并",
+            result.reasons,
+        )
+
+        result = self.evaluate(
+            changed_paths=changed_paths,
+            pr_body=body,
+            base_tasks={
+                "000013": task_text(status="待执行", task_type="数据治理"),
+                "000014": task_text(status="待执行", task_type="测试"),
+            },
+            head_tasks={
+                "000013": task_text(status="待评审", task_type="数据治理"),
+                "000014": task_text(status="待评审", task_type="测试"),
+            },
+        )
+
+        self.assertTrue(result.eligible, result.reasons)
+
+    def test_多任务治理自动化授权必须来自全部基线任务(self):
+        body = (
+            "## 关联任务\n\n"
+            "- 任务-000013\n"
+            "- 任务-000014\n\n"
+            "## 变更类型\n\n"
+            "- 任务交付\n"
+        )
+        result = self.evaluate(
+            changed_paths=[
+                ".github/workflows/pr-auto-merge.yml",
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/任务/任务-000014.md",
+            ],
+            pr_body=body,
+            base_tasks={
+                "000013": task_text(
+                    status="待执行",
+                    automation_scope=True,
+                ),
+                "000014": task_text(status="待执行"),
+            },
+            head_tasks={
+                "000013": task_text(
+                    status="待评审",
+                    automation_scope=True,
+                ),
+                "000014": task_text(status="待评审"),
+            },
+        )
+
+        self.assertFalse(result.eligible)
+        self.assertIn(
+            "变更路径“.github/workflows/pr-auto-merge.yml”不允许自动合并",
+            result.reasons,
+        )
+
+    def test_治理自动化授权不允许第三个工作流(self):
+        result = self.evaluate(
+            changed_paths=[
+                ".github/workflows/部署.yml",
+                "docs/研发中心/任务/任务-000013.md",
+            ],
+            base_tasks={
+                "000013": task_text(
+                    status="待执行",
+                    automation_scope=True,
+                )
+            },
+            head_tasks={
+                "000013": task_text(
+                    status="待评审",
+                    automation_scope=True,
+                )
+            },
+        )
+
+        self.assertFalse(result.eligible)
+        self.assertIn(
+            "变更路径“.github/workflows/部署.yml”不允许自动合并",
+            result.reasons,
+        )
+
     def test_缺少任务编号时拒绝(self):
         result = self.evaluate(
             pr_body="## 变更类型\n\n- 任务交付\n\n仅包含变更说明"

@@ -13,7 +13,22 @@ from pathlib import Path, PurePosixPath
 from typing import Mapping, Sequence
 
 
-ALLOWED_TASK_TYPES = frozenset({"文档", "治理", "研究规范"})
+CONTROLLED_RD_TASK_TYPES = frozenset(
+    {
+        "数据治理",
+        "数据审计",
+        "数据工程",
+        "基础设施验证",
+        "策略研究",
+        "研究工程",
+        "模拟交易",
+        "测试",
+        "工具",
+    }
+)
+ALLOWED_TASK_TYPES = (
+    frozenset({"文档", "治理", "研究规范"}) | CONTROLLED_RD_TASK_TYPES
+)
 ALLOWED_ROOT_MARKDOWN = frozenset({"AGENTS.md", "README.md", "《知势宣言》.md"})
 AUTOMATION_SCOPE = "治理自动化"
 AUTOMATION_FILES = frozenset(
@@ -172,6 +187,30 @@ def _is_automation_path(path: str) -> bool:
         and pure_path.parts[1] == "研发中心"
         and pure_path.suffix == ".py"
     )
+
+
+def _is_controlled_rd_path(path: str) -> bool:
+    pure_path = PurePosixPath(path)
+    if len(pure_path.parts) <= 1:
+        return False
+    root = pure_path.parts[0]
+    suffix = pure_path.suffix
+    if root == "docs":
+        return suffix == ".md"
+    if root == "config":
+        return suffix in {".json", ".yaml", ".yml", ".toml"}
+    if root == "src":
+        return suffix in {".py", ".js", ".jsx", ".ts", ".tsx", ".json"}
+    if root == "scripts":
+        return (
+            pure_path.parts[1] not in {"交易", "部署", "生产"}
+            and suffix in {".py", ".sh"}
+        )
+    if root == "tests":
+        return suffix in {".py", ".js", ".jsx", ".ts", ".tsx", ".json"}
+    if root == "artifacts":
+        return suffix in {".json", ".csv", ".md"}
+    return False
 
 
 def _append_reason(reasons: list[str], reason: str) -> None:
@@ -437,13 +476,15 @@ def _validate_delivery_tasks(
     base_tasks: Mapping[str, str],
     head_tasks: Mapping[str, str],
     reasons: list[str],
-) -> bool:
+) -> tuple[bool, bool]:
     automation_authorized = bool(task_ids)
+    controlled_rd_authorized = bool(task_ids)
     for task_id in task_ids:
         base_task = base_tasks.get(task_id)
         if base_task is None:
             _append_reason(reasons, f"任务-{task_id}未在基线main中登记")
             automation_authorized = False
+            controlled_rd_authorized = False
             continue
         task_type = _task_field(TASK_TYPE_PATTERN, base_task)
         if task_type is None:
@@ -453,6 +494,8 @@ def _validate_delivery_tasks(
                 reasons,
                 f"任务-{task_id}类型“{task_type}”不允许自动合并",
             )
+        if task_type not in CONTROLLED_RD_TASK_TYPES:
+            controlled_rd_authorized = False
         base_status = _task_field(TASK_STATUS_PATTERN, base_task)
         if base_status not in DELIVERY_BASE_STATUSES:
             _append_reason(
@@ -467,7 +510,7 @@ def _validate_delivery_tasks(
             _append_reason(reasons, f"任务-{task_id}未包含在PR头提交中")
         elif _task_field(TASK_STATUS_PATTERN, head_task) != "待评审":
             _append_reason(reasons, f"任务-{task_id}在PR中的状态不是“待评审”")
-    return automation_authorized
+    return automation_authorized, controlled_rd_authorized
 
 
 def _validate_state_closure(
@@ -606,12 +649,15 @@ def evaluate_eligibility(
         _append_reason(reasons, "PR正文缺少有效变更类型")
 
     automation_authorized = False
+    controlled_rd_authorized = False
     if change_type == "任务交付":
-        automation_authorized = _validate_delivery_tasks(
-            task_ids=task_ids,
-            base_tasks=base_tasks,
-            head_tasks=head_tasks,
-            reasons=reasons,
+        automation_authorized, controlled_rd_authorized = (
+            _validate_delivery_tasks(
+                task_ids=task_ids,
+                base_tasks=base_tasks,
+                head_tasks=head_tasks,
+                reasons=reasons,
+            )
         )
     elif change_type == "合并后状态闭环":
         _validate_state_closure(
@@ -641,7 +687,11 @@ def evaluate_eligibility(
             allowed = (
                 _is_automation_path(path)
                 if automation_authorized
-                else _is_low_risk_path(path)
+                else (
+                    _is_controlled_rd_path(path)
+                    if controlled_rd_authorized
+                    else _is_low_risk_path(path)
+                )
             )
             if not allowed:
                 _append_reason(reasons, f"变更路径“{path}”不允许自动合并")
