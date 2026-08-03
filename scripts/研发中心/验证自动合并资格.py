@@ -147,12 +147,56 @@ SENSITIVE_TEXT_PATTERNS = (
     re.compile(r"\bAKIA[A-Z0-9]{16}\b"),
     re.compile(
         r"(?<![\w])(?:"
-        r'"(?:password|passwd|secret|token|client_secret|api_key|access_key)"|'
-        r"'(?:password|passwd|secret|token|client_secret|api_key|access_key)'|"
-        r"(?:password|passwd|secret|token|client_secret|api_key|access_key)"
+        r'"(?:password|passwd|secret|token|client_secret|api_key|access_key|'
+        r'account_id|account_number|wallet_address|endpoint|base_url|production_url)"|'
+        r"'(?:password|passwd|secret|token|client_secret|api_key|access_key|"
+        r"account_id|account_number|wallet_address|endpoint|base_url|production_url)'|"
+        r"(?:password|passwd|secret|token|client_secret|api_key|access_key|"
+        r"account_id|account_number|wallet_address|endpoint|base_url|production_url)"
         r")\s*[:=]\s*(?:\"[^\"\r\n]+\"|'[^'\r\n]+'|[^\s,}\]\r\n#]+)",
         re.IGNORECASE,
     ),
+)
+CONTROLLED_PATH_DENY_STEMS = frozenset(
+    {
+        "交易",
+        "真实交易",
+        "交易执行",
+        "部署",
+        "生产",
+        "生产环境",
+        "凭据",
+        "密钥",
+        "账户",
+        "真实账户",
+        "数据库",
+        "数据库导出",
+        "原始",
+        "原始数据",
+        "deploy",
+        "deployment",
+        "production",
+        "prod",
+        "trading",
+        "trade",
+        "live",
+        "secret",
+        "secrets",
+        "credential",
+        "credentials",
+        "key",
+        "keys",
+        "token",
+        "tokens",
+        "password",
+        "passwd",
+        "account",
+        "accounts",
+        "database",
+        "databases",
+        "db",
+        "raw",
+    }
 )
 DOUBLE_QUOTED_KEY_PATTERN = re.compile(
     r'"(?P<key>(?:\\.|[^"\\\r\n])*)"(?P<suffix>\s*[:=])'
@@ -607,6 +651,8 @@ def _is_automation_path(path: str) -> bool:
 
 
 def _is_controlled_rd_path(path: str) -> bool:
+    if path in ALLOWED_ROOT_MARKDOWN:
+        return True
     pure_path = PurePosixPath(path)
     if (
         pure_path.is_absolute()
@@ -616,6 +662,12 @@ def _is_controlled_rd_path(path: str) -> bool:
         return False
     root = pure_path.parts[0]
     suffix = pure_path.suffix.lower()
+    if any(
+        part.casefold() in CONTROLLED_PATH_DENY_STEMS
+        or PurePosixPath(part).stem.casefold() in CONTROLLED_PATH_DENY_STEMS
+        for part in pure_path.parts[1:]
+    ):
+        return False
     if root == "docs":
         return suffix == ".md"
     if root == "config":
@@ -708,6 +760,16 @@ def _contains_sensitive_text(text: str) -> bool:
     return any(pattern.search(normalized) for pattern in SENSITIVE_TEXT_PATTERNS)
 
 
+def _contains_unsafe_text(text: str) -> bool:
+    """拒绝NUL和不可打印控制字符，避免把二进制伪装成UTF-8文本。"""
+
+    return any(
+        (ord(character) < 32 and character not in "\t\n\r")
+        or ord(character) == 127
+        for character in text
+    )
+
+
 def _validate_path_facts(
     changed_paths: Sequence[str],
     path_facts: Sequence[PathFact] | None,
@@ -749,8 +811,12 @@ def _validate_path_facts(
                 _append_reason(reasons, "单个文件超过5MiB")
         if not isinstance(fact.text, str):
             _append_reason(reasons, "路径事实缺少可扫描文本")
+        elif _contains_unsafe_text(fact.text):
+            _append_reason(reasons, "变更文本不是安全文本")
         elif _contains_sensitive_text(fact.text):
             _append_reason(reasons, "变更文本包含敏感内容")
+        if fact.path.startswith("artifacts/") and fact.status != "A":
+            _append_reason(reasons, "不可变证据产物必须新增且不得修改")
 
     if total_size > MAX_TOTAL_SIZE:
         _append_reason(reasons, "变更总量超过25MiB")
@@ -1221,6 +1287,12 @@ def _validate_task_registration(
             _append_reason(
                 reasons,
                 f"任务-{task_id}方案状态不是“已批准执行”",
+            )
+        task_type = _registration_field_value(task, "类型")
+        if task_type is not None and task_type not in ALLOWED_TASK_TYPES:
+            _append_reason(
+                reasons,
+                f"任务-{task_id}类型“{task_type}”不允许自动合并",
             )
         dependency_lines = [
             line

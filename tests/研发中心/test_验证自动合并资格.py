@@ -158,6 +158,7 @@ def registration_task(
     task_id: str = "000040",
     status: str = "待执行",
     title: str = "新增自动任务登记资格",
+    task_type: str = "治理",
 ) -> str:
     blocker = (
         "- 当前阻塞原因：任务-000039尚未完成\n"
@@ -176,7 +177,7 @@ def registration_task(
     return (
         f"# 任务-{task_id}：{title}\n\n"
         f"- 状态：{status}\n"
-        "- 类型：治理\n"
+        f"- 类型：{task_type}\n"
         "- 阶段：阶段1研发自动化治理\n"
         "- 优先级：P1\n"
         "- 执行方案：方案A“完整合同登记”\n"
@@ -776,6 +777,24 @@ class AutoMergeEligibilityTests(unittest.TestCase):
                     result.reasons,
                 )
 
+    def test_任务登记拒绝未知和高风险类型(self):
+        for task_type in (
+            "真实交易",
+            "资金管理",
+            "生产运维",
+            "凭据管理",
+            "未知",
+        ):
+            with self.subTest(task_type=task_type):
+                result = self.evaluate_registration(
+                    task=registration_task(task_type=task_type)
+                )
+                self.assertFalse(result.eligible)
+                self.assertIn(
+                    f"任务-000040类型“{task_type}”不允许自动合并",
+                    result.reasons,
+                )
+
     def test_低风险治理文档且任务待评审时允许(self):
         result = self.evaluate()
 
@@ -1023,6 +1042,13 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             head_tasks={
                 "000029": task_text(status="待评审", task_type="数据治理")
             },
+            path_facts=[
+                self.path_fact(
+                    path,
+                    status="A" if path.startswith("artifacts/") else "M",
+                )
+                for path in changed_paths
+            ],
         )
 
         self.assertTrue(result.eligible, result.reasons)
@@ -1072,6 +1098,17 @@ class AutoMergeEligibilityTests(unittest.TestCase):
                             task_type="数据工程",
                         )
                     },
+                    path_facts=[
+                        self.path_fact(
+                            allowed_path,
+                            status=(
+                                "A" if allowed_path.startswith("artifacts/") else "M"
+                            ),
+                        ),
+                        self.path_fact(
+                            "docs/研发中心/任务/任务-000013.md"
+                        ),
+                    ],
                 )
 
                 self.assertTrue(result.eligible, result.reasons)
@@ -1155,6 +1192,14 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             "scripts/交易/下单.py",
             "scripts/部署/release.sh",
             "scripts/生产/迁移.py",
+            "scripts/生产环境/deploy.py",
+            "scripts/deploy.py",
+            "scripts/真实交易.py",
+            "config/生产/production.yaml",
+            "config/production.yaml",
+            "src/生产/runner.py",
+            "artifacts/账户/真实账户.json",
+            "artifacts/数据/数据库导出.csv",
         ):
             with self.subTest(path=rejected_path):
                 result = self.evaluate(
@@ -1181,6 +1226,92 @@ class AutoMergeEligibilityTests(unittest.TestCase):
                     f"变更路径“{rejected_path}”不允许自动合并",
                     result.reasons,
                 )
+
+    def test_受控研发允许根目录已批准Markdown(self):
+        result = self.evaluate(
+            changed_paths=[
+                "README.md",
+                "docs/研发中心/任务/任务-000013.md",
+            ],
+            base_tasks={
+                "000013": task_text(status="待执行", task_type="策略研究")
+            },
+            head_tasks={
+                "000013": task_text(status="待评审", task_type="策略研究")
+            },
+        )
+        self.assertTrue(result.eligible, result.reasons)
+
+    def test_受控研发拒绝二进制控制字符(self):
+        result = self.evaluate(
+            changed_paths=[
+                "src/研究/信号.py",
+                "docs/研发中心/任务/任务-000013.md",
+            ],
+            base_tasks={
+                "000013": task_text(status="待执行", task_type="研究工程")
+            },
+            head_tasks={
+                "000013": task_text(status="待评审", task_type="研究工程")
+            },
+            path_facts=[
+                self.path_fact("src/研究/信号.py", text="\x00"),
+                self.path_fact("docs/研发中心/任务/任务-000013.md"),
+            ],
+        )
+        self.assertFalse(result.eligible)
+        self.assertIn("变更文本不是安全文本", result.reasons)
+
+    def test_不可变证据产物不得修改(self):
+        result = self.evaluate(
+            changed_paths=[
+                "artifacts/研究/结果.json",
+                "docs/研发中心/任务/任务-000013.md",
+            ],
+            base_tasks={
+                "000013": task_text(status="待执行", task_type="数据治理")
+            },
+            head_tasks={
+                "000013": task_text(status="待评审", task_type="数据治理")
+            },
+            path_facts=[
+                self.path_fact("artifacts/研究/结果.json", status="M"),
+                self.path_fact("docs/研发中心/任务/任务-000013.md"),
+            ],
+        )
+        self.assertFalse(result.eligible)
+        self.assertIn("不可变证据产物必须新增且不得修改", result.reasons)
+
+    def test_受控研发拒绝真实账户标识和网络目标正文(self):
+        for text in (
+            "account_id: real-123",
+            "endpoint: https://production.example.invalid/api",
+        ):
+            with self.subTest(text=text):
+                result = self.evaluate(
+                    changed_paths=[
+                        "config/研究/参数.yaml",
+                        "docs/研发中心/任务/任务-000013.md",
+                    ],
+                    base_tasks={
+                        "000013": task_text(
+                            status="待执行", task_type="数据治理"
+                        )
+                    },
+                    head_tasks={
+                        "000013": task_text(
+                            status="待评审", task_type="数据治理"
+                        )
+                    },
+                    path_facts=[
+                        self.path_fact("config/研究/参数.yaml", text=text),
+                        self.path_fact(
+                            "docs/研发中心/任务/任务-000013.md"
+                        ),
+                    ],
+                )
+                self.assertFalse(result.eligible)
+                self.assertIn("变更文本包含敏感内容", result.reasons)
 
     def test_受控研发拒绝路径越界与非法路径形式(self):
         rejected_paths = (
@@ -1253,6 +1384,17 @@ class AutoMergeEligibilityTests(unittest.TestCase):
                             task_type="研究工程",
                         )
                     },
+                    path_facts=[
+                        self.path_fact(
+                            allowed_path,
+                            status=(
+                                "A" if allowed_path.startswith("artifacts/") else "M"
+                            ),
+                        ),
+                        self.path_fact(
+                            "docs/研发中心/任务/任务-000013.md"
+                        ),
+                    ],
                 )
 
                 self.assertTrue(result.eligible, result.reasons)

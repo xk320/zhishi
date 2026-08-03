@@ -195,9 +195,8 @@ jobs:
               for check in relevant
           ):
               raise SystemExit("当前头提交的自动合并资格检查未通过")
-          allowed = {"success", "neutral", "skipped"}
           if any(
-              check["status"] != "completed" or check["conclusion"] not in allowed
+              check["status"] != "completed" or check["conclusion"] != "success"
               for check in current_checks
           ):
               raise SystemExit("当前头提交仍有未完成或失败检查")
@@ -293,7 +292,7 @@ jobs:
               raise SystemExit("合并前自动合并资格检查不是success")
           if any(
               check.get("status") != "completed"
-              or check.get("conclusion") not in {"success", "neutral", "skipped"}
+              or check.get("conclusion") != "success"
               for check in latest_checks.values()
           ):
               raise SystemExit("合并前当前提交检查发生变化")
