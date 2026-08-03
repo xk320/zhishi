@@ -1660,6 +1660,36 @@ class GitPathFactIntegrationTests(unittest.TestCase):
             ":",
         )
 
+    def test_yaml短转义token键失败关闭(self):
+        slash = "\\"
+        encoded_key = "to" + slash + "x6b" + "en"
+
+        self._assert_escaped_sensitive_key_rejected(
+            "config/研究/token.yaml",
+            encoded_key,
+            ":",
+        )
+
+    def test_yaml短转义api_key键失败关闭(self):
+        slash = "\\"
+        encoded_key = "api" + slash + "x5f" + "key"
+
+        self._assert_escaped_sensitive_key_rejected(
+            "config/研究/api.yaml",
+            encoded_key,
+            ":",
+        )
+
+    def test_yaml短转义client_secret键失败关闭(self):
+        slash = "\\"
+        encoded_key = "client" + slash + "x5F" + "secret"
+
+        self._assert_escaped_sensitive_key_rejected(
+            "config/研究/client.yaml",
+            encoded_key,
+            ":",
+        )
+
     def test_unicode键规范化严格验证4位8位和码点(self):
         slash = "\\"
         valid_cases = (
@@ -1667,6 +1697,10 @@ class GitPathFactIntegrationTests(unittest.TestCase):
             (
                 '"api' + slash + 'U0000005F' + 'key" = "x"',
                 '"api_key" = "x"',
+            ),
+            (
+                '"client' + slash + 'x5F' + 'secret": "x"',
+                '"client_secret": "x"',
             ),
         )
         for text, expected in valid_cases:
@@ -1680,6 +1714,8 @@ class GitPathFactIntegrationTests(unittest.TestCase):
             "bad" + slash + "u12G4",
             "bad" + slash + "uD800",
             "bad" + slash + "u000A",
+            "bad" + slash + "xG1",
+            "bad" + slash + "x0A",
         )
         for key in invalid_keys:
             with self.subTest(key=key):

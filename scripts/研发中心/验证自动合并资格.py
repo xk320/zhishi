@@ -585,11 +585,11 @@ def _normalize_double_quoted_keys(text: str) -> str | None:
                 invalid = True
                 return match.group(0)
             marker = key[index + 1]
-            if marker not in {"u", "U"}:
+            if marker not in {"x", "u", "U"}:
                 normalized.extend((character, marker))
                 index += 2
                 continue
-            digit_count = 4 if marker == "u" else 8
+            digit_count = {"x": 2, "u": 4, "U": 8}[marker]
             digits_start = index + 2
             digits_end = digits_start + digit_count
             digits = key[digits_start:digits_end]
