@@ -54,6 +54,31 @@ CURRENT_STATE_FILES = FORWARD_SCOPE_FILES + (
     "docs/研发中心/Codex自动执行提示词.md",
 )
 
+AUTOMATION_GOVERNANCE_FILES = (
+    "AGENTS.md",
+    "README.md",
+    "docs/研发中心/README.md",
+    "docs/研发中心/任务规范.md",
+    "docs/研发中心/Codex自动执行提示词.md",
+    "docs/治理/PR自动合并策略.md",
+)
+
+AUTOMATION_GOVERNANCE_PHRASES = (
+    "任务登记",
+    "数据治理",
+    "数据审计",
+    "数据工程",
+    "基础设施验证",
+    "策略研究",
+    "研究工程",
+    "模拟交易",
+    "测试",
+    "工具",
+    "真实资金",
+    "生产写入",
+    "精确头SHA",
+)
+
 HISTORICAL_EVIDENCE_HASHES = {
     "docs/审计/数据资产审计报告.md": "6468e1537ddb4170c4527df008a8235abe37d8d8cc384d361dd318952a33c8aa",
     "docs/审计/数据源清单.md": "e15ce622af0d8f1efdb68a36e9f8c39f3740d63fb9a340d52a1c34b17e6a4bd0",
@@ -97,11 +122,21 @@ class TaskCenterMappingTests(unittest.TestCase):
         for task_id, (path, _, _) in task_documents().items():
             self.assertEqual(path.stem, task_id, f"任务文件名与标题不一致：{path}")
 
-    def test_当前任务数量和缺号事实准确(self):
-        # 任务-000026或新任务以后合法进入main时，必须与任务中心事实同步调整该基线。
+    def test_任务编号唯一且只保留历史缺号(self):
         tasks = task_documents()
-        self.assertEqual(len(tasks), 37)
-        self.assertNotIn("任务-000026", tasks)
+        numbers = sorted(
+            int(task_id.removeprefix("任务-")) for task_id in tasks
+        )
+        self.assertEqual(len(numbers), len(set(numbers)))
+        self.assertEqual(
+            [
+                number
+                for number in range(1, max(numbers) + 1)
+                if number not in numbers
+            ],
+            [26],
+        )
+        self.assertGreaterEqual(numbers[-1], 39)
         task_28 = tasks["任务-000028"][2]
         self.assertIn("PR #38合并时36个任务文件", task_28)
         self.assertNotIn("37个任务文件", task_28)
@@ -347,6 +382,21 @@ class TaskContractTests(unittest.TestCase):
 
 
 class ProjectScopeAndStageTests(unittest.TestCase):
+    def test_受控研发自动合并治理入口一致(self):
+        for relative_path in AUTOMATION_GOVERNANCE_FILES:
+            text = (ROOT / relative_path).read_text(encoding="utf-8")
+            for phrase in AUTOMATION_GOVERNANCE_PHRASES:
+                self.assertIn(
+                    phrase,
+                    text,
+                    f"{relative_path}缺少受控自动合并治理术语：{phrase}",
+                )
+            self.assertNotIn(
+                "其他PR人工合并",
+                text,
+                f"{relative_path}仍保留失效的人工合并分流",
+            )
+
     def test_前向规范只允许BTC和ETH(self):
         for relative_path in FORWARD_SCOPE_FILES:
             text = (ROOT / relative_path).read_text(encoding="utf-8")

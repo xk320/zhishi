@@ -150,6 +150,15 @@ class MergeWorkflowTests(unittest.TestCase):
             merge_block.index('pulls/${PR_NUMBER}/merge'),
         )
 
+    def test_当前提交所有检查必须为success(self):
+        merge_block = self.text.split(
+            "- name: 合并评审通过的精确提交", maxsplit=1
+        )[1]
+        self.assertNotIn('"neutral"', merge_block)
+        self.assertNotIn('"skipped"', merge_block)
+        self.assertNotIn('"success", "neutral"', merge_block)
+        self.assertIn('check.get("conclusion") != "success"', merge_block)
+
     def test_只运行main上的可信脚本(self):
         self.assertIn(PINNED_CHECKOUT, self.text)
         self.assertIn("ref: main", self.text)
