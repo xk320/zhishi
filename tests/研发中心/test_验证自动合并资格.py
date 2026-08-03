@@ -386,6 +386,81 @@ class AutoMergeEligibilityTests(unittest.TestCase):
                     result.reasons,
                 )
 
+    def test_受控研发拒绝路径越界与非法路径形式(self):
+        rejected_paths = (
+            "scripts/研究/部署/release.sh",
+            "scripts/研究/生产/migrate.py",
+            "scripts/模拟/交易/order.py",
+            "/src/研究/信号.py",
+            "src/研究/./信号.py",
+            "src/研究/../信号.py",
+            "artifacts/研究/result.json.gz",
+        )
+
+        for rejected_path in rejected_paths:
+            with self.subTest(path=rejected_path):
+                result = self.evaluate(
+                    changed_paths=[
+                        rejected_path,
+                        "docs/研发中心/任务/任务-000013.md",
+                    ],
+                    base_tasks={
+                        "000013": task_text(
+                            status="待执行",
+                            task_type="研究工程",
+                        )
+                    },
+                    head_tasks={
+                        "000013": task_text(
+                            status="待评审",
+                            task_type="研究工程",
+                        )
+                    },
+                )
+
+                self.assertFalse(result.eligible)
+                self.assertIn(
+                    f"变更路径“{rejected_path}”不允许自动合并",
+                    result.reasons,
+                )
+
+    def test_受控研发扩展名大小写不敏感且只看最后后缀(self):
+        allowed_paths = (
+            "docs/研究/合同.MD",
+            "config/研究/参数.YAML",
+            "src/研究/信号.PY",
+            "scripts/研究/冻结.SH",
+            "tests/研究/信号.TSX",
+            "artifacts/研究/结果.CSV",
+            "artifacts/研究/result.tar.JSON",
+            "scripts/研究/部署工具/release.sh",
+            "scripts/研究/生产者/migrate.py",
+            "scripts/模拟/交易所/order.py",
+        )
+
+        for allowed_path in allowed_paths:
+            with self.subTest(path=allowed_path):
+                result = self.evaluate(
+                    changed_paths=[
+                        allowed_path,
+                        "docs/研发中心/任务/任务-000013.md",
+                    ],
+                    base_tasks={
+                        "000013": task_text(
+                            status="待执行",
+                            task_type="研究工程",
+                        )
+                    },
+                    head_tasks={
+                        "000013": task_text(
+                            status="待评审",
+                            task_type="研究工程",
+                        )
+                    },
+                )
+
+                self.assertTrue(result.eligible, result.reasons)
+
     def test_多任务只有全部受控研发类型才允许受控路径(self):
         body = (
             "## 关联任务\n\n"

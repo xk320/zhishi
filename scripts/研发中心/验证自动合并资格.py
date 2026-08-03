@@ -191,10 +191,14 @@ def _is_automation_path(path: str) -> bool:
 
 def _is_controlled_rd_path(path: str) -> bool:
     pure_path = PurePosixPath(path)
-    if len(pure_path.parts) <= 1:
+    if (
+        pure_path.is_absolute()
+        or any(part in {".", ".."} for part in path.split("/"))
+        or len(pure_path.parts) <= 1
+    ):
         return False
     root = pure_path.parts[0]
-    suffix = pure_path.suffix
+    suffix = pure_path.suffix.lower()
     if root == "docs":
         return suffix == ".md"
     if root == "config":
@@ -203,7 +207,10 @@ def _is_controlled_rd_path(path: str) -> bool:
         return suffix in {".py", ".js", ".jsx", ".ts", ".tsx", ".json"}
     if root == "scripts":
         return (
-            pure_path.parts[1] not in {"交易", "部署", "生产"}
+            not any(
+                part in {"交易", "部署", "生产"}
+                for part in pure_path.parts[1:-1]
+            )
             and suffix in {".py", ".sh"}
         )
     if root == "tests":
