@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import ModuleType
@@ -1354,6 +1358,181 @@ class AutoMergeEligibilityTests(unittest.TestCase):
 
         self.assertFalse(result.eligible)
         self.assertIn("目标分支不是main", result.reasons)
+
+
+@unittest.skipUnless(MODULE_PATH.exists(), "等待资格判定实现")
+class GitPathFactIntegrationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.policy = load_policy_module()
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.repo = Path(self.temporary_directory.name)
+        self._git("init", "-q")
+        self._git("config", "user.name", "自动合并测试")
+        self._git("config", "user.email", "auto-merge@example.invalid")
+        self._write(
+            "docs/研发中心/任务/任务-000013.md",
+            task_text(status="待执行"),
+        )
+        self._write("docs/治理/既有.md", "基线内容\n")
+        self._write("docs/治理/待删除.md", "待删除\n")
+        self._git("add", "--", ".")
+        self._git("commit", "-qm", "base")
+        self.base_ref = self._git("rev-parse", "HEAD").stdout.decode().strip()
+
+    def tearDown(self) -> None:
+        self.temporary_directory.cleanup()
+
+    def _git(
+        self,
+        *arguments: str,
+        input_bytes: bytes | None = None,
+    ) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            ["git", *arguments],
+            cwd=self.repo,
+            check=True,
+            capture_output=True,
+            input=input_bytes,
+        )
+
+    def _write(self, relative_path: str, text: str) -> Path:
+        path = self.repo / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def _prepare_task_delivery(self) -> None:
+        self._write(
+            "docs/研发中心/任务/任务-000013.md",
+            task_text(status="待评审"),
+        )
+
+    def _commit_head(self) -> str:
+        self._git("commit", "-qm", "head")
+        return self._git("rev-parse", "HEAD").stdout.decode().strip()
+
+    def _run_cli(self, head_ref: str) -> tuple[subprocess.CompletedProcess[str], dict]:
+        metadata_path = self.repo / "metadata.json"
+        metadata_path.write_text(
+            json.dumps(
+                {
+                    "body": (
+                        "## 关联任务\n\n"
+                        "- 任务-000013\n\n"
+                        "## 变更类型\n\n"
+                        "- 任务交付\n"
+                    ),
+                    "base_ref": "main",
+                    "repository": "xk320/zhishi",
+                    "head_repository": "xk320/zhishi",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(MODULE_PATH),
+                "--repo-root",
+                str(self.repo),
+                "--base-ref",
+                self.base_ref,
+                "--head-ref",
+                head_ref,
+                "--metadata",
+                str(metadata_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return result, json.loads(result.stdout)
+
+    def test_普通中文路径新增修改能生成事实并通过cli(self):
+        self._prepare_task_delivery()
+        self._write("docs/治理/既有.md", "修改后内容\n")
+        self._write("docs/治理/新增.md", "新增内容\n")
+        self._git("add", "--", ".")
+        head_ref = self._commit_head()
+
+        facts = self.policy._load_path_facts(
+            self.repo, self.base_ref, head_ref
+        )
+
+        by_path = {fact.path: fact for fact in facts}
+        self.assertEqual("M", by_path["docs/治理/既有.md"].status)
+        self.assertEqual("A", by_path["docs/治理/新增.md"].status)
+        self.assertEqual("100644", by_path["docs/治理/新增.md"].mode)
+        self.assertEqual("blob", by_path["docs/治理/新增.md"].object_type)
+        self.assertEqual("新增内容\n", by_path["docs/治理/新增.md"].text)
+
+        result, payload = self._run_cli(head_ref)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue(payload["eligible"], payload["reasons"])
+        self.assertEqual(
+            {fact.path for fact in facts}, set(payload["changed_paths"])
+        )
+        self.assertEqual(
+            {"eligible", "reasons", "changed_paths"}, set(payload)
+        )
+
+    def test_符号链接可执行文件和删除都失败关闭(self):
+        self._prepare_task_delivery()
+        os.symlink("既有.md", self.repo / "docs/治理/符号链接.md")
+        executable = self._write("docs/治理/可执行.md", "脚本\n")
+        executable.chmod(0o755)
+        (self.repo / "docs/治理/待删除.md").unlink()
+        self._git("add", "--", ".")
+        head_ref = self._commit_head()
+
+        facts = self.policy._load_path_facts(
+            self.repo, self.base_ref, head_ref
+        )
+        by_path = {fact.path: fact for fact in facts}
+
+        self.assertEqual("120000", by_path["docs/治理/符号链接.md"].mode)
+        self.assertEqual("100755", by_path["docs/治理/可执行.md"].mode)
+        self.assertEqual("D", by_path["docs/治理/待删除.md"].status)
+
+        result, payload = self._run_cli(head_ref)
+
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertFalse(payload["eligible"])
+        self.assertIn("路径事实不允许自动合并", payload["reasons"])
+
+    def test_非法utf8_blob不回显正文且失败关闭(self):
+        self._prepare_task_delivery()
+        self._git("add", "--", "docs/研发中心/任务/任务-000013.md")
+        oid = self._git(
+            "hash-object", "-w", "--stdin", input_bytes=b"\xff\xfe\xfd"
+        ).stdout.decode().strip()
+        self._git(
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            f"100644,{oid},docs/治理/非法编码.md",
+        )
+        head_ref = self._commit_head()
+
+        facts = self.policy._load_path_facts(
+            self.repo, self.base_ref, head_ref
+        )
+        invalid_fact = next(
+            fact for fact in facts if fact.path == "docs/治理/非法编码.md"
+        )
+        self.assertIsNone(invalid_fact.text)
+        self.assertEqual(3, invalid_fact.size)
+
+        result, payload = self._run_cli(head_ref)
+
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertFalse(payload["eligible"])
+        self.assertIn("路径事实缺少可扫描文本", payload["reasons"])
+        self.assertEqual(
+            {"eligible", "reasons", "changed_paths"}, set(payload)
+        )
 
 
 if __name__ == "__main__":

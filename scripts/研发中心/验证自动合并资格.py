@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -136,6 +137,18 @@ class PathFact:
     text: str | None
 
 
+@dataclass(frozen=True)
+class _PathObjectMetadata:
+    """Git对象正文读取前的有界元数据。"""
+
+    path: str
+    status: str
+    mode: str
+    object_type: str
+    oid: str
+    size: int
+
+
 def _task_field(pattern: re.Pattern[str], text: str) -> str | None:
     match = pattern.search(text)
     return match.group(1).strip() if match else None
@@ -191,6 +204,182 @@ def parse_nul_paths(output: bytes) -> tuple[str, ...]:
             continue
         paths.append(raw_path.decode("utf-8", errors="strict"))
     return tuple(paths)
+
+
+def _git_bytes(
+    repo_root: Path,
+    arguments: Sequence[str],
+    *,
+    literal_paths: bool = False,
+) -> bytes:
+    environment = None
+    if literal_paths:
+        environment = os.environ.copy()
+        environment["GIT_LITERAL_PATHSPECS"] = "1"
+    result = subprocess.run(
+        ["git", *arguments],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+        env=environment,
+    )
+    if result.returncode != 0:
+        raise ValueError("Git命令执行失败")
+    return result.stdout
+
+
+def _parse_name_status(output: bytes) -> tuple[tuple[str, str], ...]:
+    fields = output.split(b"\0")
+    if fields and fields[-1] == b"":
+        fields.pop()
+    if len(fields) % 2 != 0:
+        raise ValueError("Git变更路径输出不完整")
+
+    entries: list[tuple[str, str]] = []
+    seen_paths: set[str] = set()
+    for index in range(0, len(fields), 2):
+        status = fields[index].decode("ascii", errors="strict")
+        path = fields[index + 1].decode("utf-8", errors="strict")
+        if status not in {"A", "M", "D"} or not path or path in seen_paths:
+            raise ValueError("Git变更路径输出无效")
+        seen_paths.add(path)
+        entries.append((status, path))
+    return tuple(entries)
+
+
+def _load_object_metadata(
+    repo_root: Path,
+    head_ref: str,
+    status: str,
+    path: str,
+) -> _PathObjectMetadata:
+    tree_output = _git_bytes(
+        repo_root,
+        ["ls-tree", "-z", head_ref, "--", path],
+        literal_paths=True,
+    )
+    records = tuple(record for record in tree_output.split(b"\0") if record)
+    if len(records) != 1:
+        raise ValueError("Git路径对象不是唯一匹配")
+    try:
+        raw_metadata, raw_path = records[0].split(b"\t", 1)
+        mode_bytes, type_bytes, oid_bytes = raw_metadata.split(b" ")
+        mode = mode_bytes.decode("ascii", errors="strict")
+        object_type = type_bytes.decode("ascii", errors="strict")
+        oid = oid_bytes.decode("ascii", errors="strict")
+        actual_path = raw_path.decode("utf-8", errors="strict")
+    except (UnicodeDecodeError, ValueError) as error:
+        raise ValueError("Git路径对象元数据无效") from error
+    if actual_path != path or re.fullmatch(r"[0-9a-f]+", oid) is None:
+        raise ValueError("Git路径对象元数据不匹配")
+
+    raw_size = _git_bytes(repo_root, ["cat-file", "-s", oid]).strip()
+    if re.fullmatch(rb"[0-9]+", raw_size) is None:
+        raise ValueError("Git对象大小无效")
+    size = int(raw_size)
+    return _PathObjectMetadata(
+        path=path,
+        status=status,
+        mode=mode,
+        object_type=object_type,
+        oid=oid,
+        size=size,
+    )
+
+
+def _read_blob_bounded(repo_root: Path, oid: str, expected_size: int) -> bytes:
+    process = subprocess.Popen(
+        ["git", "cat-file", "blob", oid],
+        cwd=repo_root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if process.stdout is None:
+        process.kill()
+        process.wait()
+        raise ValueError("Git对象正文无法读取")
+    with process.stdout:
+        content = process.stdout.read(expected_size + 1)
+    if len(content) > expected_size:
+        process.kill()
+        process.wait()
+        raise ValueError("Git对象正文超出已验证大小")
+    return_code = process.wait()
+    if return_code != 0 or len(content) != expected_size:
+        raise ValueError("Git对象正文与元数据不一致")
+    return content
+
+
+def _load_path_facts(
+    repo_root: Path,
+    base_ref: str,
+    head_ref: str,
+) -> tuple[PathFact, ...]:
+    """从Git对象读取路径事实，资源门通过前不读取正文。"""
+
+    diff_output = _git_bytes(
+        repo_root,
+        [
+            "diff",
+            "--name-status",
+            "-z",
+            "--no-renames",
+            base_ref,
+            head_ref,
+            "--",
+        ],
+    )
+    entries = _parse_name_status(diff_output)
+    metadata: list[_PathObjectMetadata] = []
+    deleted_paths: set[str] = set()
+    for status, path in entries:
+        if status == "D":
+            deleted_paths.add(path)
+            continue
+        metadata.append(
+            _load_object_metadata(repo_root, head_ref, status, path)
+        )
+
+    total_size = sum(item.size for item in metadata)
+    resource_limit_exceeded = (
+        len(entries) > MAX_CHANGED_FILES
+        or any(item.size > MAX_FILE_SIZE for item in metadata)
+        or total_size > MAX_TOTAL_SIZE
+    )
+    metadata_by_path = {item.path: item for item in metadata}
+    facts: list[PathFact] = []
+    for status, path in entries:
+        if path in deleted_paths:
+            facts.append(
+                PathFact(
+                    path=path,
+                    status=status,
+                    mode="000000",
+                    object_type="missing",
+                    size=0,
+                    text=None,
+                )
+            )
+            continue
+        item = metadata_by_path[path]
+        text: str | None = None
+        if not resource_limit_exceeded and item.object_type == "blob":
+            content = _read_blob_bounded(repo_root, item.oid, item.size)
+            try:
+                text = content.decode("utf-8", errors="strict")
+            except UnicodeDecodeError:
+                text = None
+        facts.append(
+            PathFact(
+                path=path,
+                status=item.status,
+                mode=item.mode,
+                object_type=item.object_type,
+                size=item.size,
+                text=text,
+            )
+        )
+    return tuple(facts)
 
 
 def _is_low_risk_path(path: str) -> bool:
@@ -892,21 +1081,26 @@ def main() -> int:
     arguments = _parse_arguments()
     repo_root = arguments.repo_root.resolve()
     metadata = json.loads(arguments.metadata.read_text(encoding="utf-8"))
-    diff = subprocess.run(
-        [
-            "git",
-            "diff",
-            "--name-only",
-            "-z",
+    try:
+        path_facts = _load_path_facts(
+            repo_root,
             arguments.base_ref,
             arguments.head_ref,
-            "--",
-        ],
-        cwd=repo_root,
-        check=True,
-        capture_output=True,
-    )
-    changed_paths = parse_nul_paths(diff.stdout)
+        )
+    except (OSError, subprocess.SubprocessError, UnicodeError, ValueError):
+        print(
+            json.dumps(
+                {
+                    "eligible": False,
+                    "reasons": ["Git路径事实加载失败"],
+                    "changed_paths": [],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1
+    changed_paths = tuple(fact.path for fact in path_facts)
     task_ids = set(parse_task_references(str(metadata.get("body", ""))))
     for path in changed_paths:
         match = TASK_FILE_PATTERN.fullmatch(path)
@@ -935,6 +1129,7 @@ def main() -> int:
         head_board=_read_path_at_ref(
             repo_root, arguments.head_ref, "docs/研发中心/看板.md"
         ),
+        path_facts=path_facts,
     )
     print(
         json.dumps(
