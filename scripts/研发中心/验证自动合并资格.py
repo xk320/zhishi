@@ -112,6 +112,9 @@ SENSITIVE_TEXT_PATTERNS = (
         re.IGNORECASE,
     ),
 )
+DOUBLE_QUOTED_KEY_PATTERN = re.compile(
+    r'"(?P<key>(?:\\.|[^"\\\r\n])*)"(?P<suffix>\s*[:=])'
+)
 
 
 @dataclass(frozen=True)
@@ -562,6 +565,72 @@ def _append_reason(reasons: list[str], reason: str) -> None:
         reasons.append(reason)
 
 
+def _normalize_double_quoted_keys(text: str) -> str | None:
+    """仅规范化配置键中严格的Unicode码点转义。"""
+
+    invalid = False
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal invalid
+        key = match.group("key")
+        normalized: list[str] = []
+        index = 0
+        while index < len(key):
+            character = key[index]
+            if character != "\\":
+                normalized.append(character)
+                index += 1
+                continue
+            if index + 1 >= len(key):
+                invalid = True
+                return match.group(0)
+            marker = key[index + 1]
+            if marker not in {"u", "U"}:
+                normalized.extend((character, marker))
+                index += 2
+                continue
+            digit_count = 4 if marker == "u" else 8
+            digits_start = index + 2
+            digits_end = digits_start + digit_count
+            digits = key[digits_start:digits_end]
+            if (
+                len(digits) != digit_count
+                or re.fullmatch(r"[0-9A-Fa-f]+", digits) is None
+            ):
+                invalid = True
+                return match.group(0)
+            codepoint = int(digits, 16)
+            if (
+                codepoint > 0x10FFFF
+                or 0xD800 <= codepoint <= 0xDFFF
+            ):
+                invalid = True
+                return match.group(0)
+            decoded = chr(codepoint)
+            if not decoded.isprintable():
+                invalid = True
+                return match.group(0)
+            normalized.append(decoded)
+            index = digits_end
+        normalized_key = "".join(normalized)
+        if not all(character.isprintable() for character in normalized_key):
+            invalid = True
+            return match.group(0)
+        return f'"{normalized_key}"{match.group("suffix")}'
+
+    normalized_text = DOUBLE_QUOTED_KEY_PATTERN.sub(replace, text)
+    return None if invalid else normalized_text
+
+
+def _contains_sensitive_text(text: str) -> bool:
+    if any(pattern.search(text) for pattern in SENSITIVE_TEXT_PATTERNS):
+        return True
+    normalized = _normalize_double_quoted_keys(text)
+    if normalized is None:
+        return True
+    return any(pattern.search(normalized) for pattern in SENSITIVE_TEXT_PATTERNS)
+
+
 def _validate_path_facts(
     changed_paths: Sequence[str],
     path_facts: Sequence[PathFact] | None,
@@ -603,7 +672,7 @@ def _validate_path_facts(
                 _append_reason(reasons, "单个文件超过5MiB")
         if not isinstance(fact.text, str):
             _append_reason(reasons, "路径事实缺少可扫描文本")
-        elif any(pattern.search(fact.text) for pattern in SENSITIVE_TEXT_PATTERNS):
+        elif _contains_sensitive_text(fact.text):
             _append_reason(reasons, "变更文本包含敏感内容")
 
     if total_size > MAX_TOTAL_SIZE:

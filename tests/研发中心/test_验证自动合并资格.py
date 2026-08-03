@@ -1372,7 +1372,7 @@ class GitPathFactIntegrationTests(unittest.TestCase):
         self._git("config", "user.email", "auto-merge@example.invalid")
         self._write(
             "docs/研发中心/任务/任务-000013.md",
-            task_text(status="待执行"),
+            task_text(status="待执行", task_type="数据治理"),
         )
         self._write("docs/治理/既有.md", "基线内容\n")
         self._write("docs/治理/待删除.md", "待删除\n")
@@ -1405,7 +1405,7 @@ class GitPathFactIntegrationTests(unittest.TestCase):
     def _prepare_task_delivery(self) -> None:
         self._write(
             "docs/研发中心/任务/任务-000013.md",
-            task_text(status="待评审"),
+            task_text(status="待评审", task_type="数据治理"),
         )
 
     def _commit_head(self) -> str:
@@ -1604,6 +1604,90 @@ class GitPathFactIntegrationTests(unittest.TestCase):
         self.assertEqual(
             {"eligible", "reasons", "changed_paths"}, set(payload)
         )
+
+    def _assert_escaped_sensitive_key_rejected(
+        self,
+        relative_path: str,
+        encoded_key: str,
+        separator: str,
+    ) -> None:
+        self._prepare_task_delivery()
+        sensitive_value = "hunter" + "2"
+        self._write(
+            relative_path,
+            f'"{encoded_key}" {separator} "{sensitive_value}"\n',
+        )
+        self._git("add", "--", ".")
+        head_ref = self._commit_head()
+
+        result, payload = self._run_cli(head_ref)
+
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertFalse(payload["eligible"])
+        self.assertIn("变更文本包含敏感内容", payload["reasons"])
+        self.assertNotIn(
+            sensitive_value,
+            json.dumps(payload, ensure_ascii=False),
+        )
+
+    def test_json_unicode转义token键失败关闭(self):
+        slash = "\\"
+        encoded_key = "to" + slash + "u006b" + "en"
+
+        self._assert_escaped_sensitive_key_rejected(
+            "config/研究/凭据.json",
+            encoded_key,
+            ":",
+        )
+
+    def test_toml_unicode转义api_key键失败关闭(self):
+        slash = "\\"
+        encoded_key = "api" + slash + "u005f" + "key"
+
+        self._assert_escaped_sensitive_key_rejected(
+            "config/研究/凭据.toml",
+            encoded_key,
+            "=",
+        )
+
+    def test_yaml_unicode转义client_secret键失败关闭(self):
+        slash = "\\"
+        encoded_key = "client" + slash + "u005f" + "secret"
+
+        self._assert_escaped_sensitive_key_rejected(
+            "config/研究/凭据.yaml",
+            encoded_key,
+            ":",
+        )
+
+    def test_unicode键规范化严格验证4位8位和码点(self):
+        slash = "\\"
+        valid_cases = (
+            ('"to' + slash + 'u006B' + 'en": "x"', '"token": "x"'),
+            (
+                '"api' + slash + 'U0000005F' + 'key" = "x"',
+                '"api_key" = "x"',
+            ),
+        )
+        for text, expected in valid_cases:
+            with self.subTest(text=text):
+                self.assertEqual(
+                    expected,
+                    self.policy._normalize_double_quoted_keys(text),
+                )
+
+        invalid_keys = (
+            "bad" + slash + "u12G4",
+            "bad" + slash + "uD800",
+            "bad" + slash + "u000A",
+        )
+        for key in invalid_keys:
+            with self.subTest(key=key):
+                self.assertIsNone(
+                    self.policy._normalize_double_quoted_keys(
+                        f'"{key}": "x"'
+                    )
+                )
 
 
 if __name__ == "__main__":
