@@ -262,7 +262,7 @@ class ReviewEvidenceTests(unittest.TestCase):
         self.assertFalse(result.valid)
         self.assertIn("主执行器验证时间早于评审时间", result.reasons)
         self.assertIn("资源测量未绑定当前头提交", result.reasons)
-        self.assertIn("资源测量与验证时间顺序或新鲜度无效", result.reasons)
+        self.assertIn("资源测量与评审验证时间顺序或新鲜度无效", result.reasons)
 
 
 if __name__ == "__main__":

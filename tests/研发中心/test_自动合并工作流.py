@@ -143,6 +143,8 @@ class MergeWorkflowTests(unittest.TestCase):
         self.assertIn("reviewThreads", merge_block)
         self.assertIn("check-runs?per_page=100", merge_block)
         self.assertIn("mergeable_state", merge_block)
+        self.assertIn('check.get("conclusion") != "success"', merge_block)
+        self.assertIn("合并前自动合并资格检查不是success", merge_block)
         self.assertLess(
             merge_block.index("reviewDecision"),
             merge_block.index('pulls/${PR_NUMBER}/merge'),
@@ -212,7 +214,11 @@ class MergeWorkflowTests(unittest.TestCase):
 
     def test_没有浮动action版本或把输入直接拼进run(self):
         self.assertIsNone(
-            re.search(r"uses:\s*[^\\s]+@(v\\d+|main|master)\\s*$", self.text)
+            re.search(
+                r"uses:\s*[^\s]+@(v\d+|main|master)\s*$",
+                self.text,
+                flags=re.MULTILINE,
+            )
         )
         run_blocks = workflow_run_blocks(self.text)
         self.assertTrue(run_blocks)

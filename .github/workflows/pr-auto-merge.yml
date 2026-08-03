@@ -287,6 +287,12 @@ jobs:
               raise SystemExit("合并前缺少当前头提交资格检查")
           if any(
               check.get("status") != "completed"
+              or check.get("conclusion") != "success"
+              for check in relevant
+          ):
+              raise SystemExit("合并前自动合并资格检查不是success")
+          if any(
+              check.get("status") != "completed"
               or check.get("conclusion") not in {"success", "neutral", "skipped"}
               for check in latest_checks.values()
           ):

@@ -336,17 +336,27 @@ def validate_evidence(
     measured_at = _parse_rfc3339(resource.get("measured_at"))
     if measured_at is None:
         _append_reason(reasons, "资源测量时间必须为带时区RFC3339")
-    elif completed_at is not None and (
-        measured_at > completed_at or completed_at - measured_at > timedelta(hours=24)
-    ):
-        _append_reason(reasons, "资源测量与验证时间顺序或新鲜度无效")
+    elif completed_at is not None:
+        first_review = min(review_times) if review_times else None
+        if (
+            measured_at > completed_at
+            or completed_at - measured_at > timedelta(hours=1)
+            or (
+                first_review is not None
+                and (
+                    measured_at > first_review
+                    or first_review - measured_at > timedelta(hours=1)
+                )
+            )
+        ):
+            _append_reason(reasons, "资源测量与评审验证时间顺序或新鲜度无效")
 
     now = current_time or datetime.now().astimezone()
     if now.tzinfo is None or now.utcoffset() is None:
         _append_reason(reasons, "当前时间缺少时区")
     elif completed_at is not None and (
         completed_at > now + timedelta(minutes=5)
-        or now - completed_at > timedelta(hours=24)
+        or now - completed_at > timedelta(hours=1)
     ):
         _append_reason(reasons, "验证证据时间过期或来自未来")
 
