@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import ModuleType
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -1530,6 +1531,76 @@ class GitPathFactIntegrationTests(unittest.TestCase):
         self.assertEqual(1, result.returncode, result.stderr)
         self.assertFalse(payload["eligible"])
         self.assertIn("路径事实缺少可扫描文本", payload["reasons"])
+        self.assertEqual(
+            {"eligible", "reasons", "changed_paths"}, set(payload)
+        )
+
+    def test_json_yaml_toml凭据键不能绕过敏感文本扫描(self):
+        self._prepare_task_delivery()
+        keys = (
+            "token",
+            "password",
+            "passwd",
+            "secret",
+            "client_secret",
+            "api_key",
+            "access_key",
+        )
+        values = ["hunter" + f"2-{index}" for index in range(len(keys))]
+        lines: list[str] = []
+        for key, value in zip(keys, values, strict=True):
+            samples = (
+                f'"{key}": "{value}"',
+                f"'{key}': '{value}'",
+                f"{key}: {value}",
+                f'"{key}" = "{value}"',
+                f"'{key}' = '{value}'",
+                f"{key}={value}",
+            )
+            for sample in samples:
+                with self.subTest(key=key, sample=sample[:8]):
+                    self.assertTrue(
+                        any(
+                            pattern.search(sample)
+                            for pattern in self.policy.SENSITIVE_TEXT_PATTERNS
+                        )
+                    )
+            lines.extend(samples)
+        self._write("docs/治理/凭据样本.md", "\n".join(lines) + "\n")
+        self._git("add", "--", ".")
+        head_ref = self._commit_head()
+
+        result, payload = self._run_cli(head_ref)
+
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertFalse(payload["eligible"])
+        self.assertIn("变更文本包含敏感内容", payload["reasons"])
+        serialized = json.dumps(payload, ensure_ascii=False)
+        for value in values:
+            self.assertNotIn(value, serialized)
+
+    def test_501个真实git变更在元数据和正文前失败关闭(self):
+        self._prepare_task_delivery()
+        for index in range(500):
+            self._write(f"docs/治理/资源-{index:03d}.md", "safe\n")
+        self._git("add", "--", ".")
+        head_ref = self._commit_head()
+
+        with mock.patch.object(
+            self.policy,
+            "_read_blob_bounded",
+            wraps=self.policy._read_blob_bounded,
+        ) as read_blob:
+            with self.assertRaisesRegex(ValueError, "变更文件数超过500"):
+                self.policy._load_path_facts(
+                    self.repo, self.base_ref, head_ref
+                )
+            read_blob.assert_not_called()
+
+        result, payload = self._run_cli(head_ref)
+
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertFalse(payload["eligible"])
         self.assertEqual(
             {"eligible", "reasons", "changed_paths"}, set(payload)
         )

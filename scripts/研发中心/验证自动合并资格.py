@@ -11,7 +11,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
-from typing import Mapping, Sequence
+from typing import BinaryIO, Mapping, Sequence
 
 
 CONTROLLED_RD_TASK_TYPES = frozenset(
@@ -96,13 +96,19 @@ COMPLETION_MUTABLE_PREFIXES = (
 MAX_CHANGED_FILES = 500
 MAX_FILE_SIZE = 5 * 1024 * 1024
 MAX_TOTAL_SIZE = 25 * 1024 * 1024
+MAX_PATH_BYTES = 4096
+MAX_PATH_LENGTH = 4096
 SENSITIVE_TEXT_PATTERNS = (
     re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----", re.IGNORECASE),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b"),
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{82,}\b"),
     re.compile(r"\bAKIA[A-Z0-9]{16}\b"),
     re.compile(
-        r"\b(?:password|passwd|secret|token)\b\s*[:=]\s*[\"']?[^\s\"']+",
+        r"(?<![\w])(?:"
+        r'"(?:password|passwd|secret|token|client_secret|api_key|access_key)"|'
+        r"'(?:password|passwd|secret|token|client_secret|api_key|access_key)'|"
+        r"(?:password|passwd|secret|token|client_secret|api_key|access_key)"
+        r")\s*[:=]\s*(?:\"[^\"\r\n]+\"|'[^'\r\n]+'|[^\s,}\]\r\n#]+)",
         re.IGNORECASE,
     ),
 )
@@ -206,9 +212,92 @@ def parse_nul_paths(output: bytes) -> tuple[str, ...]:
     return tuple(paths)
 
 
-def _git_bytes(
+def _stop_git_process(process: subprocess.Popen[bytes]) -> None:
+    """停止Git子进程并回收，不留下管道或僵尸进程。"""
+
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
+def _read_nul_field(stream: BinaryIO, max_bytes: int) -> bytes | None:
+    value = bytearray()
+    while True:
+        byte = stream.read(1)
+        if byte == b"":
+            if value:
+                raise ValueError("Git NUL输出不完整")
+            return None
+        if byte == b"\0":
+            return bytes(value)
+        value.extend(byte)
+        if len(value) > max_bytes:
+            raise ValueError("Git NUL字段超出上限")
+
+
+def _stream_diff_entries(
+    repo_root: Path,
+    base_ref: str,
+    head_ref: str,
+) -> tuple[tuple[str, str], ...]:
+    process = subprocess.Popen(
+        [
+            "git",
+            "diff",
+            "--name-status",
+            "-z",
+            "--no-renames",
+            base_ref,
+            head_ref,
+            "--",
+        ],
+        cwd=repo_root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if process.stdout is None:
+        _stop_git_process(process)
+        raise ValueError("Git变更输出无法读取")
+    entries: list[tuple[str, str]] = []
+    seen_paths: set[str] = set()
+    try:
+        while True:
+            raw_status = _read_nul_field(process.stdout, 16)
+            if raw_status is None:
+                break
+            raw_path = _read_nul_field(process.stdout, MAX_PATH_BYTES)
+            if raw_path is None:
+                raise ValueError("Git变更路径输出不完整")
+            status = raw_status.decode("ascii", errors="strict")
+            path = raw_path.decode("utf-8", errors="strict")
+            if (
+                status not in {"A", "M", "D"}
+                or not path
+                or len(path) > MAX_PATH_LENGTH
+                or path in seen_paths
+            ):
+                raise ValueError("Git变更路径输出无效")
+            seen_paths.add(path)
+            entries.append((status, path))
+            if len(entries) > MAX_CHANGED_FILES:
+                raise ValueError("变更文件数超过500")
+        if process.wait() != 0:
+            raise ValueError("Git变更命令执行失败")
+        return tuple(entries)
+    finally:
+        _stop_git_process(process)
+        process.stdout.close()
+
+
+def _read_git_output_bounded(
     repo_root: Path,
     arguments: Sequence[str],
+    max_bytes: int,
     *,
     literal_paths: bool = False,
 ) -> bytes:
@@ -216,75 +305,126 @@ def _git_bytes(
     if literal_paths:
         environment = os.environ.copy()
         environment["GIT_LITERAL_PATHSPECS"] = "1"
-    result = subprocess.run(
+    process = subprocess.Popen(
         ["git", *arguments],
         cwd=repo_root,
-        check=False,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
         env=environment,
     )
-    if result.returncode != 0:
-        raise ValueError("Git命令执行失败")
-    return result.stdout
+    if process.stdout is None:
+        _stop_git_process(process)
+        raise ValueError("Git命令输出无法读取")
+    try:
+        output = process.stdout.read(max_bytes + 1)
+        if len(output) > max_bytes:
+            raise ValueError("Git命令输出超出上限")
+        if process.wait() != 0:
+            raise ValueError("Git命令执行失败")
+        return output
+    finally:
+        _stop_git_process(process)
+        process.stdout.close()
 
 
-def _parse_name_status(output: bytes) -> tuple[tuple[str, str], ...]:
-    fields = output.split(b"\0")
-    if fields and fields[-1] == b"":
-        fields.pop()
-    if len(fields) % 2 != 0:
-        raise ValueError("Git变更路径输出不完整")
-
-    entries: list[tuple[str, str]] = []
-    seen_paths: set[str] = set()
-    for index in range(0, len(fields), 2):
-        status = fields[index].decode("ascii", errors="strict")
-        path = fields[index + 1].decode("utf-8", errors="strict")
-        if status not in {"A", "M", "D"} or not path or path in seen_paths:
-            raise ValueError("Git变更路径输出无效")
-        seen_paths.add(path)
-        entries.append((status, path))
-    return tuple(entries)
-
-
-def _load_object_metadata(
+def _load_object_metadata_batch(
     repo_root: Path,
     head_ref: str,
-    status: str,
-    path: str,
-) -> _PathObjectMetadata:
-    tree_output = _git_bytes(
+    entries: Sequence[tuple[str, str]],
+) -> tuple[_PathObjectMetadata, ...]:
+    present_entries = tuple(
+        (status, path) for status, path in entries if status in {"A", "M"}
+    )
+    if not present_entries:
+        return ()
+    paths = tuple(path for _, path in present_entries)
+    tree_output = _read_git_output_bounded(
         repo_root,
-        ["ls-tree", "-z", head_ref, "--", path],
+        ["ls-tree", "-z", head_ref, "--", *paths],
+        len(paths) * (MAX_PATH_BYTES + 256),
         literal_paths=True,
     )
     records = tuple(record for record in tree_output.split(b"\0") if record)
-    if len(records) != 1:
-        raise ValueError("Git路径对象不是唯一匹配")
-    try:
-        raw_metadata, raw_path = records[0].split(b"\t", 1)
-        mode_bytes, type_bytes, oid_bytes = raw_metadata.split(b" ")
-        mode = mode_bytes.decode("ascii", errors="strict")
-        object_type = type_bytes.decode("ascii", errors="strict")
-        oid = oid_bytes.decode("ascii", errors="strict")
-        actual_path = raw_path.decode("utf-8", errors="strict")
-    except (UnicodeDecodeError, ValueError) as error:
-        raise ValueError("Git路径对象元数据无效") from error
-    if actual_path != path or re.fullmatch(r"[0-9a-f]+", oid) is None:
-        raise ValueError("Git路径对象元数据不匹配")
+    if len(records) != len(paths):
+        raise ValueError("Git路径对象数量不匹配")
 
-    raw_size = _git_bytes(repo_root, ["cat-file", "-s", oid]).strip()
-    if re.fullmatch(rb"[0-9]+", raw_size) is None:
-        raise ValueError("Git对象大小无效")
-    size = int(raw_size)
-    return _PathObjectMetadata(
-        path=path,
-        status=status,
-        mode=mode,
-        object_type=object_type,
-        oid=oid,
-        size=size,
+    tree_by_path: dict[str, tuple[str, str, str]] = {}
+    expected_paths = set(paths)
+    for record in records:
+        try:
+            raw_metadata, raw_path = record.split(b"\t", 1)
+            mode_bytes, type_bytes, oid_bytes = raw_metadata.split(b" ")
+            mode = mode_bytes.decode("ascii", errors="strict")
+            object_type = type_bytes.decode("ascii", errors="strict")
+            oid = oid_bytes.decode("ascii", errors="strict")
+            path = raw_path.decode("utf-8", errors="strict")
+        except (UnicodeDecodeError, ValueError) as error:
+            raise ValueError("Git路径对象元数据无效") from error
+        if (
+            path not in expected_paths
+            or path in tree_by_path
+            or re.fullmatch(r"[0-7]{6}", mode) is None
+            or re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", oid) is None
+        ):
+            raise ValueError("Git路径对象元数据不匹配")
+        tree_by_path[path] = (mode, object_type, oid)
+    if set(tree_by_path) != expected_paths:
+        raise ValueError("Git路径对象缺失或额外")
+
+    unique_oids = tuple(
+        dict.fromkeys(tree_by_path[path][2] for path in paths)
     )
+    batch_input = b"".join(oid.encode("ascii") + b"\n" for oid in unique_oids)
+    batch_result = subprocess.run(
+        [
+            "git",
+            "cat-file",
+            "--batch-check=%(objectname) %(objecttype) %(objectsize)",
+        ],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+        input=batch_input,
+    )
+    if batch_result.returncode != 0:
+        raise ValueError("Git对象元数据批量读取失败")
+    batch_lines = batch_result.stdout.splitlines()
+    if len(batch_lines) != len(unique_oids):
+        raise ValueError("Git对象元数据数量不匹配")
+
+    object_facts: dict[str, tuple[str, int]] = {}
+    for expected_oid, line in zip(unique_oids, batch_lines, strict=True):
+        try:
+            oid_bytes, type_bytes, size_bytes = line.split(b" ")
+            oid = oid_bytes.decode("ascii", errors="strict")
+            object_type = type_bytes.decode("ascii", errors="strict")
+        except (UnicodeDecodeError, ValueError) as error:
+            raise ValueError("Git对象元数据无效") from error
+        if (
+            oid != expected_oid
+            or oid in object_facts
+            or re.fullmatch(rb"[0-9]+", size_bytes) is None
+        ):
+            raise ValueError("Git对象元数据不匹配")
+        object_facts[oid] = (object_type, int(size_bytes))
+
+    metadata: list[_PathObjectMetadata] = []
+    for status, path in present_entries:
+        mode, tree_type, oid = tree_by_path[path]
+        batch_type, size = object_facts[oid]
+        if tree_type != batch_type:
+            raise ValueError("Git对象类型不一致")
+        metadata.append(
+            _PathObjectMetadata(
+                path=path,
+                status=status,
+                mode=mode,
+                object_type=tree_type,
+                oid=oid,
+                size=size,
+            )
+        )
+    return tuple(metadata)
 
 
 def _read_blob_bounded(repo_root: Path, oid: str, expected_size: int) -> bytes:
@@ -317,28 +457,9 @@ def _load_path_facts(
 ) -> tuple[PathFact, ...]:
     """从Git对象读取路径事实，资源门通过前不读取正文。"""
 
-    diff_output = _git_bytes(
-        repo_root,
-        [
-            "diff",
-            "--name-status",
-            "-z",
-            "--no-renames",
-            base_ref,
-            head_ref,
-            "--",
-        ],
-    )
-    entries = _parse_name_status(diff_output)
-    metadata: list[_PathObjectMetadata] = []
-    deleted_paths: set[str] = set()
-    for status, path in entries:
-        if status == "D":
-            deleted_paths.add(path)
-            continue
-        metadata.append(
-            _load_object_metadata(repo_root, head_ref, status, path)
-        )
+    entries = _stream_diff_entries(repo_root, base_ref, head_ref)
+    metadata = _load_object_metadata_batch(repo_root, head_ref, entries)
+    deleted_paths = {path for status, path in entries if status == "D"}
 
     total_size = sum(item.size for item in metadata)
     resource_limit_exceeded = (
