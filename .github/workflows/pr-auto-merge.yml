@@ -1,79 +1,74 @@
-name: 架构批准后自动合并
+name: 子智能体评审通过后自动合并
 
 on:
-  issue_comment:
-    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull Request编号
+        required: true
+        type: string
+      head_sha:
+        description: 已复审的40位PR头提交SHA
+        required: true
+        type: string
+      review_evidence:
+        description: 绑定当前基线和头提交的zhishi-agent-review/v1 JSON
+        required: true
+        type: string
 
 permissions:
   contents: write
-  pull-requests: write
+  pull-requests: read
   checks: read
   issues: write
 
 concurrency:
-  group: pr-auto-merge-${{ github.event.issue.number }}
+  group: pr-auto-merge-${{ inputs.pr_number }}
   cancel-in-progress: false
 
 jobs:
   merge:
-    name: 复验并合并批准提交
+    name: 复验并合并子智能体批准提交
     if: >-
-      github.event.issue.pull_request &&
       github.actor == 'xk320' &&
-      github.event.comment.author_association == 'OWNER'
+      github.repository == 'xk320/zhishi' &&
+      github.ref == 'refs/heads/main' &&
+      startsWith(github.workflow_ref, 'xk320/zhishi/.github/workflows/pr-auto-merge.yml@refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       REPOSITORY: ${{ github.repository }}
-      PR_NUMBER: ${{ github.event.issue.number }}
-      APPROVAL_BODY: ${{ github.event.comment.body }}
+      PR_NUMBER: ${{ inputs.pr_number }}
+      EXPECTED_HEAD_SHA: ${{ inputs.head_sha }}
+      REVIEW_EVIDENCE: ${{ inputs.review_evidence }}
     steps:
-      - name: 解析绑定提交的架构批准
-        id: approval
-        shell: bash
-        run: |
-          if [[ "$APPROVAL_BODY" =~ ^/架构评审通过[[:space:]]+([0-9a-f]{40})$ ]]; then
-            echo "sha=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
-          else
-            echo "评论不是有效的架构批准指令"
-            exit 1
-          fi
-
       - name: 读取并校验Pull Request元数据
         id: pr
         env:
-          APPROVED_SHA: ${{ steps.approval.outputs.sha }}
           METADATA_PATH: ${{ runner.temp }}/pr-auto-merge-metadata.json
           PR_PATH: ${{ runner.temp }}/pull-request.json
+          EVIDENCE_PATH: ${{ runner.temp }}/agent-review-evidence.json
         run: |
           gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" > "$PR_PATH"
           python3 - <<'PY'
           import json
           import os
+          import re
           from pathlib import Path
 
-          pull_request = json.loads(
-              Path(os.environ["PR_PATH"]).read_text(encoding="utf-8")
-          )
-          expected_repository = os.environ["REPOSITORY"]
-          approved_sha = os.environ["APPROVED_SHA"]
+          pull_request = json.loads(Path(os.environ["PR_PATH"]).read_text(encoding="utf-8"))
+          expected_sha = os.environ["EXPECTED_HEAD_SHA"]
           checks = (
+              (re.fullmatch(r"[0-9a-f]{40}", expected_sha) is not None, "头提交SHA格式无效"),
               (pull_request["state"] == "open", "PR不是开放状态"),
               (not pull_request["draft"], "草稿PR不能自动合并"),
+              (pull_request["base"]["ref"] == "main", "目标分支不是main"),
               (
-                  pull_request["base"]["ref"] == "main",
-                  "目标分支不是main",
+                  pull_request["head"]["repo"]["full_name"] == os.environ["REPOSITORY"],
+                  "来源仓库不是xk320/zhishi",
               ),
-              (
-                  pull_request["head"]["repo"]["full_name"]
-                  == expected_repository,
-                  "外部仓库PR不能自动合并",
-              ),
-              (
-                  pull_request["head"]["sha"] == approved_sha,
-                  "批准SHA与当前PR头提交不一致",
-              ),
+              (pull_request["head"]["sha"] == expected_sha, "评审SHA与当前头提交不一致"),
           )
           failures = [message for passed, message in checks if not passed]
           if failures:
@@ -86,13 +81,12 @@ jobs:
               "head_repository": pull_request["head"]["repo"]["full_name"],
           }
           Path(os.environ["METADATA_PATH"]).write_text(
-              json.dumps(metadata, ensure_ascii=False),
-              encoding="utf-8",
+              json.dumps(metadata, ensure_ascii=False), encoding="utf-8"
           )
-          with Path(os.environ["GITHUB_OUTPUT"]).open(
-              "a",
-              encoding="utf-8",
-          ) as output:
+          Path(os.environ["EVIDENCE_PATH"]).write_text(
+              os.environ["REVIEW_EVIDENCE"], encoding="utf-8"
+          )
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
               output.write(f"base_sha={pull_request['base']['sha']}\n")
               output.write(f"head_sha={pull_request['head']['sha']}\n")
           PY
@@ -102,6 +96,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          persist-credentials: false
 
       - name: 获取待评审提交但不执行其中代码
         env:
@@ -111,33 +106,6 @@ jobs:
           git fetch --no-tags origin "$BASE_SHA" "$HEAD_SHA"
           git cat-file -e "${BASE_SHA}^{commit}"
           git cat-file -e "${HEAD_SHA}^{commit}"
-
-      - name: 确认资格工作流已完成
-        env:
-          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
-          CHECKS_PATH: ${{ runner.temp }}/check-runs.json
-        run: |
-          gh api \
-            -H "Accept: application/vnd.github+json" \
-            "repos/${REPOSITORY}/commits/${HEAD_SHA}/check-runs" \
-            > "$CHECKS_PATH"
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          checks = json.loads(
-              Path(os.environ["CHECKS_PATH"]).read_text(encoding="utf-8")
-          )["check_runs"]
-          passed = any(
-              check["name"] == "验证自动合并资格"
-              and check["status"] == "completed"
-              and check["conclusion"] == "success"
-              for check in checks
-          )
-          if not passed:
-              raise SystemExit("当前提交没有成功的自动合并资格检查")
-          PY
 
       - name: 使用main可信规则重新验证资格
         env:
@@ -151,6 +119,90 @@ jobs:
             --head-ref "$HEAD_SHA" \
             --metadata "$METADATA_PATH"
 
+      - name: 验证绑定当前提交的子智能体评审证据
+        env:
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          EVIDENCE_PATH: ${{ runner.temp }}/agent-review-evidence.json
+        run: |
+          python3 scripts/研发中心/验证自动评审证据.py \
+            --evidence "$EVIDENCE_PATH" \
+            --repository "$REPOSITORY" \
+            --pr-number "$PR_NUMBER" \
+            --base-sha "$BASE_SHA" \
+            --head-sha "$HEAD_SHA"
+
+      - name: 检查未解决评审和当前提交检查
+        env:
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          REVIEWS_PATH: ${{ runner.temp }}/reviews.json
+          THREADS_PATH: ${{ runner.temp }}/review-threads.json
+          CHECKS_PATH: ${{ runner.temp }}/check-runs.json
+        run: |
+          gh api --paginate --slurp \
+            "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" \
+            > "$REVIEWS_PATH"
+          gh api \
+            --paginate --slurp \
+            -H "Accept: application/vnd.github+json" \
+            "repos/${REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100" > "$CHECKS_PATH"
+          gh api graphql --paginate --slurp \
+            -f query='query($owner:String!,$name:String!,$number:Int!,$endCursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,after:$endCursor){nodes{isResolved}pageInfo{hasNextPage,endCursor}}}}}' \
+            -f owner='xk320' -f name='zhishi' -F number="$PR_NUMBER" > "$THREADS_PATH"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          review_pages = json.loads(Path(os.environ["REVIEWS_PATH"]).read_text(encoding="utf-8"))
+          thread_pages = json.loads(Path(os.environ["THREADS_PATH"]).read_text(encoding="utf-8"))
+          check_pages = json.loads(Path(os.environ["CHECKS_PATH"]).read_text(encoding="utf-8"))
+          reviews = [review for page in review_pages for review in page]
+          threads = [
+              thread
+              for page in thread_pages
+              for thread in page["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+          ]
+          if thread_pages and thread_pages[-1]["data"]["repository"]["pullRequest"]["reviewThreads"]["pageInfo"]["hasNextPage"]:
+              raise SystemExit("评审线程分页未完整读取")
+          check_runs = [
+              check
+              for page in check_pages
+              for check in page.get("check_runs", [])
+          ]
+          unresolved = threads
+          if any(not thread["isResolved"] for thread in unresolved):
+              raise SystemExit("存在未解决评审线程")
+          latest_reviews = {}
+          for review in sorted(reviews, key=lambda item: (item.get("submitted_at") or "", item.get("id") or 0)):
+              if review.get("state") not in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}:
+                  continue
+              user = review.get("user") or {}
+              reviewer = str(user.get("id") or user.get("login") or "")
+              if reviewer:
+                  latest_reviews[reviewer] = review
+          if any(review.get("state") == "CHANGES_REQUESTED" for review in latest_reviews.values()):
+              raise SystemExit("存在CHANGES_REQUESTED评审")
+          latest_checks = {}
+          for check in sorted(check_runs, key=lambda item: (item.get("started_at") or "", item.get("id") or 0)):
+              app = check.get("app") or {}
+              key = (str(app.get("slug") or app.get("id") or ""), check.get("name") or "")
+              latest_checks[key] = check
+          current_checks = list(latest_checks.values())
+          relevant = [check for check in current_checks if check["name"] == "验证自动合并资格"]
+          if not relevant or any(
+              check["status"] != "completed" or check["conclusion"] != "success"
+              for check in relevant
+          ):
+              raise SystemExit("当前头提交的自动合并资格检查未通过")
+          allowed = {"success", "neutral", "skipped"}
+          if any(
+              check["status"] != "completed" or check["conclusion"] not in allowed
+              for check in current_checks
+          ):
+              raise SystemExit("当前头提交仍有未完成或失败检查")
+          PY
+
       - name: 合并前再次确认状态和提交
         env:
           BASE_SHA: ${{ steps.pr.outputs.base_sha }}
@@ -163,59 +215,111 @@ jobs:
           import os
           from pathlib import Path
 
-          pull_request = json.loads(
-              Path(os.environ["PR_PATH"]).read_text(encoding="utf-8")
-          )
+          pull_request = json.loads(Path(os.environ["PR_PATH"]).read_text(encoding="utf-8"))
           checks = (
               (pull_request["state"] == "open", "PR已不再开放"),
-              (
-                  pull_request["base"]["sha"] == os.environ["BASE_SHA"],
-                  "复验期间main基线发生变化",
-              ),
-              (
-                  pull_request["head"]["sha"] == os.environ["HEAD_SHA"],
-                  "复验期间PR头提交发生变化",
-              ),
-              (
-                  pull_request["mergeable"] is True,
-                  "GitHub未确认PR可合并",
-              ),
-              (
-                  pull_request["mergeable_state"] == "clean",
-                  "PR存在冲突、落后或检查异常",
-              ),
+              (not pull_request["draft"], "PR已变为草稿"),
+              (pull_request["base"]["sha"] == os.environ["BASE_SHA"], "复验期间main基线发生变化"),
+              (pull_request["head"]["sha"] == os.environ["HEAD_SHA"], "复验期间PR头提交发生变化"),
+              (pull_request["mergeable"] is True, "GitHub未确认PR可合并"),
+              (pull_request["mergeable_state"] == "clean", "PR存在冲突、落后或检查异常"),
           )
           failures = [message for passed, message in checks if not passed]
           if failures:
               raise SystemExit("；".join(failures))
           PY
 
-      - name: 合并批准的精确提交
+      - name: 合并评审通过的精确提交
         id: merge
         env:
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
           MERGE_PATH: ${{ runner.temp }}/merge-result.json
+          FINAL_PR_PATH: ${{ runner.temp }}/final-pull-request.json
+          FINAL_THREADS_PATH: ${{ runner.temp }}/final-review-threads.json
+          FINAL_CHECKS_PATH: ${{ runner.temp }}/final-check-runs.json
         run: |
-          gh api \
-            --method PUT \
-            "repos/${REPOSITORY}/pulls/${PR_NUMBER}/merge" \
-            -f sha="$HEAD_SHA" \
-            -f merge_method=merge \
-            > "$MERGE_PATH"
+          gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" > "$FINAL_PR_PATH"
+          gh api --paginate --slurp \
+            -H "Accept: application/vnd.github+json" \
+            "repos/${REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100" \
+            > "$FINAL_CHECKS_PATH"
+          gh api graphql --paginate --slurp \
+            -f query='query($owner:String!,$name:String!,$number:Int!,$endCursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewDecision reviewThreads(first:100,after:$endCursor){nodes{isResolved}pageInfo{hasNextPage,endCursor}}}}}' \
+            -f owner='xk320' -f name='zhishi' -F number="$PR_NUMBER" \
+            > "$FINAL_THREADS_PATH"
           python3 - <<'PY'
           import json
           import os
           from pathlib import Path
 
-          result = json.loads(
-              Path(os.environ["MERGE_PATH"]).read_text(encoding="utf-8")
+          pull_request = json.loads(Path(os.environ["FINAL_PR_PATH"]).read_text(encoding="utf-8"))
+          thread_pages = json.loads(Path(os.environ["FINAL_THREADS_PATH"]).read_text(encoding="utf-8"))
+          check_pages = json.loads(Path(os.environ["FINAL_CHECKS_PATH"]).read_text(encoding="utf-8"))
+          pull = thread_pages[-1]["data"]["repository"]["pullRequest"] if thread_pages else None
+          if pull is None:
+              raise SystemExit("合并前无法重新读取评审状态")
+          threads = [
+              thread
+              for page in thread_pages
+              for thread in page["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+          ]
+          if pull["reviewThreads"]["pageInfo"]["hasNextPage"]:
+              raise SystemExit("合并前评审线程分页未完整读取")
+          if pull.get("reviewDecision") == "CHANGES_REQUESTED":
+              raise SystemExit("合并前新增CHANGES_REQUESTED")
+          if any(not thread["isResolved"] for thread in threads):
+              raise SystemExit("合并前新增未解决评审线程")
+          check_runs = [
+              check for page in check_pages for check in page.get("check_runs", [])
+          ]
+          latest_checks = {}
+          for check in sorted(check_runs, key=lambda item: (item.get("started_at") or "", item.get("id") or 0)):
+              app = check.get("app") or {}
+              key = (str(app.get("slug") or app.get("id") or ""), check.get("name") or "")
+              latest_checks[key] = check
+          relevant = [
+              check
+              for check in latest_checks.values()
+              if check.get("name") == "验证自动合并资格"
+          ]
+          if not relevant:
+              raise SystemExit("合并前缺少当前头提交资格检查")
+          if any(
+              check.get("status") != "completed"
+              or check.get("conclusion") != "success"
+              for check in relevant
+          ):
+              raise SystemExit("合并前自动合并资格检查不是success")
+          if any(
+              check.get("status") != "completed"
+              or check.get("conclusion") not in {"success", "neutral", "skipped"}
+              for check in latest_checks.values()
+          ):
+              raise SystemExit("合并前当前提交检查发生变化")
+          checks = (
+              (pull_request["state"] == "open", "合并前PR已关闭"),
+              (not pull_request["draft"], "合并前PR已变为草稿"),
+              (pull_request["base"]["sha"] == os.environ["BASE_SHA"], "合并前main基线发生变化"),
+              (pull_request["head"]["sha"] == os.environ["HEAD_SHA"], "合并前头提交发生变化"),
+              (pull_request["mergeable"] is True, "合并前GitHub未确认可合并"),
+              (pull_request["mergeable_state"] == "clean", "合并前PR状态不清洁"),
           )
+          failures = [message for passed, message in checks if not passed]
+          if failures:
+              raise SystemExit("；".join(failures))
+          PY
+          gh api --method PUT "repos/${REPOSITORY}/pulls/${PR_NUMBER}/merge" \
+            -f sha="$HEAD_SHA" -f merge_method=merge > "$MERGE_PATH"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          result = json.loads(Path(os.environ["MERGE_PATH"]).read_text(encoding="utf-8"))
           if result.get("merged") is not True:
               raise SystemExit(result.get("message", "GitHub未完成合并"))
-          with Path(os.environ["GITHUB_OUTPUT"]).open(
-              "a",
-              encoding="utf-8",
-          ) as output:
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
               output.write(f"merge_sha={result['sha']}\n")
           PY
 
@@ -224,7 +328,5 @@ jobs:
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           MERGE_SHA: ${{ steps.merge.outputs.merge_sha }}
         run: |
-          gh api \
-            --method POST \
-            "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
-            -f body="自动合并完成。批准提交：${HEAD_SHA}；合并提交：${MERGE_SHA}。"
+          gh api --method POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            -f body="子智能体评审闭环自动合并完成。评审提交：${HEAD_SHA}；合并提交：${MERGE_SHA}。"

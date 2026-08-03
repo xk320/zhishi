@@ -212,7 +212,26 @@ class TaskContractTests(unittest.TestCase):
             "`e138bd589a5bde38c81f48d38b7c449f6f13df37`",
         )
         self.assertEqual(metadata(task_28, "合并时间"), "2026-08-03 07:30:24 +0800")
-        self.assertEqual(metadata(text, "状态"), "待执行")
+        task_38_status = metadata(text, "状态")
+        self.assertIn(task_38_status, {"待评审", "已完成"})
+        self.assertEqual(
+            metadata(text, "执行分支"),
+            "`codex/000038-agent-review-auto-merge-implementation-v1`",
+        )
+        self.assertEqual(metadata(text, "开始时间"), "2026-08-03 07:42:38 +0800")
+        self.assertEqual(
+            metadata(text, "Pull Request"),
+            "[#40](https://github.com/xk320/zhishi/pull/40)",
+        )
+        if task_38_status == "已完成":
+            self.assertRegex(
+                metadata(text, "合并提交SHA") or "",
+                r"^`[0-9a-f]{40}`$",
+            )
+            self.assertRegex(
+                metadata(text, "合并时间") or "",
+                r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4}$",
+            )
         self.assertEqual(metadata(text, "类型"), "治理")
         self.assertEqual(metadata(text, "方案状态"), "已批准执行")
         self.assertIn("唯一前序依赖：任务-000028已", text)
@@ -241,7 +260,7 @@ class TaskContractTests(unittest.TestCase):
         roadmap = (ROOT / "docs/路线图/第一阶段路线图.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("当前先执行任务-000038", plan)
+        self.assertIn("固定依赖链为：任务-000038", plan)
         self.assertIn("任务-000029至任务-000037", plan)
         self.assertNotIn("当前按任务-000028至任务-000037", plan)
         self.assertIn("任务-000038建立自动评审", roadmap)
@@ -302,7 +321,13 @@ class TaskContractTests(unittest.TestCase):
             self.assertIn(task_id, tasks, f"缺少{task_id}任务文件")
             _, title, text = tasks[task_id]
             self.assertEqual(title, expected_title)
-            self.assertEqual(metadata(text, "状态"), "阻塞")
+            expected_status = (
+                "待执行"
+                if task_id == "任务-000029"
+                and metadata(tasks["任务-000038"][2], "状态") == "已完成"
+                else "阻塞"
+            )
+            self.assertEqual(metadata(text, "状态"), expected_status)
             self.assertEqual(metadata(text, "方案状态"), "已批准执行")
             self.assertEqual(
                 metadata(text, "执行授权"),
