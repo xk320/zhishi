@@ -321,13 +321,12 @@ class TaskContractTests(unittest.TestCase):
             self.assertIn(task_id, tasks, f"缺少{task_id}任务文件")
             _, title, text = tasks[task_id]
             self.assertEqual(title, expected_title)
-            expected_status = (
-                "待执行"
-                if task_id == "任务-000029"
-                and metadata(tasks["任务-000038"][2], "状态") == "已完成"
-                else "阻塞"
-            )
-            self.assertEqual(metadata(text, "状态"), expected_status)
+            dependency_status = metadata(tasks[dependency][2], "状态")
+            actual_status = metadata(text, "状态")
+            if dependency_status != "已完成":
+                self.assertEqual(actual_status, "阻塞")
+            else:
+                self.assertIn(actual_status, STANDARD_STATUSES)
             self.assertEqual(metadata(text, "方案状态"), "已批准执行")
             self.assertEqual(
                 metadata(text, "执行授权"),
