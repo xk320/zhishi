@@ -5,6 +5,7 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from types import ModuleType
 
@@ -78,6 +79,8 @@ def valid_evidence() -> dict[str, object]:
             "memory_pressure": "normal",
             "memory_available_percent": 62.5,
             "disk_available_gib": 7.2,
+            "measured_at": "2026-08-03T07:59:00+08:00",
+            "head_sha": "b" * 40,
         },
     }
 
@@ -100,6 +103,7 @@ class ReviewEvidenceTests(unittest.TestCase):
             pr_number=40,
             base_sha="a" * 40,
             head_sha="b" * 40,
+            current_time=datetime.fromisoformat("2026-08-03T08:05:00+08:00"),
         )
 
     def test_两个独立角色且无阻断时通过(self):
@@ -229,6 +233,36 @@ class ReviewEvidenceTests(unittest.TestCase):
         self.assertFalse(result.valid)
         self.assertIn("验证记录未绑定当前头提交", result.reasons)
         self.assertIn("验证命令存在非零退出码", result.reasons)
+
+    def test_rfc3339允许utc_z时间(self):
+        evidence = valid_evidence()
+        reviews = evidence["reviews"]
+        assert isinstance(reviews, list)
+        reviews[0]["reviewed_at"] = "2026-08-03T00:00:00Z"
+        validation = evidence["validation"]
+        assert isinstance(validation, dict)
+        validation["completed_at"] = "2026-08-03T00:02:00Z"
+
+        result = self.validate(evidence)
+
+        self.assertTrue(result.valid, result.reasons)
+
+    def test_评审验证与资源时间必须有序且新鲜(self):
+        evidence = valid_evidence()
+        reviews = evidence["reviews"]
+        assert isinstance(reviews, list)
+        reviews[1]["reviewed_at"] = "2026-08-03T08:04:00+08:00"
+        resource = evidence["resource_policy"]
+        assert isinstance(resource, dict)
+        resource["head_sha"] = "c" * 40
+        resource["measured_at"] = "2026-08-01T08:00:00+08:00"
+
+        result = self.validate(evidence)
+
+        self.assertFalse(result.valid)
+        self.assertIn("主执行器验证时间早于评审时间", result.reasons)
+        self.assertIn("资源测量未绑定当前头提交", result.reasons)
+        self.assertIn("资源测量与验证时间顺序或新鲜度无效", result.reasons)
 
 
 if __name__ == "__main__":

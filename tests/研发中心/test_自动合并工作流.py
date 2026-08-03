@@ -135,6 +135,19 @@ class MergeWorkflowTests(unittest.TestCase):
         self.assertIn("scripts/研发中心/验证自动评审证据.py", self.text)
         self.assertIn('-f sha="$HEAD_SHA"', self.text)
 
+    def test_合并api前立即重取评审线程检查和pr状态(self):
+        merge_block = self.text.split(
+            "- name: 合并评审通过的精确提交", maxsplit=1
+        )[1].split("- name: 写入自动合并审计评论", maxsplit=1)[0]
+        self.assertIn("reviewDecision", merge_block)
+        self.assertIn("reviewThreads", merge_block)
+        self.assertIn("check-runs?per_page=100", merge_block)
+        self.assertIn("mergeable_state", merge_block)
+        self.assertLess(
+            merge_block.index("reviewDecision"),
+            merge_block.index('pulls/${PR_NUMBER}/merge'),
+        )
+
     def test_只运行main上的可信脚本(self):
         self.assertIn(PINNED_CHECKOUT, self.text)
         self.assertIn("ref: main", self.text)
@@ -189,6 +202,11 @@ class MergeWorkflowTests(unittest.TestCase):
         self.assertIn("$endCursor:String", self.text)
         self.assertIn("latest_reviews", self.text)
         self.assertIn("submitted_at", self.text)
+        self.assertIn(
+            'review.get("state") not in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}',
+            self.text,
+        )
+        self.assertNotIn('review.get("state") in {"COMMENTED"}', self.text)
         self.assertIn("latest_checks", self.text)
         self.assertIn("started_at", self.text)
 
@@ -202,6 +220,7 @@ class MergeWorkflowTests(unittest.TestCase):
         self.assertTrue(
             all("github.event.inputs.review_evidence" not in block for block in run_blocks)
         )
+        self.assertTrue(all("${{ inputs." not in block for block in run_blocks))
 
 
 if __name__ == "__main__":

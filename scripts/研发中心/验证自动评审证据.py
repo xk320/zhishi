@@ -8,7 +8,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -57,6 +57,8 @@ RESOURCE_FIELDS = frozenset(
         "memory_pressure",
         "memory_available_percent",
         "disk_available_gib",
+        "measured_at",
+        "head_sha",
     }
 )
 SENSITIVE_TEXT = re.compile(
@@ -91,13 +93,22 @@ def _safe_number(value: object) -> float | None:
 
 
 def _valid_rfc3339(value: object) -> bool:
-    if not isinstance(value, str) or value.endswith("Z"):
+    if not isinstance(value, str):
         return False
     try:
-        parsed = datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(
+            f"{value[:-1]}+00:00" if value.endswith("Z") else value
+        )
     except ValueError:
         return False
     return parsed.tzinfo is not None and parsed.utcoffset() is not None
+
+
+def _parse_rfc3339(value: object) -> datetime | None:
+    if not _valid_rfc3339(value):
+        return None
+    assert isinstance(value, str)
+    return datetime.fromisoformat(f"{value[:-1]}+00:00" if value.endswith("Z") else value)
 
 
 def _exact_fields(
@@ -118,6 +129,7 @@ def validate_evidence(
     pr_number: int,
     base_sha: str,
     head_sha: str,
+    current_time: datetime | None = None,
 ) -> EvidenceResult:
     """验证评审身份、逐项绑定、验证结果和实测资源预算。"""
 
@@ -151,6 +163,7 @@ def validate_evidence(
     roles: list[str] = []
     reviewer_ids: list[str] = []
     run_ids: list[str] = []
+    review_times: list[datetime] = []
     for review in reviews:
         if not isinstance(review, Mapping):
             _append_reason(reasons, "评审记录结构无效")
@@ -190,8 +203,11 @@ def validate_evidence(
             or review.get("reviewed_head_sha") != head_sha
         ):
             _append_reason(reasons, "评审记录未绑定当前base/head SHA")
-        if not _valid_rfc3339(review.get("reviewed_at")):
+        reviewed_at = _parse_rfc3339(review.get("reviewed_at"))
+        if reviewed_at is None:
             _append_reason(reasons, "评审时间必须为带时区RFC3339")
+        else:
+            review_times.append(reviewed_at)
 
         p0 = _safe_integer(review.get("p0"))
         p1 = _safe_integer(review.get("p1"))
@@ -255,8 +271,11 @@ def validate_evidence(
         _append_reason(reasons, "主执行器验证未通过")
     if validation.get("head_sha") != head_sha:
         _append_reason(reasons, "验证记录未绑定当前头提交")
-    if not _valid_rfc3339(validation.get("completed_at")):
+    completed_at = _parse_rfc3339(validation.get("completed_at"))
+    if completed_at is None:
         _append_reason(reasons, "验证完成时间必须为带时区RFC3339")
+    elif any(reviewed_at > completed_at for reviewed_at in review_times):
+        _append_reason(reasons, "主执行器验证时间早于评审时间")
     commands = validation.get("commands")
     if not isinstance(commands, list) or not commands:
         _append_reason(reasons, "缺少实际验证命令")
@@ -312,6 +331,24 @@ def validate_evidence(
     available_disk = _safe_number(resource.get("disk_available_gib"))
     if available_disk is None or available_disk < 5:
         _append_reason(reasons, "可用磁盘低于5 GiB")
+    if resource.get("head_sha") != head_sha:
+        _append_reason(reasons, "资源测量未绑定当前头提交")
+    measured_at = _parse_rfc3339(resource.get("measured_at"))
+    if measured_at is None:
+        _append_reason(reasons, "资源测量时间必须为带时区RFC3339")
+    elif completed_at is not None and (
+        measured_at > completed_at or completed_at - measured_at > timedelta(hours=24)
+    ):
+        _append_reason(reasons, "资源测量与验证时间顺序或新鲜度无效")
+
+    now = current_time or datetime.now().astimezone()
+    if now.tzinfo is None or now.utcoffset() is None:
+        _append_reason(reasons, "当前时间缺少时区")
+    elif completed_at is not None and (
+        completed_at > now + timedelta(minutes=5)
+        or now - completed_at > timedelta(hours=24)
+    ):
+        _append_reason(reasons, "验证证据时间过期或来自未来")
 
     return EvidenceResult(valid=not reasons, reasons=tuple(reasons))
 

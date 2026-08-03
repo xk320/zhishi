@@ -175,6 +175,8 @@ jobs:
               raise SystemExit("存在未解决评审线程")
           latest_reviews = {}
           for review in sorted(reviews, key=lambda item: (item.get("submitted_at") or "", item.get("id") or 0)):
+              if review.get("state") not in {"APPROVED", "CHANGES_REQUESTED", "DISMISSED"}:
+                  continue
               user = review.get("user") or {}
               reviewer = str(user.get("id") or user.get("login") or "")
               if reviewer:
@@ -231,8 +233,76 @@ jobs:
         id: merge
         env:
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
           MERGE_PATH: ${{ runner.temp }}/merge-result.json
+          FINAL_PR_PATH: ${{ runner.temp }}/final-pull-request.json
+          FINAL_THREADS_PATH: ${{ runner.temp }}/final-review-threads.json
+          FINAL_CHECKS_PATH: ${{ runner.temp }}/final-check-runs.json
         run: |
+          gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" > "$FINAL_PR_PATH"
+          gh api --paginate --slurp \
+            -H "Accept: application/vnd.github+json" \
+            "repos/${REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100" \
+            > "$FINAL_CHECKS_PATH"
+          gh api graphql --paginate --slurp \
+            -f query='query($owner:String!,$name:String!,$number:Int!,$endCursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewDecision reviewThreads(first:100,after:$endCursor){nodes{isResolved}pageInfo{hasNextPage,endCursor}}}}}' \
+            -f owner='xk320' -f name='zhishi' -F number="$PR_NUMBER" \
+            > "$FINAL_THREADS_PATH"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          pull_request = json.loads(Path(os.environ["FINAL_PR_PATH"]).read_text(encoding="utf-8"))
+          thread_pages = json.loads(Path(os.environ["FINAL_THREADS_PATH"]).read_text(encoding="utf-8"))
+          check_pages = json.loads(Path(os.environ["FINAL_CHECKS_PATH"]).read_text(encoding="utf-8"))
+          pull = thread_pages[-1]["data"]["repository"]["pullRequest"] if thread_pages else None
+          if pull is None:
+              raise SystemExit("合并前无法重新读取评审状态")
+          threads = [
+              thread
+              for page in thread_pages
+              for thread in page["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+          ]
+          if pull["reviewThreads"]["pageInfo"]["hasNextPage"]:
+              raise SystemExit("合并前评审线程分页未完整读取")
+          if pull.get("reviewDecision") == "CHANGES_REQUESTED":
+              raise SystemExit("合并前新增CHANGES_REQUESTED")
+          if any(not thread["isResolved"] for thread in threads):
+              raise SystemExit("合并前新增未解决评审线程")
+          check_runs = [
+              check for page in check_pages for check in page.get("check_runs", [])
+          ]
+          latest_checks = {}
+          for check in sorted(check_runs, key=lambda item: (item.get("started_at") or "", item.get("id") or 0)):
+              app = check.get("app") or {}
+              key = (str(app.get("slug") or app.get("id") or ""), check.get("name") or "")
+              latest_checks[key] = check
+          relevant = [
+              check
+              for check in latest_checks.values()
+              if check.get("name") == "验证自动合并资格"
+          ]
+          if not relevant:
+              raise SystemExit("合并前缺少当前头提交资格检查")
+          if any(
+              check.get("status") != "completed"
+              or check.get("conclusion") not in {"success", "neutral", "skipped"}
+              for check in latest_checks.values()
+          ):
+              raise SystemExit("合并前当前提交检查发生变化")
+          checks = (
+              (pull_request["state"] == "open", "合并前PR已关闭"),
+              (not pull_request["draft"], "合并前PR已变为草稿"),
+              (pull_request["base"]["sha"] == os.environ["BASE_SHA"], "合并前main基线发生变化"),
+              (pull_request["head"]["sha"] == os.environ["HEAD_SHA"], "合并前头提交发生变化"),
+              (pull_request["mergeable"] is True, "合并前GitHub未确认可合并"),
+              (pull_request["mergeable_state"] == "clean", "合并前PR状态不清洁"),
+          )
+          failures = [message for passed, message in checks if not passed]
+          if failures:
+              raise SystemExit("；".join(failures))
+          PY
           gh api --method PUT "repos/${REPOSITORY}/pulls/${PR_NUMBER}/merge" \
             -f sha="$HEAD_SHA" -f merge_method=merge > "$MERGE_PATH"
           python3 - <<'PY'

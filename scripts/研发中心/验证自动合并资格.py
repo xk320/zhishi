@@ -30,6 +30,24 @@ TASK_TITLE_PATTERN = re.compile(r"^# 任务-\d{6}：(.+)$", re.MULTILINE)
 BOARD_TASK_ROW_PATTERN = re.compile(
     r"^\|\s*(?:P[0-3]\s*\|\s*)?任务-(\d{6})\s*\|"
 )
+BOARD_TABLE_SCHEMA = {
+    "待执行": (
+        "| 优先级 | 任务 | 名称 | 唯一前序依赖 |",
+        "| --- | --- | --- | --- |",
+    ),
+    "阻塞": (
+        "| 优先级 | 任务 | 名称 | 唯一前序依赖 | 阻塞原因 |",
+        "| --- | --- | --- | --- | --- |",
+    ),
+    "待评审": (
+        "| 优先级 | 任务 | 名称 | 分支 | PR |",
+        "| --- | --- | --- | --- | --- |",
+    ),
+    "已完成": (
+        "| 任务 | 名称 | 完成证据 |",
+        "| --- | --- | --- |",
+    ),
+}
 AUTOMATION_SCOPE_PATTERN = re.compile(r"^- 自动合并范围：(.+)$", re.MULTILINE)
 MERGE_SHA_PATTERN = re.compile(
     r"^- 合并提交SHA：`([0-9a-f]{40})`$", re.MULTILINE
@@ -168,14 +186,44 @@ def _append_reason(reasons: list[str], reason: str) -> None:
         reasons.append(reason)
 
 
-def _without_mutable_lines(text: str, prefixes: Sequence[str]) -> tuple[str, ...]:
-    """移除状态闭环唯一允许变化的行，其余合同必须逐行不变。"""
+def _without_mutable_metadata_lines(
+    text: str, prefixes: Sequence[str]
+) -> tuple[str, ...]:
+    """只移除任务头部允许变化的唯一元数据行。"""
 
+    lines = text.splitlines()
+    first_section = next(
+        (index for index, line in enumerate(lines) if line.startswith("## ")),
+        len(lines),
+    )
     return tuple(
         line
-        for line in text.splitlines()
-        if not any(line.startswith(prefix) for prefix in prefixes)
+        for index, line in enumerate(lines)
+        if not (
+            index < first_section
+            and any(line.startswith(prefix) for prefix in prefixes)
+        )
     )
+
+
+def _has_unique_metadata_fields(
+    text: str,
+    expected_counts: Mapping[str, int],
+) -> bool:
+    lines = text.splitlines()
+    first_section = next(
+        (index for index, line in enumerate(lines) if line.startswith("## ")),
+        len(lines),
+    )
+    for prefix, expected_count in expected_counts.items():
+        locations = [
+            index for index, line in enumerate(lines) if line.startswith(prefix)
+        ]
+        if len(locations) != expected_count or any(
+            index >= first_section for index in locations
+        ):
+            return False
+    return True
 
 
 def _task_merge_fact(text: str) -> MergeFact | None:
@@ -221,13 +269,41 @@ def _board_static_lines(text: str) -> tuple[str, ...]:
         stripped = line.strip()
         if stripped == "无。" or BOARD_TASK_ROW_PATTERN.match(line):
             continue
-        if line.startswith("|") and (
-            "任务" in line
-            or re.fullmatch(r"\|[\s:|\-]+\|", line) is not None
-        ):
+        known_schema_lines = {
+            schema_line
+            for schema in BOARD_TABLE_SCHEMA.values()
+            for schema_line in schema
+        }
+        if line in known_schema_lines:
             continue
         static.append(line)
     return tuple(static)
+
+
+def _board_schema_is_valid(text: str) -> bool:
+    current_section = ""
+    schema_counts: dict[str, dict[str, int]] = {}
+    task_sections: set[str] = set()
+    for line in text.splitlines():
+        if line.startswith("## "):
+            current_section = line[3:].strip()
+            continue
+        if not line.startswith("|"):
+            continue
+        if BOARD_TASK_ROW_PATTERN.match(line):
+            task_sections.add(current_section)
+            continue
+        schema = BOARD_TABLE_SCHEMA.get(current_section)
+        if schema is None or line not in schema:
+            return False
+        counts = schema_counts.setdefault(current_section, {})
+        counts[line] = counts.get(line, 0) + 1
+    for section in task_sections:
+        schema = BOARD_TABLE_SCHEMA.get(section)
+        counts = schema_counts.get(section, {})
+        if schema is None or any(counts.get(line) != 1 for line in schema):
+            return False
+    return all(count <= 1 for counts in schema_counts.values() for count in counts.values())
 
 
 def _validate_board_closure(
@@ -243,6 +319,8 @@ def _validate_board_closure(
     if base_board is None or head_board is None:
         _append_reason(reasons, "合并后状态闭环缺少可复算看板")
         return
+    if not _board_schema_is_valid(base_board) or not _board_schema_is_valid(head_board):
+        _append_reason(reasons, "合并后状态闭环看板表格结构无效")
     if _board_static_lines(base_board) != _board_static_lines(head_board):
         _append_reason(reasons, "合并后状态闭环夹带看板结构改写")
     base_rows = _board_rows(base_board)
@@ -375,9 +453,18 @@ def _validate_state_closure(
                     reasons,
                     f"任务-{task_id}合并证据与main真实事实不一致",
                 )
-            if _without_mutable_lines(
+            fields_valid = _has_unique_metadata_fields(
+                base_task,
+                {"- 状态：": 1, "- 合并时间：": 0, "- 合并提交SHA：": 0},
+            ) and _has_unique_metadata_fields(
+                head_task,
+                {"- 状态：": 1, "- 合并时间：": 1, "- 合并提交SHA：": 1},
+            )
+            if not fields_valid or _without_mutable_metadata_lines(
                 base_task, COMPLETION_MUTABLE_PREFIXES
-            ) != _without_mutable_lines(head_task, COMPLETION_MUTABLE_PREFIXES):
+            ) != _without_mutable_metadata_lines(
+                head_task, COMPLETION_MUTABLE_PREFIXES
+            ):
                 _append_reason(reasons, f"任务-{task_id}状态闭环夹带合同改写")
         if (old_status, new_status) == ("阻塞", "待执行"):
             unlocked += 1
@@ -396,9 +483,19 @@ def _validate_state_closure(
                 reasons,
                 f"任务-{task_id}不是任务-{completed_task_id or '未知'}的唯一后继",
             )
-        if _without_mutable_lines(
+        expected_fields = {
+            "- 状态：": 1,
+            "- 当前阻塞原因：": 1,
+            "- 解除条件：": 1,
+        }
+        fields_valid = _has_unique_metadata_fields(
+            base_task, expected_fields
+        ) and _has_unique_metadata_fields(head_task, expected_fields)
+        if not fields_valid or _without_mutable_metadata_lines(
             base_task, SUCCESSOR_MUTABLE_PREFIXES
-        ) != _without_mutable_lines(head_task, SUCCESSOR_MUTABLE_PREFIXES):
+        ) != _without_mutable_metadata_lines(
+            head_task, SUCCESSOR_MUTABLE_PREFIXES
+        ):
             _append_reason(reasons, f"任务-{task_id}状态闭环夹带合同改写")
         expected_blocker = (
             f"- 当前阻塞原因：无；任务-{completed_task_id}已完成。"

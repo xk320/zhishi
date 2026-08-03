@@ -71,23 +71,39 @@ def task_text(
 
 
 def closure_board(*, completed: bool) -> str:
+    pending_schema = (
+        "| 优先级 | 任务 | 名称 | 唯一前序依赖 |\n"
+        "| --- | --- | --- | --- |\n"
+    )
+    blocked_schema = (
+        "| 优先级 | 任务 | 名称 | 唯一前序依赖 | 阻塞原因 |\n"
+        "| --- | --- | --- | --- | --- |\n"
+    )
+    review_schema = (
+        "| 优先级 | 任务 | 名称 | 分支 | PR |\n"
+        "| --- | --- | --- | --- | --- |\n"
+    )
+    done_schema = (
+        "| 任务 | 名称 | 完成证据 |\n"
+        "| --- | --- | --- |\n"
+    )
     if completed:
-        pending = (
+        pending = pending_schema + (
             "| P1 | 任务-000014 | 建立 PR 自动合并策略与审批规则 | 000013 |"
         )
         blocked = "无。"
         review = "无。"
-        done = (
+        done = done_schema + (
             "| 任务-000013 | 建立 PR 自动合并策略与审批规则 | "
             "PR #40；合并提交 `0123456789abcdef0123456789abcdef01234567` |"
         )
     else:
         pending = "无。"
-        blocked = (
+        blocked = blocked_schema + (
             "| P1 | 任务-000014 | 建立 PR 自动合并策略与审批规则 | "
             "000013 | 任务-000013尚未完成 |"
         )
-        review = (
+        review = review_schema + (
             "| P1 | 任务-000013 | 建立 PR 自动合并策略与审批规则 | "
             "branch | PR #40 |"
         )
@@ -439,6 +455,51 @@ class AutoMergeEligibilityTests(unittest.TestCase):
 
         self.assertEqual("已完成", rows["000001"][0])
         self.assertNotIn("000003", rows)
+
+    def test_看板表格拒绝无法解析的夹带行(self):
+        board = closure_board(completed=True).replace(
+            "| 任务 | 名称 | 完成证据 |",
+            "| 任务 | 名称 | 完成证据 |\n| 伪造任务状态 | 任意夹带内容 |",
+        )
+
+        self.assertFalse(self.policy._board_schema_is_valid(board))
+
+    def test_状态闭环拒绝在合同正文伪装可变元数据(self):
+        body = (
+            "## 关联任务\n\n- 任务-000013\n- 任务-000014\n\n"
+            "## 变更类型\n\n- 合并后状态闭环\n"
+        )
+        result = self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/任务/任务-000014.md",
+                "docs/研发中心/看板.md",
+            ],
+            pr_body=body,
+            base_tasks={
+                "000013": task_text(status="待评审"),
+                "000014": task_text(status="阻塞", dependency="000013"),
+            },
+            head_tasks={
+                "000013": task_text(
+                    status="已完成",
+                    extra_contract="## 输出合同\n\n- 状态：伪装夹带\n",
+                ),
+                "000014": task_text(status="待执行", dependency="000013"),
+            },
+            merge_facts={
+                "000013": self.policy.MergeFact(
+                    sha="0123456789abcdef0123456789abcdef01234567",
+                    merged_at="2026-08-03 08:00:00 +0800",
+                    pr_number=40,
+                )
+            },
+            base_board=closure_board(completed=False),
+            head_board=closure_board(completed=True),
+        )
+
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000013状态闭环夹带合同改写", result.reasons)
 
     def test_nul路径解析保留中文路径(self):
         paths = self.policy.parse_nul_paths(
