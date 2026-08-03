@@ -431,6 +431,15 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         self.assertIn("合并后状态闭环夹带看板结构改写", result.reasons)
         self.assertIn("任务-000013的看板证据行不可复算", result.reasons)
 
+    def test_看板任务行中的其他任务引用不影响主键(self):
+        rows = self.policy._board_rows(
+            "## 已完成\n\n"
+            "| 任务-000001 | 总任务 | 拆分为任务-000003至任务-000006 |\n"
+        )
+
+        self.assertEqual("已完成", rows["000001"][0])
+        self.assertNotIn("000003", rows)
+
     def test_nul路径解析保留中文路径(self):
         paths = self.policy.parse_nul_paths(
             "docs/研发中心/看板.md\0docs/治理/PR自动合并策略.md\0".encode()

@@ -27,6 +27,9 @@ TASK_TYPE_PATTERN = re.compile(r"^- 类型：(.+)$", re.MULTILINE)
 TASK_STATUS_PATTERN = re.compile(r"^- 状态：(.+)$", re.MULTILINE)
 TASK_PRIORITY_PATTERN = re.compile(r"^- 优先级：(.+)$", re.MULTILINE)
 TASK_TITLE_PATTERN = re.compile(r"^# 任务-\d{6}：(.+)$", re.MULTILINE)
+BOARD_TASK_ROW_PATTERN = re.compile(
+    r"^\|\s*(?:P[0-3]\s*\|\s*)?任务-(\d{6})\s*\|"
+)
 AUTOMATION_SCOPE_PATTERN = re.compile(r"^- 自动合并范围：(.+)$", re.MULTILINE)
 MERGE_SHA_PATTERN = re.compile(
     r"^- 合并提交SHA：`([0-9a-f]{40})`$", re.MULTILINE
@@ -198,10 +201,10 @@ def _board_rows(text: str) -> dict[str, tuple[str, str]]:
         if line.startswith("## "):
             current_section = line[3:].strip()
             continue
-        matches = re.findall(r"任务-(\d{6})", line)
-        if not line.startswith("|") or len(matches) != 1:
+        match = BOARD_TASK_ROW_PATTERN.match(line)
+        if match is None:
             continue
-        task_id = matches[0]
+        task_id = match.group(1)
         if task_id in rows:
             duplicates.add(task_id)
         rows[task_id] = (current_section, line)
@@ -213,11 +216,18 @@ def _board_rows(text: str) -> dict[str, tuple[str, str]]:
 def _board_static_lines(text: str) -> tuple[str, ...]:
     """保留看板非表格、非空态的静态结构。"""
 
-    return tuple(
-        line
-        for line in text.splitlines()
-        if not line.startswith("|") and line.strip() != "无。"
-    )
+    static: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == "无。" or BOARD_TASK_ROW_PATTERN.match(line):
+            continue
+        if line.startswith("|") and (
+            "任务" in line
+            or re.fullmatch(r"\|[\s:|\-]+\|", line) is not None
+        ):
+            continue
+        static.append(line)
+    return tuple(static)
 
 
 def _validate_board_closure(

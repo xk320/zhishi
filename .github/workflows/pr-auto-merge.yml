@@ -181,7 +181,13 @@ jobs:
                   latest_reviews[reviewer] = review
           if any(review.get("state") == "CHANGES_REQUESTED" for review in latest_reviews.values()):
               raise SystemExit("存在CHANGES_REQUESTED评审")
-          relevant = [check for check in check_runs if check["name"] == "验证自动合并资格"]
+          latest_checks = {}
+          for check in sorted(check_runs, key=lambda item: (item.get("started_at") or "", item.get("id") or 0)):
+              app = check.get("app") or {}
+              key = (str(app.get("slug") or app.get("id") or ""), check.get("name") or "")
+              latest_checks[key] = check
+          current_checks = list(latest_checks.values())
+          relevant = [check for check in current_checks if check["name"] == "验证自动合并资格"]
           if not relevant or any(
               check["status"] != "completed" or check["conclusion"] != "success"
               for check in relevant
@@ -190,7 +196,7 @@ jobs:
           allowed = {"success", "neutral", "skipped"}
           if any(
               check["status"] != "completed" or check["conclusion"] not in allowed
-              for check in check_runs
+              for check in current_checks
           ):
               raise SystemExit("当前头提交仍有未完成或失败检查")
           PY

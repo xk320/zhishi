@@ -189,6 +189,8 @@ class MergeWorkflowTests(unittest.TestCase):
         self.assertIn("$endCursor:String", self.text)
         self.assertIn("latest_reviews", self.text)
         self.assertIn("submitted_at", self.text)
+        self.assertIn("latest_checks", self.text)
+        self.assertIn("started_at", self.text)
 
     def test_没有浮动action版本或把输入直接拼进run(self):
         self.assertIsNone(
