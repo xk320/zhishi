@@ -148,11 +148,14 @@ SENSITIVE_TEXT_PATTERNS = (
     re.compile(
         r"(?<![\w])(?:"
         r'"(?:password|passwd|secret|token|client_secret|api_key|access_key|'
-        r'account_id|account_number|wallet_address|endpoint|base_url|production_url)"|'
+        r'account_id|account_number|wallet_address|endpoint|base_url|production_url|'
+        r'url|rpc_url|rpc_endpoint|host|websocket_url|ws_url)"|'
         r"'(?:password|passwd|secret|token|client_secret|api_key|access_key|"
-        r"account_id|account_number|wallet_address|endpoint|base_url|production_url)'|"
+        r"account_id|account_number|wallet_address|endpoint|base_url|production_url|"
+        r"url|rpc_url|rpc_endpoint|host|websocket_url|ws_url)'|"
         r"(?:password|passwd|secret|token|client_secret|api_key|access_key|"
-        r"account_id|account_number|wallet_address|endpoint|base_url|production_url)"
+        r"account_id|account_number|wallet_address|endpoint|base_url|production_url|"
+        r"url|rpc_url|rpc_endpoint|host|websocket_url|ws_url)"
         r")\s*[:=]\s*(?:\"[^\"\r\n]+\"|'[^'\r\n]+'|[^\s,}\]\r\n#]+)",
         re.IGNORECASE,
     ),
@@ -179,6 +182,8 @@ CONTROLLED_PATH_DENY_STEMS = frozenset(
         "prod",
         "trading",
         "trade",
+        "order",
+        "orders",
         "live",
         "secret",
         "secrets",
@@ -662,12 +667,17 @@ def _is_controlled_rd_path(path: str) -> bool:
         return False
     root = pure_path.parts[0]
     suffix = pure_path.suffix.lower()
-    if any(
-        part.casefold() in CONTROLLED_PATH_DENY_STEMS
-        or PurePosixPath(part).stem.casefold() in CONTROLLED_PATH_DENY_STEMS
-        for part in pure_path.parts[1:]
-    ):
-        return False
+    for index, part in enumerate(pure_path.parts[1:], start=1):
+        stem = PurePosixPath(part).stem.casefold()
+        if stem not in CONTROLLED_PATH_DENY_STEMS and part.casefold() not in CONTROLLED_PATH_DENY_STEMS:
+            continue
+        simulator_order = (
+            stem in {"order", "orders"}
+            and "模拟" in pure_path.parts
+            and "交易所" in pure_path.parts
+        )
+        if not simulator_order:
+            return False
     if root == "docs":
         return suffix == ".md"
     if root == "config":
@@ -765,7 +775,7 @@ def _contains_unsafe_text(text: str) -> bool:
 
     return any(
         (ord(character) < 32 and character not in "\t\n\r")
-        or ord(character) == 127
+        or 0x7F <= ord(character) <= 0x9F
         for character in text
     )
 

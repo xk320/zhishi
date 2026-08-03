@@ -1194,6 +1194,7 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             "scripts/生产/迁移.py",
             "scripts/生产环境/deploy.py",
             "scripts/deploy.py",
+            "scripts/order.py",
             "scripts/真实交易.py",
             "config/生产/production.yaml",
             "config/production.yaml",
@@ -1243,24 +1244,26 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         self.assertTrue(result.eligible, result.reasons)
 
     def test_受控研发拒绝二进制控制字符(self):
-        result = self.evaluate(
-            changed_paths=[
-                "src/研究/信号.py",
-                "docs/研发中心/任务/任务-000013.md",
-            ],
-            base_tasks={
-                "000013": task_text(status="待执行", task_type="研究工程")
-            },
-            head_tasks={
-                "000013": task_text(status="待评审", task_type="研究工程")
-            },
-            path_facts=[
-                self.path_fact("src/研究/信号.py", text="\x00"),
-                self.path_fact("docs/研发中心/任务/任务-000013.md"),
-            ],
-        )
-        self.assertFalse(result.eligible)
-        self.assertIn("变更文本不是安全文本", result.reasons)
+        for value in ("\x00", "\u0085", "\u009f"):
+            with self.subTest(value=repr(value)):
+                result = self.evaluate(
+                    changed_paths=[
+                        "src/研究/信号.py",
+                        "docs/研发中心/任务/任务-000013.md",
+                    ],
+                    base_tasks={
+                        "000013": task_text(status="待执行", task_type="研究工程")
+                    },
+                    head_tasks={
+                        "000013": task_text(status="待评审", task_type="研究工程")
+                    },
+                    path_facts=[
+                        self.path_fact("src/研究/信号.py", text=value),
+                        self.path_fact("docs/研发中心/任务/任务-000013.md"),
+                    ],
+                )
+                self.assertFalse(result.eligible)
+                self.assertIn("变更文本不是安全文本", result.reasons)
 
     def test_不可变证据产物不得修改(self):
         result = self.evaluate(
@@ -1286,6 +1289,8 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         for text in (
             "account_id: real-123",
             "endpoint: https://production.example.invalid/api",
+            "url: https://production.example.invalid/api",
+            "rpc_url: https://production.example.invalid/ws",
         ):
             with self.subTest(text=text):
                 result = self.evaluate(
