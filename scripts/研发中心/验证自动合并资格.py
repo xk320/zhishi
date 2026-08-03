@@ -59,6 +59,10 @@ BOARD_TABLE_SCHEMA = {
         "| 优先级 | 任务 | 名称 | 唯一前序依赖 | 阻塞原因 |",
         "| --- | --- | --- | --- | --- |",
     ),
+    "执行中": (
+        "| 优先级 | 任务 | 名称 | 执行分支 | 开始时间 |",
+        "| --- | --- | --- | --- | --- |",
+    ),
     "待评审": (
         "| 优先级 | 任务 | 名称 | 分支 | PR |",
         "| --- | --- | --- | --- | --- |",
@@ -114,9 +118,6 @@ REQUIRED_TASK_HEADINGS = (
 )
 HISTORICAL_MISSING_TASK_IDS = frozenset({"000026"})
 REGISTRATION_BOARD_PATH = "docs/研发中心/看板.md"
-REGISTRATION_MAPPING_TEST_PATH = (
-    "tests/研发中心/test_项目范围与阶段状态.py"
-)
 REGISTRATION_DESIGN_PATTERN = re.compile(
     r"^docs/superpowers/specs/[^/]+-design\.md$"
 )
@@ -205,21 +206,47 @@ def _task_field(pattern: re.Pattern[str], text: str) -> str | None:
 
 
 def _markdown_section(text: str, heading: str) -> tuple[str, ...]:
+    """读取唯一的CommonMark ATX二级标题区段。"""
+
     lines = text.splitlines()
-    expected = f"## {heading}"
-    start: int | None = None
+    locations: list[int] = []
     for index, line in enumerate(lines):
-        if line.strip() == expected:
-            start = index + 1
-            break
-    if start is None:
+        parsed = _commonmark_atx_heading(line)
+        if parsed == (2, heading):
+            locations.append(index)
+    if len(locations) != 1:
         return ()
+    start = locations[0] + 1
     end = len(lines)
     for index in range(start, len(lines)):
-        if lines[index].startswith("## "):
+        parsed = _commonmark_atx_heading(lines[index])
+        if parsed is not None and parsed[0] <= 2:
             end = index
             break
     return tuple(lines[start:end])
+
+
+def _commonmark_atx_heading(line: str) -> tuple[int, str] | None:
+    """规范化CommonMark ATX标题的级别和文本。"""
+
+    match = re.fullmatch(
+        r" {0,3}(?P<marks>#{1,6})(?:[ \t]+(?P<text>.*)|[ \t]*)",
+        line,
+    )
+    if match is None:
+        return None
+    text = (match.group("text") or "").rstrip(" \t")
+    closing = re.search(r"[ \t]+#+$", text)
+    if closing is not None:
+        text = text[: closing.start()].rstrip(" \t")
+    return len(match.group("marks")), text
+
+
+def _second_level_heading_count(text: str, heading: str) -> int:
+    return sum(
+        _commonmark_atx_heading(line) == (2, heading)
+        for line in text.splitlines()
+    )
 
 
 def parse_task_references(pr_body: str) -> tuple[str, ...]:
@@ -243,6 +270,15 @@ def parse_change_type(pr_body: str) -> str | None:
     ]
     valid = [value for value in values if value in CHANGE_TYPES]
     return valid[0] if len(valid) == 1 and len(values) == 1 else None
+
+
+def _task_reference_limit(change_type: str | None) -> int:
+    return 2 if change_type == "合并后状态闭环" else 1
+
+
+def _task_reference_limit_reason(change_type: str | None) -> str:
+    label = change_type or "未知变更类型"
+    return f"{label}最多关联{_task_reference_limit(change_type)}个任务"
 
 
 def parse_nul_paths(output: bytes) -> tuple[str, ...]:
@@ -1048,6 +1084,10 @@ def _validate_registration_board(
     if base_board is None or head_board is None:
         _append_reason(reasons, mapping_reason)
         return
+    if not _board_schema_is_valid(base_board) or not _board_schema_is_valid(
+        head_board
+    ):
+        _append_reason(reasons, mapping_reason)
     base_rows = _board_rows(base_board)
     head_rows = _board_rows(head_board)
     if (
@@ -1151,9 +1191,7 @@ def _validate_task_registration(
                     f"任务-{task_id}合同字段“{field}”必须且只能出现一次",
                 )
         for heading in REQUIRED_TASK_HEADINGS:
-            count = sum(
-                line == f"## {heading}" for line in task.splitlines()
-            )
+            count = _second_level_heading_count(task, heading)
             if count != 1:
                 _append_reason(
                     reasons,
@@ -1177,6 +1215,33 @@ def _validate_task_registration(
                 reasons,
                 f"任务-{task_id}方案状态不是“已批准执行”",
             )
+        dependency_lines = [
+            line
+            for line in task.splitlines()
+            if line.startswith("- 唯一前序依赖：")
+        ]
+        dependencies = DEPENDENCY_PATTERN.findall(task)
+        if len(dependency_lines) != 1 or len(dependencies) != 1:
+            _append_reason(
+                reasons,
+                f"任务-{task_id}唯一前序依赖必须且只能出现一次",
+            )
+        if status == "阻塞":
+            blocker_lines = [
+                line
+                for line in task.splitlines()
+                if line.startswith("- 当前阻塞原因：")
+            ]
+            blockers = BLOCKER_PATTERN.findall(task)
+            if (
+                len(blocker_lines) != 1
+                or len(blockers) != 1
+                or not blockers[0].strip()
+            ):
+                _append_reason(
+                    reasons,
+                    f"任务-{task_id}阻塞原因必须且只能出现一次且非空",
+                )
 
     if REGISTRATION_BOARD_PATH not in changed_paths:
         _append_reason(reasons, "任务登记必须同步看板")
@@ -1189,7 +1254,6 @@ def _validate_task_registration(
     allowed_paths = {
         task_path,
         REGISTRATION_BOARD_PATH,
-        REGISTRATION_MAPPING_TEST_PATH,
         *design_paths,
     }
     for path in changed_paths:
@@ -1220,12 +1284,6 @@ def _validate_task_registration(
         board_fact is None or board_fact.status != "M"
     ):
         _append_reason(reasons, "任务登记看板必须是对基线看板的修改")
-    mapping_fact = facts_by_path.get(REGISTRATION_MAPPING_TEST_PATH)
-    if REGISTRATION_MAPPING_TEST_PATH in changed_paths and (
-        mapping_fact is None or mapping_fact.status != "M"
-    ):
-        _append_reason(reasons, "任务登记映射测试只允许同步更新")
-
     if task is not None:
         _validate_registration_board(
             task_id=task_id,
@@ -1374,6 +1432,8 @@ def evaluate_eligibility(
     change_type = parse_change_type(pr_body)
     if change_type is None:
         _append_reason(reasons, "PR正文缺少有效变更类型")
+    if len(task_ids) > _task_reference_limit(change_type):
+        _append_reason(reasons, _task_reference_limit_reason(change_type))
 
     automation_authorized = False
     controlled_rd_authorized = False
@@ -1599,18 +1659,33 @@ def main() -> int:
         )
         return 1
     changed_paths = tuple(fact.path for fact in path_facts)
-    task_ids = set(parse_task_references(str(metadata.get("body", ""))))
+    pr_body = str(metadata.get("body", ""))
+    change_type = parse_change_type(pr_body)
+    task_ids = set(parse_task_references(pr_body))
     for path in changed_paths:
         match = TASK_FILE_PATTERN.fullmatch(path)
         if match is not None:
             task_ids.add(match.group(1))
+    if len(task_ids) > _task_reference_limit(change_type):
+        print(
+            json.dumps(
+                {
+                    "eligible": False,
+                    "reasons": [_task_reference_limit_reason(change_type)],
+                    "changed_paths": list(changed_paths),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1
     ordered_ids = tuple(sorted(task_ids))
 
     base_tasks = _load_ref_tasks(repo_root, arguments.base_ref, ordered_ids)
     head_tasks = _load_ref_tasks(repo_root, arguments.head_ref, ordered_ids)
     result = evaluate_eligibility(
         changed_paths=changed_paths,
-        pr_body=str(metadata.get("body", "")),
+        pr_body=pr_body,
         base_tasks=base_tasks,
         head_tasks=head_tasks,
         base_task_ids=base_task_ids,

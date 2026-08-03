@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 import re
@@ -9,7 +10,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import ModuleType
+from contextlib import redirect_stdout
+from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 
@@ -340,7 +342,6 @@ class AutoMergeEligibilityTests(unittest.TestCase):
                 task_path: task,
                 "docs/研发中心/看板.md": head_board,
                 design_path: f"# 任务-{task_id}设计\n",
-                "tests/研发中心/test_项目范围与阶段状态.py": "safe test\n",
             }
             path_facts = [
                 self.path_fact(
@@ -385,16 +386,6 @@ class AutoMergeEligibilityTests(unittest.TestCase):
 
                 self.assertTrue(result.eligible, result.reasons)
                 self.assertEqual((), result.reasons)
-
-        result = self.evaluate_registration(
-            changed_paths=[
-                "docs/研发中心/任务/任务-000040.md",
-                "docs/研发中心/看板.md",
-                "docs/superpowers/specs/2026-08-04-task-000040-design.md",
-                "tests/研发中心/test_项目范围与阶段状态.py",
-            ]
-        )
-        self.assertTrue(result.eligible, result.reasons)
 
     def test_任务登记拒绝夹带和不完整合同(self):
         multiple_body = (
@@ -496,6 +487,7 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             "artifacts/研发/夹带产物.json",
             "docs/治理/非设计文档.md",
             "tests/研发中心/test_验证自动合并资格.py",
+            "tests/研发中心/test_项目范围与阶段状态.py",
         ):
             with self.subTest(rejected_path=rejected_path):
                 paths = self.registration_inputs()["changed_paths"] + [rejected_path]
@@ -606,6 +598,159 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         result = self.policy.evaluate_eligibility(**inputs)
         self.assertFalse(result.eligible)
         self.assertIn("任务-000040任务文件必须是新增普通文件", result.reasons)
+
+    def test_pr合同按commonmark标题唯一解析(self):
+        equivalent_body = (
+            "  ##\t关联任务 ### \t\n\n"
+            "- 任务-000013\n\n"
+            "## 变更类型 #\n\n"
+            "- 任务交付\n"
+        )
+        result = self.evaluate(pr_body=equivalent_body)
+        self.assertTrue(result.eligible, result.reasons)
+
+        duplicate_variants = (
+            "## 变更类型\n\n- 任务交付\n",
+            "## 变更类型 \t\n\n- 任务交付\n",
+            "## 变更类型 #\n\n- 任务交付\n",
+        )
+        for duplicate in duplicate_variants:
+            with self.subTest(change_type_heading=duplicate.splitlines()[0]):
+                body = (
+                    "## 关联任务\n\n- 任务-000013\n\n"
+                    "## 变更类型\n\n- 任务交付\n\n"
+                    + duplicate
+                )
+                result = self.evaluate(pr_body=body)
+                self.assertFalse(result.eligible)
+                self.assertIn("PR正文缺少有效变更类型", result.reasons)
+
+        for duplicate_heading in (
+            "## 关联任务",
+            "## 关联任务 \t",
+            "## 关联任务 #",
+        ):
+            with self.subTest(task_heading=duplicate_heading):
+                body = (
+                    "## 关联任务\n\n- 任务-000013\n\n"
+                    f"{duplicate_heading}\n\n- 任务-000013\n\n"
+                    "## 变更类型\n\n- 任务交付\n"
+                )
+                result = self.evaluate(pr_body=body)
+                self.assertFalse(result.eligible)
+                self.assertIn("PR正文未引用任务编号", result.reasons)
+
+    def test_任务登记按commonmark统计必需二级章节(self):
+        complete_task = registration_task()
+        for equivalent in ("## 背景 ", "## 背景\t", "## 背景 #"):
+            with self.subTest(single_equivalent=equivalent):
+                task = complete_task.replace("## 背景", equivalent, 1)
+                result = self.evaluate_registration(task=task)
+                self.assertTrue(result.eligible, result.reasons)
+
+        for duplicate in ("## 背景 ", "## 背景\t", "## 背景 #"):
+            with self.subTest(duplicate=duplicate):
+                task = complete_task + f"\n{duplicate}\n\n- 伪造重复背景。\n"
+                result = self.evaluate_registration(task=task)
+                self.assertFalse(result.eligible)
+                self.assertIn(
+                    "任务-000040合同章节“背景”必须且只能出现一次",
+                    result.reasons,
+                )
+
+    def test_任务登记依赖和阻塞原因必须唯一(self):
+        complete_task = registration_task()
+        dependency_line = "- 唯一前序依赖：任务-000039完成后执行"
+        for mutation, task in (
+            ("缺失", complete_task.replace(dependency_line + "\n", "", 1)),
+            ("重复", complete_task.replace(dependency_line, dependency_line + "\n" + dependency_line, 1)),
+            (
+                "冲突",
+                complete_task.replace(
+                    dependency_line,
+                    dependency_line + "\n- 唯一前序依赖：任务-000038",
+                    1,
+                ),
+            ),
+            (
+                "伪装非任务重复",
+                complete_task.replace(
+                    dependency_line,
+                    dependency_line + "\n- 唯一前序依赖：无",
+                    1,
+                ),
+            ),
+        ):
+            with self.subTest(dependency=mutation):
+                result = self.evaluate_registration(task=task)
+                self.assertFalse(result.eligible)
+                self.assertIn(
+                    "任务-000040唯一前序依赖必须且只能出现一次",
+                    result.reasons,
+                )
+
+        blocked_task = registration_task(status="阻塞")
+        blocker_line = "- 当前阻塞原因：任务-000039尚未完成"
+        for mutation, task in (
+            ("缺失", blocked_task.replace(blocker_line + "\n", "", 1)),
+            ("空值", blocked_task.replace(blocker_line, "- 当前阻塞原因：   ", 1)),
+            ("重复", blocked_task.replace(blocker_line, blocker_line + "\n" + blocker_line, 1)),
+            (
+                "冲突",
+                blocked_task.replace(
+                    blocker_line,
+                    blocker_line + "\n- 当前阻塞原因：伪造原因",
+                    1,
+                ),
+            ),
+            (
+                "伪装空值重复",
+                blocked_task.replace(
+                    blocker_line,
+                    blocker_line + "\n- 当前阻塞原因：",
+                    1,
+                ),
+            ),
+        ):
+            with self.subTest(blocker=mutation):
+                result = self.evaluate_registration(status="阻塞", task=task)
+                self.assertFalse(result.eligible)
+                self.assertIn(
+                    "任务-000040阻塞原因必须且只能出现一次且非空",
+                    result.reasons,
+                )
+
+    def test_任务登记看板基线和头部表格结构必须合法(self):
+        base_board = registration_board(status=None)
+        head_board = registration_board(status="待执行")
+        invalid_cases = (
+            (
+                "base缺失表头",
+                base_board.replace("| 任务 | 名称 | 完成证据 |\n", "", 1),
+                head_board,
+            ),
+            (
+                "head缺失表头",
+                base_board,
+                head_board.replace("| 优先级 | 任务 | 名称 | 唯一前序依赖 |\n", "", 1),
+            ),
+            (
+                "head缺失分隔行",
+                base_board,
+                head_board.replace("| --- | --- | --- | --- |\n", "", 1),
+            ),
+        )
+        for case, invalid_base, invalid_head in invalid_cases:
+            with self.subTest(case=case):
+                result = self.evaluate_registration(
+                    base_board=invalid_base,
+                    head_board=invalid_head,
+                )
+                self.assertFalse(result.eligible)
+                self.assertIn(
+                    "任务-000040在看板中不是唯一可复算新增映射",
+                    result.reasons,
+                )
 
     def test_低风险治理文档且任务待评审时允许(self):
         result = self.evaluate()
@@ -1088,7 +1233,7 @@ class AutoMergeEligibilityTests(unittest.TestCase):
 
                 self.assertTrue(result.eligible, result.reasons)
 
-    def test_多任务只有全部受控研发类型才允许受控路径(self):
+    def test_任务交付只允许一个任务(self):
         body = (
             "## 关联任务\n\n"
             "- 任务-000013\n"
@@ -1133,7 +1278,8 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             },
         )
 
-        self.assertTrue(result.eligible, result.reasons)
+        self.assertFalse(result.eligible)
+        self.assertIn("任务交付最多关联1个任务", result.reasons)
 
     def test_多任务治理自动化授权必须来自全部基线任务(self):
         body = (
@@ -1922,6 +2068,157 @@ class GitPathFactIntegrationTests(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertTrue(payload["eligible"], payload["reasons"])
+
+    def test_cli任务引用超限在逐任务读取前失败关闭(self):
+        path_fact = self.policy.PathFact(
+            path="docs/治理/变更.md",
+            status="M",
+            mode="100644",
+            object_type="blob",
+            size=4,
+            text="safe",
+        )
+        cases = (
+            (
+                "任务交付",
+                "- 任务-000013\n- 任务-000014",
+                "任务交付最多关联1个任务",
+            ),
+            (
+                "合并后状态闭环",
+                "- 任务-000013\n- 任务-000014\n- 任务-000015",
+                "合并后状态闭环最多关联2个任务",
+            ),
+        )
+        for change_type, references, expected_reason in cases:
+            with self.subTest(change_type=change_type):
+                metadata_path = self.repo / f"{change_type}.json"
+                metadata_path.write_text(
+                    json.dumps(
+                        {
+                            "body": (
+                                "## 关联任务\n\n"
+                                f"{references}\n\n"
+                                "## 变更类型\n\n"
+                                f"- {change_type}\n"
+                            ),
+                            "base_ref": "main",
+                            "repository": "xk320/zhishi",
+                            "head_repository": "xk320/zhishi",
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+                arguments = SimpleNamespace(
+                    repo_root=self.repo,
+                    base_ref="base",
+                    head_ref="head",
+                    metadata=metadata_path,
+                )
+                output = io.StringIO()
+                with (
+                    mock.patch.object(
+                        self.policy,
+                        "_parse_arguments",
+                        return_value=arguments,
+                    ),
+                    mock.patch.object(
+                        self.policy,
+                        "_load_path_facts",
+                        return_value=(path_fact,),
+                    ),
+                    mock.patch.object(
+                        self.policy,
+                        "_load_ref_task_ids",
+                        return_value=("000001",),
+                    ),
+                    mock.patch.object(
+                        self.policy,
+                        "_load_ref_tasks",
+                        side_effect=({}, {}),
+                    ) as load_tasks,
+                    redirect_stdout(output),
+                ):
+                    return_code = self.policy.main()
+
+                self.assertEqual(1, return_code)
+                load_tasks.assert_not_called()
+                payload = json.loads(output.getvalue())
+                self.assertIn(expected_reason, payload["reasons"])
+
+    def test_cli合法状态闭环两任务不被引用上限提前拒绝(self):
+        metadata_path = self.repo / "closure-two.json"
+        metadata_path.write_text(
+            json.dumps(
+                {
+                    "body": (
+                        "## 关联任务\n\n"
+                        "- 任务-000013\n"
+                        "- 任务-000014\n\n"
+                        "## 变更类型\n\n"
+                        "- 合并后状态闭环\n"
+                    ),
+                    "base_ref": "main",
+                    "repository": "xk320/zhishi",
+                    "head_repository": "xk320/zhishi",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        arguments = SimpleNamespace(
+            repo_root=self.repo,
+            base_ref="base",
+            head_ref="head",
+            metadata=metadata_path,
+        )
+        path_fact = self.policy.PathFact(
+            path="docs/治理/变更.md",
+            status="M",
+            mode="100644",
+            object_type="blob",
+            size=4,
+            text="safe",
+        )
+        output = io.StringIO()
+        with (
+            mock.patch.object(
+                self.policy,
+                "_parse_arguments",
+                return_value=arguments,
+            ),
+            mock.patch.object(
+                self.policy,
+                "_load_path_facts",
+                return_value=(path_fact,),
+            ),
+            mock.patch.object(
+                self.policy,
+                "_load_ref_task_ids",
+                return_value=("000001",),
+            ),
+            mock.patch.object(
+                self.policy,
+                "_load_ref_tasks",
+                side_effect=({}, {}),
+            ) as load_tasks,
+            mock.patch.object(
+                self.policy,
+                "_read_path_at_ref",
+                return_value=None,
+            ),
+            redirect_stdout(output),
+        ):
+            return_code = self.policy.main()
+
+        self.assertEqual(1, return_code)
+        self.assertEqual(2, load_tasks.call_count)
+        payload = json.loads(output.getvalue())
+        self.assertNotIn(
+            "合并后状态闭环最多关联2个任务",
+            payload["reasons"],
+        )
 
     def test_普通中文路径新增修改能生成事实并通过cli(self):
         self._prepare_task_delivery()
