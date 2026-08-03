@@ -92,6 +92,21 @@ COMPLETION_MUTABLE_PREFIXES = (
     "- 合并时间：",
     "- 合并提交SHA：",
 )
+MAX_CHANGED_FILES = 500
+MAX_FILE_SIZE = 5 * 1024 * 1024
+MAX_TOTAL_SIZE = 25 * 1024 * 1024
+SENSITIVE_TEXT_PATTERNS = (
+    re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----", re.IGNORECASE),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{82,}\b"),
+    re.compile(r"\bAKIA[A-Z0-9]{16}\b"),
+    re.compile(
+        r"\b(?:password|passwd|secret|token)\b\s*[:=]\s*[\"']?[^\s\"']+",
+        re.IGNORECASE,
+    ),
+)
+
+
 @dataclass(frozen=True)
 class EligibilityResult:
     """自动合并资格判定结果。"""
@@ -107,6 +122,18 @@ class MergeFact:
     sha: str
     merged_at: str
     pr_number: int
+
+
+@dataclass(frozen=True)
+class PathFact:
+    """PR头提交中单个变更路径的已验证事实。"""
+
+    path: str
+    status: str
+    mode: str
+    object_type: str
+    size: int
+    text: str | None
 
 
 def _task_field(pattern: re.Pattern[str], text: str) -> str | None:
@@ -223,6 +250,55 @@ def _is_controlled_rd_path(path: str) -> bool:
 def _append_reason(reasons: list[str], reason: str) -> None:
     if reason not in reasons:
         reasons.append(reason)
+
+
+def _validate_path_facts(
+    changed_paths: Sequence[str],
+    path_facts: Sequence[PathFact] | None,
+) -> tuple[str, ...]:
+    """验证路径事实的完整性、Git对象、资源与敏感内容硬门。"""
+
+    if path_facts is None:
+        return ("PR缺少可验证的路径事实",)
+
+    reasons: list[str] = []
+    fact_paths = [fact.path for fact in path_facts]
+    if (
+        len(changed_paths) != len(set(changed_paths))
+        or len(fact_paths) != len(set(fact_paths))
+        or set(fact_paths) != set(changed_paths)
+    ):
+        _append_reason(reasons, "路径事实与变更路径不一致")
+
+    if len(path_facts) > MAX_CHANGED_FILES:
+        _append_reason(reasons, "变更文件数超过500")
+
+    total_size = 0
+    for fact in path_facts:
+        valid_size = (
+            isinstance(fact.size, int)
+            and not isinstance(fact.size, bool)
+            and fact.size >= 0
+        )
+        if (
+            fact.status not in {"A", "M"}
+            or fact.mode != "100644"
+            or fact.object_type != "blob"
+            or not valid_size
+        ):
+            _append_reason(reasons, "路径事实不允许自动合并")
+        if valid_size:
+            total_size += fact.size
+            if fact.size > MAX_FILE_SIZE:
+                _append_reason(reasons, "单个文件超过5MiB")
+        if not isinstance(fact.text, str):
+            _append_reason(reasons, "路径事实缺少可扫描文本")
+        elif any(pattern.search(fact.text) for pattern in SENSITIVE_TEXT_PATTERNS):
+            _append_reason(reasons, "变更文本包含敏感内容")
+
+    if total_size > MAX_TOTAL_SIZE:
+        _append_reason(reasons, "变更总量超过25MiB")
+    return tuple(reasons)
 
 
 def _without_mutable_metadata_lines(
@@ -637,10 +713,13 @@ def evaluate_eligibility(
     merge_facts: Mapping[str, MergeFact] | None = None,
     base_board: str | None = None,
     head_board: str | None = None,
+    path_facts: Sequence[PathFact] | None = None,
 ) -> EligibilityResult:
     """按基线任务合同、严格PR合同和变更路径判定资格。"""
 
     reasons: list[str] = []
+    for reason in _validate_path_facts(changed_paths, path_facts):
+        _append_reason(reasons, reason)
     if base_branch != "main":
         _append_reason(reasons, "目标分支不是main")
     if repository != "xk320/zhishi" or head_repository != repository:

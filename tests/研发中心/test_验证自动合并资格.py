@@ -149,13 +149,207 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             "head_repository": "xk320/zhishi",
         }
         inputs.update(overrides)
+        if "path_facts" not in inputs:
+            inputs["path_facts"] = [
+                self.policy.PathFact(
+                    path=path,
+                    status="M",
+                    mode="100644",
+                    object_type="blob",
+                    size=0,
+                    text="safe text",
+                )
+                for path in inputs["changed_paths"]
+            ]
         return self.policy.evaluate_eligibility(**inputs)
+
+    def path_fact(self, path: str, **overrides):
+        values = {
+            "status": "M",
+            "mode": "100644",
+            "object_type": "blob",
+            "size": 0,
+            "text": "safe text",
+        }
+        values.update(overrides)
+        return self.policy.PathFact(path=path, **values)
 
     def test_低风险治理文档且任务待评审时允许(self):
         result = self.evaluate()
 
         self.assertTrue(result.eligible)
         self.assertEqual((), result.reasons)
+
+    def test_缺少路径事实时失败关闭(self):
+        result = self.evaluate(path_facts=None)
+
+        self.assertFalse(result.eligible)
+        self.assertIn("PR缺少可验证的路径事实", result.reasons)
+
+    def test_路径事实必须与变更路径完全一致且不重复(self):
+        changed_paths = [
+            "docs/治理/PR自动合并策略.md",
+            "docs/研发中心/任务/任务-000013.md",
+        ]
+        cases = (
+            [self.path_fact(changed_paths[0])],
+            [
+                self.path_fact(changed_paths[0]),
+                self.path_fact(changed_paths[0]),
+                self.path_fact(changed_paths[1]),
+            ],
+            [
+                self.path_fact(changed_paths[0]),
+                self.path_fact(changed_paths[1]),
+                self.path_fact("docs/治理/额外.md"),
+            ],
+        )
+
+        for path_facts in cases:
+            with self.subTest(path_facts=path_facts):
+                result = self.evaluate(
+                    changed_paths=changed_paths,
+                    path_facts=path_facts,
+                )
+                self.assertFalse(result.eligible)
+                self.assertIn("路径事实与变更路径不一致", result.reasons)
+
+    def test_只允许普通文件新增或修改(self):
+        invalid_facts = (
+            self.path_fact("docs/治理/PR自动合并策略.md", status="D"),
+            self.path_fact("docs/治理/PR自动合并策略.md", status="R"),
+            self.path_fact("docs/治理/PR自动合并策略.md", mode="120000"),
+            self.path_fact("docs/治理/PR自动合并策略.md", mode="160000"),
+            self.path_fact("docs/治理/PR自动合并策略.md", mode="100755"),
+            self.path_fact(
+                "docs/治理/PR自动合并策略.md", object_type="tree"
+            ),
+            self.path_fact("docs/治理/PR自动合并策略.md", size=-1),
+        )
+
+        for invalid_fact in invalid_facts:
+            with self.subTest(invalid_fact=invalid_fact):
+                result = self.evaluate(
+                    path_facts=[
+                        invalid_fact,
+                        self.path_fact(
+                            "docs/研发中心/任务/任务-000013.md"
+                        ),
+                    ]
+                )
+                self.assertFalse(result.eligible)
+                self.assertIn("路径事实不允许自动合并", result.reasons)
+
+        for status in ("A", "M"):
+            with self.subTest(status=status):
+                result = self.evaluate(
+                    path_facts=[
+                        self.path_fact(
+                            "docs/治理/PR自动合并策略.md",
+                            status=status,
+                        ),
+                        self.path_fact(
+                            "docs/研发中心/任务/任务-000013.md"
+                        ),
+                    ]
+                )
+                self.assertTrue(result.eligible, result.reasons)
+
+    def test_所有允许的文本对象必须有可扫描文本(self):
+        result = self.evaluate(
+            path_facts=[
+                self.path_fact(
+                    "docs/治理/PR自动合并策略.md",
+                    text=None,
+                ),
+                self.path_fact("docs/研发中心/任务/任务-000013.md"),
+            ]
+        )
+
+        self.assertFalse(result.eligible)
+        self.assertIn("路径事实缺少可扫描文本", result.reasons)
+
+    def test_文件数上限500恰好允许且加一拒绝(self):
+        for count, expected in ((500, True), (501, False)):
+            changed_paths = [
+                "docs/研发中心/任务/任务-000013.md",
+                *(f"docs/治理/资源-{index:03d}.md" for index in range(count - 1)),
+            ]
+            with self.subTest(count=count):
+                result = self.evaluate(changed_paths=changed_paths)
+                self.assertEqual(expected, result.eligible, result.reasons)
+                if not expected:
+                    self.assertIn("变更文件数超过500", result.reasons)
+
+    def test_单文件5MiB恰好允许且加一拒绝(self):
+        limit = 5 * 1024 * 1024
+        for size, expected in ((limit, True), (limit + 1, False)):
+            with self.subTest(size=size):
+                result = self.evaluate(
+                    path_facts=[
+                        self.path_fact(
+                            "docs/治理/PR自动合并策略.md",
+                            size=size,
+                        ),
+                        self.path_fact(
+                            "docs/研发中心/任务/任务-000013.md"
+                        ),
+                    ]
+                )
+                self.assertEqual(expected, result.eligible, result.reasons)
+                if not expected:
+                    self.assertIn("单个文件超过5MiB", result.reasons)
+
+    def test_总量25MiB恰好允许且加一拒绝(self):
+        limit = 5 * 1024 * 1024
+        changed_paths = [
+            "docs/研发中心/任务/任务-000013.md",
+            *(f"docs/治理/大文件-{index}.md" for index in range(5)),
+        ]
+        for extra_size, expected in ((0, True), (1, False)):
+            with self.subTest(extra_size=extra_size):
+                result = self.evaluate(
+                    changed_paths=changed_paths,
+                    path_facts=[
+                        self.path_fact(changed_paths[0], size=extra_size),
+                        *(
+                            self.path_fact(path, size=limit)
+                            for path in changed_paths[1:]
+                        ),
+                    ],
+                )
+                self.assertEqual(expected, result.eligible, result.reasons)
+                if not expected:
+                    self.assertIn("变更总量超过25MiB", result.reasons)
+
+    def test_敏感内容全部拒绝且原因不回显正文(self):
+        sensitive_values = (
+            "-----BEGIN " + "PRIVATE KEY-----",
+            "g" + "hp_" + "a" * 36,
+            "github_" + "pat_" + "a" * 82,
+            "A" + "KIA" + "1" * 16,
+            "pass" + "word = hunter2",
+            "pass" + "wd: hunter2",
+            "sec" + "ret='hunter2'",
+            "to" + "ken: hunter2",
+        )
+
+        for sensitive_value in sensitive_values:
+            with self.subTest(kind=sensitive_value[:8]):
+                result = self.evaluate(
+                    path_facts=[
+                        self.path_fact(
+                            "docs/治理/PR自动合并策略.md",
+                            text=sensitive_value,
+                        ),
+                        self.path_fact(
+                            "docs/研发中心/任务/任务-000013.md"
+                        ),
+                    ]
+                )
+                self.assertFalse(result.eligible)
+                self.assertIn("变更文本包含敏感内容", result.reasons)
+                self.assertNotIn(sensitive_value, "\n".join(result.reasons))
 
     def test_受控研发任务类型可修改受控源码路径(self):
         allowed_types = (
