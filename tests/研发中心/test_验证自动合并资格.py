@@ -314,6 +314,136 @@ class AutoMergeEligibilityTests(unittest.TestCase):
 
         self.assertTrue(result.eligible)
 
+    def test_状态闭环接受依赖章节中的后继解锁字段(self):
+        def move_dependency_fields_to_section(text: str) -> str:
+            prefixes = (
+                "- 唯一前序依赖：",
+                "- 当前阻塞原因：",
+                "- 解除条件：",
+            )
+            lines = text.splitlines()
+            dependency_lines = [
+                line for line in lines if line.startswith(prefixes)
+            ]
+            header_lines = [
+                line for line in lines if not line.startswith(prefixes)
+            ]
+            return (
+                "\n".join(header_lines).rstrip()
+                + "\n\n## 依赖与阻塞条件\n\n"
+                + "\n".join(dependency_lines)
+                + "\n"
+            )
+
+        body = (
+            "## 关联任务\n\n"
+            "- 任务-000013\n"
+            "- 任务-000014\n\n"
+            "## 变更类型\n\n"
+            "- 合并后状态闭环\n"
+        )
+        result = self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/任务/任务-000014.md",
+                "docs/研发中心/看板.md",
+            ],
+            pr_body=body,
+            base_tasks={
+                "000013": task_text(status="待评审", task_type="工程"),
+                "000014": move_dependency_fields_to_section(
+                    task_text(
+                        status="阻塞",
+                        task_type="数据治理",
+                        dependency="000013",
+                    )
+                ),
+            },
+            head_tasks={
+                "000013": task_text(status="已完成", task_type="工程"),
+                "000014": move_dependency_fields_to_section(
+                    task_text(
+                        status="待执行",
+                        task_type="数据治理",
+                        dependency="000013",
+                    )
+                ),
+            },
+            merge_facts={
+                "000013": self.policy.MergeFact(
+                    sha="0123456789abcdef0123456789abcdef01234567",
+                    merged_at="2026-08-03 08:00:00 +0800",
+                    pr_number=40,
+                )
+            },
+            base_board=closure_board(completed=False),
+            head_board=closure_board(completed=True),
+        )
+
+        self.assertTrue(result.eligible, result.reasons)
+
+    def test_状态闭环拒绝依赖字段在其他章节重复出现(self):
+        def move_dependency_fields_to_section(text: str) -> str:
+            prefixes = (
+                "- 唯一前序依赖：",
+                "- 当前阻塞原因：",
+                "- 解除条件：",
+            )
+            lines = text.splitlines()
+            dependency_lines = [
+                line for line in lines if line.startswith(prefixes)
+            ]
+            header_lines = [
+                line for line in lines if not line.startswith(prefixes)
+            ]
+            return (
+                "\n".join(header_lines).rstrip()
+                + "\n\n## 依赖与阻塞条件\n\n"
+                + "\n".join(dependency_lines)
+                + "\n\n## 输出合同\n\n"
+                + "- 当前阻塞原因：伪装夹带。\n"
+            )
+
+        body = (
+            "## 关联任务\n\n"
+            "- 任务-000013\n"
+            "- 任务-000014\n\n"
+            "## 变更类型\n\n"
+            "- 合并后状态闭环\n"
+        )
+        result = self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/任务/任务-000014.md",
+                "docs/研发中心/看板.md",
+            ],
+            pr_body=body,
+            base_tasks={
+                "000013": task_text(status="待评审"),
+                "000014": move_dependency_fields_to_section(
+                    task_text(status="阻塞", dependency="000013")
+                ),
+            },
+            head_tasks={
+                "000013": task_text(status="已完成"),
+                "000014": move_dependency_fields_to_section(
+                    task_text(status="待执行", dependency="000013")
+                ),
+            },
+            merge_facts={
+                "000013": self.policy.MergeFact(
+                    sha="0123456789abcdef0123456789abcdef01234567",
+                    merged_at="2026-08-03 08:00:00 +0800",
+                    pr_number=40,
+                )
+            },
+            base_board=closure_board(completed=False),
+            head_board=closure_board(completed=True),
+        )
+
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000014状态闭环夹带合同改写", result.reasons)
+
     def test_合并后状态闭环拒绝其他文件和状态迁移(self):
         body = (
             "## 关联任务\n\n- 任务-000013\n\n"
