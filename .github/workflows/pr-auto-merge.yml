@@ -18,7 +18,7 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
+  pull-requests: read
   checks: read
   issues: write
 
@@ -29,7 +29,11 @@ concurrency:
 jobs:
   merge:
     name: 复验并合并子智能体批准提交
-    if: github.actor == 'xk320'
+    if: >-
+      github.actor == 'xk320' &&
+      github.repository == 'xk320/zhishi' &&
+      github.ref == 'refs/heads/main' &&
+      startsWith(github.workflow_ref, 'xk320/zhishi/.github/workflows/pr-auto-merge.yml@refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -135,25 +139,47 @@ jobs:
           THREADS_PATH: ${{ runner.temp }}/review-threads.json
           CHECKS_PATH: ${{ runner.temp }}/check-runs.json
         run: |
-          gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews" > "$REVIEWS_PATH"
+          gh api --paginate --slurp \
+            "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" \
+            > "$REVIEWS_PATH"
           gh api \
+            --paginate --slurp \
             -H "Accept: application/vnd.github+json" \
             "repos/${REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100" > "$CHECKS_PATH"
-          gh api graphql \
-            -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved}}}}}' \
+          gh api graphql --paginate --slurp \
+            -f query='query($owner:String!,$name:String!,$number:Int!,$endCursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100,after:$endCursor){nodes{isResolved}pageInfo{hasNextPage,endCursor}}}}}' \
             -f owner='xk320' -f name='zhishi' -F number="$PR_NUMBER" > "$THREADS_PATH"
           python3 - <<'PY'
           import json
           import os
           from pathlib import Path
 
-          reviews = json.loads(Path(os.environ["REVIEWS_PATH"]).read_text(encoding="utf-8"))
-          threads = json.loads(Path(os.environ["THREADS_PATH"]).read_text(encoding="utf-8"))
-          check_runs = json.loads(Path(os.environ["CHECKS_PATH"]).read_text(encoding="utf-8"))["check_runs"]
-          unresolved = threads["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+          review_pages = json.loads(Path(os.environ["REVIEWS_PATH"]).read_text(encoding="utf-8"))
+          thread_pages = json.loads(Path(os.environ["THREADS_PATH"]).read_text(encoding="utf-8"))
+          check_pages = json.loads(Path(os.environ["CHECKS_PATH"]).read_text(encoding="utf-8"))
+          reviews = [review for page in review_pages for review in page]
+          threads = [
+              thread
+              for page in thread_pages
+              for thread in page["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+          ]
+          if thread_pages and thread_pages[-1]["data"]["repository"]["pullRequest"]["reviewThreads"]["pageInfo"]["hasNextPage"]:
+              raise SystemExit("评审线程分页未完整读取")
+          check_runs = [
+              check
+              for page in check_pages
+              for check in page.get("check_runs", [])
+          ]
+          unresolved = threads
           if any(not thread["isResolved"] for thread in unresolved):
               raise SystemExit("存在未解决评审线程")
-          if any(review.get("state") == "CHANGES_REQUESTED" for review in reviews):
+          latest_reviews = {}
+          for review in sorted(reviews, key=lambda item: (item.get("submitted_at") or "", item.get("id") or 0)):
+              user = review.get("user") or {}
+              reviewer = str(user.get("id") or user.get("login") or "")
+              if reviewer:
+                  latest_reviews[reviewer] = review
+          if any(review.get("state") == "CHANGES_REQUESTED" for review in latest_reviews.values()):
               raise SystemExit("存在CHANGES_REQUESTED评审")
           relevant = [check for check in check_runs if check["name"] == "验证自动合并资格"]
           if not relevant or any(

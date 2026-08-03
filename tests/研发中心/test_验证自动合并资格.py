@@ -28,26 +28,77 @@ def task_text(
     status: str,
     task_type: str | None = "治理",
     automation_scope: bool = False,
+    dependency: str | None = None,
+    extra_contract: str = "",
 ) -> str:
     type_line = f"- 类型：{task_type}\n" if task_type is not None else ""
     scope_line = "- 自动合并范围：治理自动化\n" if automation_scope else ""
-    completion_lines = (
+    review_lines = (
         "- Pull Request：[#40](https://github.com/xk320/zhishi/pull/40)\n"
+        if status in {"待评审", "已完成"}
+        else ""
+    )
+    completion_lines = (
         "- 合并时间：2026-08-03 08:00:00 +0800\n"
         "- 合并提交SHA：`0123456789abcdef0123456789abcdef01234567`\n"
         if status == "已完成"
         else ""
     )
+    dependency_lines = ""
+    if dependency is not None:
+        dependency_lines = f"- 唯一前序依赖：任务-{dependency}；\n"
+        if status == "阻塞":
+            dependency_lines += (
+                f"- 当前阻塞原因：任务-{dependency}尚未完成。\n"
+                f"- 解除条件：任务-{dependency}完成后解除。\n"
+            )
+        elif status == "待执行":
+            dependency_lines += (
+                f"- 当前阻塞原因：无；任务-{dependency}已完成。\n"
+                "- 解除条件：已满足。\n"
+            )
     return (
         "# 任务-000013：建立 PR 自动合并策略与审批规则\n\n"
         f"- 状态：{status}\n"
         f"{type_line}"
         f"{scope_line}"
         "- 优先级：P1\n"
+        f"{review_lines}"
         f"{completion_lines}"
+        f"{dependency_lines}"
+        f"{extra_contract}"
     )
 
 
+def closure_board(*, completed: bool) -> str:
+    if completed:
+        pending = (
+            "| P1 | 任务-000014 | 建立 PR 自动合并策略与审批规则 | 000013 |"
+        )
+        blocked = "无。"
+        review = "无。"
+        done = (
+            "| 任务-000013 | 建立 PR 自动合并策略与审批规则 | "
+            "PR #40；合并提交 `0123456789abcdef0123456789abcdef01234567` |"
+        )
+    else:
+        pending = "无。"
+        blocked = (
+            "| P1 | 任务-000014 | 建立 PR 自动合并策略与审批规则 | "
+            "000013 | 任务-000013尚未完成 |"
+        )
+        review = (
+            "| P1 | 任务-000013 | 建立 PR 自动合并策略与审批规则 | "
+            "branch | PR #40 |"
+        )
+        done = "无。"
+    return (
+        "# 看板\n\n"
+        f"## 待执行\n\n{pending}\n\n"
+        f"## 阻塞\n\n{blocked}\n\n"
+        f"## 待评审\n\n{review}\n\n"
+        f"## 已完成\n\n{done}\n"
+    )
 class ImplementationPresenceTest(unittest.TestCase):
     def test_实现文件存在(self):
         self.assertTrue(MODULE_PATH.exists(), f"实现文件尚不存在：{MODULE_PATH}")
@@ -162,7 +213,7 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             ],
             base_tasks={
                 "000013": task_text(
-                    status="执行中",
+                    status="待执行",
                     automation_scope=True,
                 )
             },
@@ -175,6 +226,23 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         )
 
         self.assertTrue(result.eligible)
+
+    def test_已完成治理自动化任务不能重放控制面授权(self):
+        result = self.evaluate(
+            changed_paths=[
+                ".github/workflows/pr-auto-merge.yml",
+                "docs/研发中心/任务/任务-000013.md",
+            ],
+            base_tasks={
+                "000013": task_text(status="已完成", automation_scope=True)
+            },
+            head_tasks={
+                "000013": task_text(status="待评审", automation_scope=True)
+            },
+        )
+
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000013基线状态“已完成”不可进入任务交付", result.reasons)
 
     def test_治理自动化授权不能扩大到任意脚本(self):
         result = self.evaluate(
@@ -207,12 +275,25 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             pr_body=body,
             base_tasks={
                 "000013": task_text(status="待评审", task_type="工程"),
-                "000014": task_text(status="阻塞", task_type="数据治理"),
+                "000014": task_text(
+                    status="阻塞", task_type="数据治理", dependency="000013"
+                ),
             },
             head_tasks={
                 "000013": task_text(status="已完成", task_type="工程"),
-                "000014": task_text(status="待执行", task_type="数据治理"),
+                "000014": task_text(
+                    status="待执行", task_type="数据治理", dependency="000013"
+                ),
             },
+            merge_facts={
+                "000013": self.policy.MergeFact(
+                    sha="0123456789abcdef0123456789abcdef01234567",
+                    merged_at="2026-08-03 08:00:00 +0800",
+                    pr_number=40,
+                )
+            },
+            base_board=closure_board(completed=False),
+            head_board=closure_board(completed=True),
         )
 
         self.assertTrue(result.eligible)
@@ -230,6 +311,7 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             pr_body=body,
             base_tasks={"000013": task_text(status="执行中")},
             head_tasks={"000013": task_text(status="已完成")},
+            merge_facts={},
         )
 
         self.assertFalse(result.eligible)
@@ -251,19 +333,103 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             pr_body=body,
             base_tasks={
                 "000013": task_text(status="待评审"),
-                "000014": task_text(status="阻塞"),
-                "000015": task_text(status="阻塞"),
+                "000014": task_text(status="阻塞", dependency="000013"),
+                "000015": task_text(status="阻塞", dependency="000013"),
             },
             head_tasks={
                 "000013": task_text(status="已完成"),
-                "000014": task_text(status="待执行"),
-                "000015": task_text(status="待执行"),
+                "000014": task_text(status="待执行", dependency="000013"),
+                "000015": task_text(status="待执行", dependency="000013"),
+            },
+            merge_facts={
+                "000013": self.policy.MergeFact(
+                    sha="0123456789abcdef0123456789abcdef01234567",
+                    merged_at="2026-08-03 08:00:00 +0800",
+                    pr_number=40,
+                )
             },
         )
 
         self.assertFalse(result.eligible)
         self.assertIn("合并后状态闭环必须同步看板", result.reasons)
         self.assertIn("合并后状态闭环最多解除一个唯一后继", result.reasons)
+
+    def test_状态闭环拒绝合同改写伪造事实和无关后继(self):
+        body = (
+            "## 关联任务\n\n- 任务-000013\n- 任务-000014\n\n"
+            "## 变更类型\n\n- 合并后状态闭环\n"
+        )
+        completed = task_text(
+            status="已完成",
+            task_type="工程",
+            extra_contract="## 输出合同\n\n- 被闭环PR篡改。\n",
+        )
+        result = self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/任务/任务-000014.md",
+                "docs/研发中心/看板.md",
+            ],
+            pr_body=body,
+            base_tasks={
+                "000013": task_text(status="待评审", task_type="工程"),
+                "000014": task_text(status="阻塞", dependency="999999"),
+            },
+            head_tasks={
+                "000013": completed,
+                "000014": task_text(status="待执行", dependency="999999"),
+            },
+            merge_facts={
+                "000013": self.policy.MergeFact(
+                    sha="f" * 40,
+                    merged_at="2099-01-01 00:00:00 +0800",
+                    pr_number=999,
+                )
+            },
+        )
+
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000013状态闭环夹带合同改写", result.reasons)
+        self.assertIn("任务-000013合并证据与main真实事实不一致", result.reasons)
+        self.assertIn("任务-000014不是任务-000013的唯一后继", result.reasons)
+
+    def test_状态闭环拒绝看板结构和完成证据改写(self):
+        body = (
+            "## 关联任务\n\n- 任务-000013\n- 任务-000014\n\n"
+            "## 变更类型\n\n- 合并后状态闭环\n"
+        )
+        head_board = closure_board(completed=True).replace(
+            "# 看板", "# 被改写的看板"
+        ).replace("PR #40", "PR #999")
+        result = self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/任务/任务-000014.md",
+                "docs/研发中心/看板.md",
+            ],
+            pr_body=body,
+            base_tasks={
+                "000013": task_text(status="待评审"),
+                "000014": task_text(status="阻塞", dependency="000013"),
+            },
+            head_tasks={
+                "000013": task_text(status="已完成"),
+                "000014": task_text(status="待执行", dependency="000013"),
+            },
+            merge_facts={
+                "000013": self.policy.MergeFact(
+                    sha="0123456789abcdef0123456789abcdef01234567",
+                    merged_at="2026-08-03 08:00:00 +0800",
+                    pr_number=40,
+                )
+            },
+            base_board=closure_board(completed=False),
+            head_board=head_board,
+        )
+
+        self.assertFalse(result.eligible)
+        self.assertIn("合并后状态闭环夹带看板结构改写", result.reasons)
+        self.assertIn("任务-000013的看板证据行不可复算", result.reasons)
 
     def test_nul路径解析保留中文路径(self):
         paths = self.policy.parse_nul_paths(

@@ -1,18 +1,67 @@
 #!/usr/bin/env python3
-"""验证Codex双子智能体评审证据是否绑定当前Pull Request。"""
+"""严格验证Codex双子智能体评审证据是否绑定当前Pull Request。"""
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
 
 
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{7,127}$")
+FINDING_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$")
 REQUIRED_ROLES = frozenset({"治理与架构", "范围与安全"})
+ROOT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "repository",
+        "pr_number",
+        "base_sha",
+        "head_sha",
+        "repair_round",
+        "reviews",
+        "validation",
+        "resource_policy",
+    }
+)
+REVIEW_FIELDS = frozenset(
+    {
+        "role",
+        "reviewer_id",
+        "run_id",
+        "reviewed_base_sha",
+        "reviewed_head_sha",
+        "reviewed_at",
+        "conclusion",
+        "p0",
+        "p1",
+        "p2",
+        "findings",
+    }
+)
+FINDING_FIELDS = frozenset({"id", "severity"})
+VALIDATION_FIELDS = frozenset({"passed", "head_sha", "completed_at", "commands"})
+COMMAND_FIELDS = frozenset({"command", "exit_code"})
+RESOURCE_FIELDS = frozenset(
+    {
+        "max_reviewers",
+        "test_processes",
+        "node_heap_mib",
+        "worktrees_created",
+        "memory_pressure",
+        "memory_available_percent",
+        "disk_available_gib",
+    }
+)
+SENSITIVE_TEXT = re.compile(
+    r"(?i)(password|passwd|secret|token\s*=|authorization:|gh[pousr]_[A-Za-z0-9]|-----BEGIN)"
+)
 
 
 @dataclass(frozen=True)
@@ -34,6 +83,34 @@ def _safe_integer(value: object) -> int | None:
     return value
 
 
+def _safe_number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def _valid_rfc3339(value: object) -> bool:
+    if not isinstance(value, str) or value.endswith("Z"):
+        return False
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None and parsed.utcoffset() is not None
+
+
+def _exact_fields(
+    value: Mapping[str, Any],
+    expected: frozenset[str],
+    *,
+    reason: str,
+    reasons: list[str],
+) -> None:
+    if frozenset(value) != expected:
+        _append_reason(reasons, reason)
+
+
 def validate_evidence(
     evidence: Mapping[str, Any],
     *,
@@ -42,9 +119,15 @@ def validate_evidence(
     base_sha: str,
     head_sha: str,
 ) -> EvidenceResult:
-    """验证评审身份、阻断结论、验证结果和资源预算。"""
+    """验证评审身份、逐项绑定、验证结果和实测资源预算。"""
 
     reasons: list[str] = []
+    _exact_fields(
+        evidence,
+        ROOT_FIELDS,
+        reason="评审证据包含未知字段",
+        reasons=reasons,
+    )
     if evidence.get("schema_version") != "zhishi-agent-review/v1":
         _append_reason(reasons, "评审证据版本无效")
     if evidence.get("repository") != repository:
@@ -67,16 +150,49 @@ def validate_evidence(
 
     roles: list[str] = []
     reviewer_ids: list[str] = []
+    run_ids: list[str] = []
     for review in reviews:
         if not isinstance(review, Mapping):
             _append_reason(reasons, "评审记录结构无效")
             continue
+        _exact_fields(
+            review,
+            REVIEW_FIELDS,
+            reason="评审记录包含未知字段",
+            reasons=reasons,
+        )
         role = review.get("role")
-        reviewer_id = review.get("reviewer_id")
         if isinstance(role, str):
             roles.append(role)
-        if isinstance(reviewer_id, str) and reviewer_id.strip():
+
+        reviewer_id = review.get("reviewer_id")
+        if (
+            not isinstance(reviewer_id, str)
+            or reviewer_id != reviewer_id.strip()
+            or IDENTIFIER_PATTERN.fullmatch(reviewer_id) is None
+        ):
+            _append_reason(reasons, "评审者标识格式无效")
+        else:
             reviewer_ids.append(reviewer_id)
+
+        run_id = review.get("run_id")
+        if (
+            not isinstance(run_id, str)
+            or run_id != run_id.strip()
+            or IDENTIFIER_PATTERN.fullmatch(run_id) is None
+        ):
+            _append_reason(reasons, "评审运行标识格式无效")
+        else:
+            run_ids.append(run_id)
+
+        if (
+            review.get("reviewed_base_sha") != base_sha
+            or review.get("reviewed_head_sha") != head_sha
+        ):
+            _append_reason(reasons, "评审记录未绑定当前base/head SHA")
+        if not _valid_rfc3339(review.get("reviewed_at")):
+            _append_reason(reasons, "评审时间必须为带时区RFC3339")
+
         p0 = _safe_integer(review.get("p0"))
         p1 = _safe_integer(review.get("p1"))
         p2 = _safe_integer(review.get("p2"))
@@ -87,29 +203,93 @@ def validate_evidence(
         if review.get("conclusion") != "APPROVE":
             _append_reason(reasons, "评审结论不是APPROVE")
 
+        findings = review.get("findings")
+        finding_counts = {"P0": 0, "P1": 0, "P2": 0}
+        if not isinstance(findings, list):
+            _append_reason(reasons, "评审发现清单无效")
+            findings = []
+        for finding in findings:
+            if not isinstance(finding, Mapping):
+                _append_reason(reasons, "评审发现项结构无效")
+                continue
+            _exact_fields(
+                finding,
+                FINDING_FIELDS,
+                reason="评审发现项包含未知字段",
+                reasons=reasons,
+            )
+            finding_id = finding.get("id")
+            severity = finding.get("severity")
+            if not isinstance(finding_id, str) or FINDING_ID_PATTERN.fullmatch(finding_id) is None:
+                _append_reason(reasons, "评审发现标识格式无效")
+            if severity not in finding_counts:
+                _append_reason(reasons, "评审发现严重级别无效")
+            else:
+                finding_counts[severity] += 1
+        if (p0, p1, p2) != (
+            finding_counts["P0"],
+            finding_counts["P1"],
+            finding_counts["P2"],
+        ):
+            _append_reason(reasons, "评审发现清单与P0/P1/P2计数不一致")
+
     if frozenset(roles) != REQUIRED_ROLES:
         _append_reason(reasons, "评审角色不完整")
     if len(reviewer_ids) != 2 or len(set(reviewer_ids)) != 2:
         _append_reason(reasons, "评审者必须相互独立")
+    if len(run_ids) != 2 or len(set(run_ids)) != 2:
+        _append_reason(reasons, "评审运行标识必须相互独立")
 
     validation = evidence.get("validation")
     if not isinstance(validation, Mapping):
         _append_reason(reasons, "主执行器验证记录无效")
         validation = {}
+    else:
+        _exact_fields(
+            validation,
+            VALIDATION_FIELDS,
+            reason="验证记录包含未知字段",
+            reasons=reasons,
+        )
     if validation.get("passed") is not True:
         _append_reason(reasons, "主执行器验证未通过")
+    if validation.get("head_sha") != head_sha:
+        _append_reason(reasons, "验证记录未绑定当前头提交")
+    if not _valid_rfc3339(validation.get("completed_at")):
+        _append_reason(reasons, "验证完成时间必须为带时区RFC3339")
     commands = validation.get("commands")
-    if (
-        not isinstance(commands, list)
-        or not commands
-        or any(not isinstance(command, str) or not command.strip() for command in commands)
-    ):
+    if not isinstance(commands, list) or not commands:
         _append_reason(reasons, "缺少实际验证命令")
+        commands = []
+    for command in commands:
+        if not isinstance(command, Mapping):
+            _append_reason(reasons, "验证命令记录无效")
+            continue
+        _exact_fields(
+            command,
+            COMMAND_FIELDS,
+            reason="验证命令包含未知字段",
+            reasons=reasons,
+        )
+        text = command.get("command")
+        if not isinstance(text, str) or not text.strip():
+            _append_reason(reasons, "验证命令为空")
+        elif SENSITIVE_TEXT.search(text):
+            _append_reason(reasons, "验证命令疑似包含敏感信息")
+        if _safe_integer(command.get("exit_code")) != 0:
+            _append_reason(reasons, "验证命令存在非零退出码")
 
     resource = evidence.get("resource_policy")
     if not isinstance(resource, Mapping):
         _append_reason(reasons, "资源策略记录无效")
         resource = {}
+    else:
+        _exact_fields(
+            resource,
+            RESOURCE_FIELDS,
+            reason="资源策略包含未知字段",
+            reasons=reasons,
+        )
     max_reviewers = _safe_integer(resource.get("max_reviewers"))
     if max_reviewers is None or max_reviewers > 2 or max_reviewers < 1:
         _append_reason(reasons, "评审者并发上限超过2")
@@ -120,6 +300,18 @@ def validate_evidence(
         _append_reason(reasons, "Node堆上限必须不超过256 MiB")
     if _safe_integer(resource.get("worktrees_created")) != 0:
         _append_reason(reasons, "禁止创建额外工作树")
+
+    pressure = resource.get("memory_pressure")
+    if pressure not in {"normal", "warning"}:
+        _append_reason(reasons, "内存压力不允许启动合并")
+    if pressure == "warning" and max_reviewers != 1:
+        _append_reason(reasons, "内存压力警告时只能使用一个评审者")
+    available_memory = _safe_number(resource.get("memory_available_percent"))
+    if available_memory is None or available_memory < 20:
+        _append_reason(reasons, "可用内存低于20%")
+    available_disk = _safe_number(resource.get("disk_available_gib"))
+    if available_disk is None or available_disk < 5:
+        _append_reason(reasons, "可用磁盘低于5 GiB")
 
     return EvidenceResult(valid=not reasons, reasons=tuple(reasons))
 

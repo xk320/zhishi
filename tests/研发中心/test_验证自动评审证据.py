@@ -37,29 +37,47 @@ def valid_evidence() -> dict[str, object]:
             {
                 "role": "治理与架构",
                 "reviewer_id": "governance-review",
+                "run_id": "agent-run-governance-0001",
+                "reviewed_base_sha": "a" * 40,
+                "reviewed_head_sha": "b" * 40,
+                "reviewed_at": "2026-08-03T08:00:00+08:00",
                 "conclusion": "APPROVE",
                 "p0": 0,
                 "p1": 0,
                 "p2": 0,
+                "findings": [],
             },
             {
                 "role": "范围与安全",
                 "reviewer_id": "qa-safety-review",
+                "run_id": "agent-run-safety-0002",
+                "reviewed_base_sha": "a" * 40,
+                "reviewed_head_sha": "b" * 40,
+                "reviewed_at": "2026-08-03T08:01:00+08:00",
                 "conclusion": "APPROVE",
                 "p0": 0,
                 "p1": 0,
                 "p2": 1,
+                "findings": [{"id": "P2-001", "severity": "P2"}],
             },
         ],
         "validation": {
             "passed": True,
-            "commands": ["python3 -m unittest ...", "git diff --check"],
+            "head_sha": "b" * 40,
+            "completed_at": "2026-08-03T08:02:00+08:00",
+            "commands": [
+                {"command": "python3 -m unittest ...", "exit_code": 0},
+                {"command": "git diff --check", "exit_code": 0},
+            ],
         },
         "resource_policy": {
             "max_reviewers": 2,
             "test_processes": 1,
             "node_heap_mib": 256,
             "worktrees_created": 0,
+            "memory_pressure": "normal",
+            "memory_available_percent": 62.5,
+            "disk_available_gib": 7.2,
         },
     }
 
@@ -105,6 +123,17 @@ class ReviewEvidenceTests(unittest.TestCase):
         self.assertFalse(result.valid)
         self.assertIn("评审者必须相互独立", result.reasons)
 
+    def test_评审者尾随空格和重复运行标识不能绕过独立性(self):
+        evidence = valid_evidence()
+        reviews = evidence["reviews"]
+        assert isinstance(reviews, list)
+        reviews[1]["reviewer_id"] = f"{reviews[0]['reviewer_id']} "
+        reviews[1]["run_id"] = reviews[0]["run_id"]
+        result = self.validate(evidence)
+        self.assertFalse(result.valid)
+        self.assertIn("评审者标识格式无效", result.reasons)
+        self.assertIn("评审运行标识必须相互独立", result.reasons)
+
     def test_p0或p1非零及非批准结论拒绝(self):
         evidence = valid_evidence()
         reviews = evidence["reviews"]
@@ -133,15 +162,33 @@ class ReviewEvidenceTests(unittest.TestCase):
         self.assertIn("Node堆上限必须不超过256 MiB", result.reasons)
         self.assertIn("禁止创建额外工作树", result.reasons)
 
+    def test_内存压力和磁盘硬门必须有真实安全余量(self):
+        evidence = valid_evidence()
+        resource = evidence["resource_policy"]
+        assert isinstance(resource, dict)
+        resource["memory_pressure"] = "critical"
+        resource["memory_available_percent"] = 19.9
+        resource["disk_available_gib"] = 4.9
+        result = self.validate(evidence)
+        self.assertFalse(result.valid)
+        self.assertIn("内存压力不允许启动合并", result.reasons)
+        self.assertIn("可用内存低于20%", result.reasons)
+        self.assertIn("可用磁盘低于5 GiB", result.reasons)
+
     def test_验证未通过或没有命令时拒绝(self):
         evidence = valid_evidence()
-        evidence["validation"] = {"passed": False, "commands": []}
+        evidence["validation"] = {
+            "passed": False,
+            "head_sha": "b" * 40,
+            "completed_at": "2026-08-03T08:02:00+08:00",
+            "commands": [],
+        }
         result = self.validate(evidence)
         self.assertFalse(result.valid)
         self.assertIn("主执行器验证未通过", result.reasons)
         self.assertIn("缺少实际验证命令", result.reasons)
 
-    def test_cli不回显完整不可信证据(self):
+    def test_未知或敏感字段必须拒绝且cli不回显正文(self):
         evidence = valid_evidence()
         evidence["secret_marker"] = "不得回显"
         with tempfile.TemporaryDirectory() as directory:
@@ -154,7 +201,34 @@ class ReviewEvidenceTests(unittest.TestCase):
                 base_sha="a" * 40,
                 head_sha="b" * 40,
             )
-        self.assertTrue(result.valid)
+        self.assertFalse(result.valid)
+        self.assertIn("评审证据包含未知字段", result.reasons)
+
+    def test_评审必须逐项绑定当前sha时间和发现清单(self):
+        evidence = valid_evidence()
+        reviews = evidence["reviews"]
+        assert isinstance(reviews, list)
+        reviews[0]["reviewed_head_sha"] = "c" * 40
+        reviews[0]["reviewed_at"] = "无时区"
+        reviews[1]["findings"] = []
+        result = self.validate(evidence)
+        self.assertFalse(result.valid)
+        self.assertIn("评审记录未绑定当前base/head SHA", result.reasons)
+        self.assertIn("评审时间必须为带时区RFC3339", result.reasons)
+        self.assertIn("评审发现清单与P0/P1/P2计数不一致", result.reasons)
+
+    def test_验证命令必须逐项记录零退出码并绑定head(self):
+        evidence = valid_evidence()
+        validation = evidence["validation"]
+        assert isinstance(validation, dict)
+        validation["head_sha"] = "c" * 40
+        commands = validation["commands"]
+        assert isinstance(commands, list)
+        commands[0]["exit_code"] = 1
+        result = self.validate(evidence)
+        self.assertFalse(result.valid)
+        self.assertIn("验证记录未绑定当前头提交", result.reasons)
+        self.assertIn("验证命令存在非零退出码", result.reasons)
 
 
 if __name__ == "__main__":

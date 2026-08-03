@@ -108,8 +108,11 @@ PR正文必须包含严格二级标题：
 
 - 必须且只能把一个任务从`待评审`改为`已完成`；
 - 可以把唯一后继从`阻塞`改为`待执行`；
-- 禁止其他状态迁移和内容交付；
-- 合并提交SHA、时间、PR和验证证据必须来自GitHub真实状态。
+- 完成任务只允许更改状态并新增合并时间和合并提交SHA；唯一后继只允许更改
+  状态、当前阻塞原因和解除条件，其余任务合同必须逐行不变；
+- 后继的`唯一前序依赖`必须指向本次完成任务，不得解锁无关任务；
+- 合并提交SHA、时间和PR必须与main中真实合并提交的祖先关系、提交时间和
+  merge commit主题一致；禁止其他状态迁移和内容交付。
 
 ## 六、结构化评审证据
 
@@ -127,36 +130,53 @@ PR正文必须包含严格二级标题：
     {
       "role": "治理与架构",
       "reviewer_id": "独立评审标识",
+      "run_id": "governance-20260803-01",
+      "reviewed_base_sha": "40位SHA",
+      "reviewed_head_sha": "40位SHA",
+      "reviewed_at": "2026-08-03T08:00:00+08:00",
       "conclusion": "APPROVE",
       "p0": 0,
       "p1": 0,
-      "p2": 0
+      "p2": 0,
+      "findings": []
     },
     {
       "role": "范围与安全",
       "reviewer_id": "另一独立评审标识",
+      "run_id": "safety-20260803-01",
+      "reviewed_base_sha": "40位SHA",
+      "reviewed_head_sha": "40位SHA",
+      "reviewed_at": "2026-08-03T08:00:00+08:00",
       "conclusion": "APPROVE",
       "p0": 0,
       "p1": 0,
-      "p2": 0
+      "p2": 0,
+      "findings": []
     }
   ],
   "validation": {
     "passed": true,
-    "commands": ["实际运行命令"]
+    "head_sha": "40位SHA",
+    "completed_at": "2026-08-03T08:00:00+08:00",
+    "commands": [
+      {"command": "实际运行命令", "exit_code": 0}
+    ]
   },
   "resource_policy": {
     "max_reviewers": 2,
     "test_processes": 1,
     "node_heap_mib": 256,
-    "worktrees_created": 0
+    "worktrees_created": 0,
+    "memory_pressure": "normal",
+    "memory_available_percent": 42.0,
+    "disk_available_gib": 7.4
   }
 }
 ```
 
-仓库、PR、base或head不匹配，评审者或角色重复，P0/P1非零，结论不是`APPROVE`，验证
-未通过，修复轮次超过3或资源预算越界时，证据无效。证据不得包含凭据、环境转储或PR
-不可信正文。
+仓库、PR、base或head不匹配，评审者、角色或运行标识重复，P0/P1非零，发现清单与计数
+不守恒，结论不是`APPROVE`，验证命令非零退出，修复轮次超过3或实测资源硬门不满足时，
+证据无效。证据字段采用严格白名单，不得包含凭据、环境转储或PR不可信正文。
 
 ## 七、合并实时硬门
 

@@ -21,6 +21,28 @@ PINNED_CHECKOUT = (
 )
 
 
+def workflow_run_blocks(text: str) -> list[str]:
+    lines = text.splitlines()
+    blocks: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line.strip() != "run: |":
+            index += 1
+            continue
+        indentation = len(line) - len(line.lstrip())
+        index += 1
+        body: list[str] = []
+        while index < len(lines):
+            current = lines[index]
+            if current.strip() and len(current) - len(current.lstrip()) <= indentation:
+                break
+            body.append(current)
+            index += 1
+        blocks.append("\n".join(body))
+    return blocks
+
+
 class WorkflowPresenceTests(unittest.TestCase):
     def test_资格工作流存在(self):
         self.assertTrue(
@@ -103,6 +125,9 @@ class MergeWorkflowTests(unittest.TestCase):
         self.assertIn("head_sha:", self.text)
         self.assertIn("review_evidence:", self.text)
         self.assertIn("github.actor == 'xk320'", self.text)
+        self.assertIn("github.repository == 'xk320/zhishi'", self.text)
+        self.assertIn("github.ref == 'refs/heads/main'", self.text)
+        self.assertIn("github.workflow_ref", self.text)
         self.assertNotIn("issue_comment:", self.text)
 
     def test_评审证据和合并均绑定四十位sha(self):
@@ -124,7 +149,7 @@ class MergeWorkflowTests(unittest.TestCase):
         final_check = self.text.split(
             "- name: 合并前再次确认状态和提交",
             maxsplit=1,
-        )[1].split("- name: 合并批准的精确提交", maxsplit=1)[0]
+        )[1].split("- name: 合并评审通过的精确提交", maxsplit=1)[0]
 
         self.assertIn(
             "BASE_SHA: ${{ steps.pr.outputs.base_sha }}",
@@ -152,20 +177,26 @@ class MergeWorkflowTests(unittest.TestCase):
 
     def test_权限最小且不使用危险事件(self):
         self.assertIn("contents: write", self.text)
-        self.assertIn("pull-requests: write", self.text)
+        self.assertIn("pull-requests: read", self.text)
+        self.assertNotIn("pull-requests: write", self.text)
         self.assertIn("checks: read", self.text)
         self.assertIn("issues: write", self.text)
         self.assertNotIn("pull_request_target", self.text)
+
+    def test_评审线程检查和reviews必须完整分页(self):
+        self.assertGreaterEqual(self.text.count("--paginate --slurp"), 3)
+        self.assertIn("pageInfo{hasNextPage,endCursor}", self.text)
+        self.assertIn("$endCursor:String", self.text)
+        self.assertIn("latest_reviews", self.text)
+        self.assertIn("submitted_at", self.text)
 
     def test_没有浮动action版本或把输入直接拼进run(self):
         self.assertIsNone(
             re.search(r"uses:\s*[^\\s]+@(v\\d+|main|master)\\s*$", self.text)
         )
-        run_blocks = re.findall(
-            r"(?ms)^\\s+run:\\s*\\|\\n(?P<body>(?:\\s{8,}.*\\n?)*)",
-            self.text,
-        )
+        run_blocks = workflow_run_blocks(self.text)
         self.assertTrue(run_blocks)
+        self.assertTrue(all(block.strip() for block in run_blocks))
         self.assertTrue(
             all("github.event.inputs.review_evidence" not in block for block in run_blocks)
         )

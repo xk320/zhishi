@@ -8,6 +8,7 @@ import json
 import re
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Mapping, Sequence
 
@@ -24,13 +25,21 @@ AUTOMATION_FILES = frozenset(
 TASK_FILE_PATTERN = re.compile(r"^docs/研发中心/任务/任务-(\d{6})\.md$")
 TASK_TYPE_PATTERN = re.compile(r"^- 类型：(.+)$", re.MULTILINE)
 TASK_STATUS_PATTERN = re.compile(r"^- 状态：(.+)$", re.MULTILINE)
+TASK_PRIORITY_PATTERN = re.compile(r"^- 优先级：(.+)$", re.MULTILINE)
+TASK_TITLE_PATTERN = re.compile(r"^# 任务-\d{6}：(.+)$", re.MULTILINE)
 AUTOMATION_SCOPE_PATTERN = re.compile(r"^- 自动合并范围：(.+)$", re.MULTILINE)
-MERGE_SHA_PATTERN = re.compile(r"^- 合并提交SHA：`[0-9a-f]{40}`$", re.MULTILINE)
+MERGE_SHA_PATTERN = re.compile(
+    r"^- 合并提交SHA：`([0-9a-f]{40})`$", re.MULTILINE
+)
 MERGE_TIME_PATTERN = re.compile(
-    r"^- 合并时间：\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4}$",
+    r"^- 合并时间：(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4})$",
     re.MULTILINE,
 )
-PULL_REQUEST_PATTERN = re.compile(r"^- Pull Request：\[#\d+\]\(https://github\.com/xk320/zhishi/pull/\d+\)$", re.MULTILINE)
+PULL_REQUEST_PATTERN = re.compile(
+    r"^- Pull Request：\[#(\d+)\]\(https://github\.com/xk320/zhishi/pull/\1\)$",
+    re.MULTILINE,
+)
+DEPENDENCY_PATTERN = re.compile(r"^- 唯一前序依赖：任务-(\d{6})(?:[^\r\n]*)$", re.MULTILINE)
 TASK_REFERENCE_LINE = re.compile(
     r"^\s*-\s*任务-(\d{6})(?:\s*[（(][^\r\n]*[）)])?\s*$"
 )
@@ -41,6 +50,17 @@ STATE_CLOSURE_TRANSITIONS = frozenset(
         ("阻塞", "待执行"),
     }
 )
+DELIVERY_BASE_STATUSES = frozenset({"待执行", "需修复"})
+COMPLETION_MUTABLE_PREFIXES = (
+    "- 状态：",
+    "- 合并时间：",
+    "- 合并提交SHA：",
+)
+SUCCESSOR_MUTABLE_PREFIXES = (
+    "- 状态：",
+    "- 当前阻塞原因：",
+    "- 解除条件：",
+)
 
 
 @dataclass(frozen=True)
@@ -49,6 +69,15 @@ class EligibilityResult:
 
     eligible: bool
     reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class MergeFact:
+    """main中已验证的真实合并事实。"""
+
+    sha: str
+    merged_at: str
+    pr_number: int
 
 
 def _task_field(pattern: re.Pattern[str], text: str) -> str | None:
@@ -136,6 +165,117 @@ def _append_reason(reasons: list[str], reason: str) -> None:
         reasons.append(reason)
 
 
+def _without_mutable_lines(text: str, prefixes: Sequence[str]) -> tuple[str, ...]:
+    """移除状态闭环唯一允许变化的行，其余合同必须逐行不变。"""
+
+    return tuple(
+        line
+        for line in text.splitlines()
+        if not any(line.startswith(prefix) for prefix in prefixes)
+    )
+
+
+def _task_merge_fact(text: str) -> MergeFact | None:
+    sha_match = MERGE_SHA_PATTERN.search(text)
+    time_match = MERGE_TIME_PATTERN.search(text)
+    pr_match = PULL_REQUEST_PATTERN.search(text)
+    if sha_match is None or time_match is None or pr_match is None:
+        return None
+    return MergeFact(
+        sha=sha_match.group(1),
+        merged_at=time_match.group(1),
+        pr_number=int(pr_match.group(1)),
+    )
+
+
+def _board_rows(text: str) -> dict[str, tuple[str, str]]:
+    """读取看板中任务所在状态和完整行。"""
+
+    current_section = ""
+    rows: dict[str, tuple[str, str]] = {}
+    duplicates: set[str] = set()
+    for line in text.splitlines():
+        if line.startswith("## "):
+            current_section = line[3:].strip()
+            continue
+        matches = re.findall(r"任务-(\d{6})", line)
+        if not line.startswith("|") or len(matches) != 1:
+            continue
+        task_id = matches[0]
+        if task_id in rows:
+            duplicates.add(task_id)
+        rows[task_id] = (current_section, line)
+    for task_id in duplicates:
+        rows[task_id] = ("重复", "")
+    return rows
+
+
+def _board_static_lines(text: str) -> tuple[str, ...]:
+    """保留看板非表格、非空态的静态结构。"""
+
+    return tuple(
+        line
+        for line in text.splitlines()
+        if not line.startswith("|") and line.strip() != "无。"
+    )
+
+
+def _validate_board_closure(
+    *,
+    task_ids: Sequence[str],
+    base_tasks: Mapping[str, str],
+    head_tasks: Mapping[str, str],
+    base_board: str | None,
+    head_board: str | None,
+    merge_facts: Mapping[str, MergeFact],
+    reasons: list[str],
+) -> None:
+    if base_board is None or head_board is None:
+        _append_reason(reasons, "合并后状态闭环缺少可复算看板")
+        return
+    if _board_static_lines(base_board) != _board_static_lines(head_board):
+        _append_reason(reasons, "合并后状态闭环夹带看板结构改写")
+    base_rows = _board_rows(base_board)
+    head_rows = _board_rows(head_board)
+    referenced = set(task_ids)
+    for task_id, row in base_rows.items():
+        if task_id not in referenced and head_rows.get(task_id) != row:
+            _append_reason(reasons, f"看板夹带无关任务-{task_id}改写")
+    for task_id, row in head_rows.items():
+        if task_id not in referenced and base_rows.get(task_id) != row:
+            _append_reason(reasons, f"看板夹带无关任务-{task_id}改写")
+    for task_id in task_ids:
+        task = head_tasks.get(task_id)
+        row = head_rows.get(task_id)
+        if task is None or row is None or row[0] == "重复":
+            _append_reason(reasons, f"任务-{task_id}在看板中不是唯一映射")
+            continue
+        status = _task_field(TASK_STATUS_PATTERN, task)
+        if row[0] != status:
+            _append_reason(reasons, f"任务-{task_id}的看板状态与任务文件不一致")
+            continue
+        title = _task_field(TASK_TITLE_PATTERN, task)
+        priority = _task_field(TASK_PRIORITY_PATTERN, task)
+        if status == "已完成":
+            fact = merge_facts.get(task_id)
+            expected = (
+                f"| 任务-{task_id} | {title} | PR #{fact.pr_number}；合并提交 `{fact.sha}` |"
+                if title is not None and fact is not None
+                else ""
+            )
+        elif status == "待执行":
+            dependency = _task_field(DEPENDENCY_PATTERN, task)
+            expected = (
+                f"| {priority} | 任务-{task_id} | {title} | {dependency} |"
+                if title is not None and priority is not None and dependency is not None
+                else ""
+            )
+        else:
+            expected = ""
+        if row[1] != expected:
+            _append_reason(reasons, f"任务-{task_id}的看板证据行不可复算")
+
+
 def _validate_delivery_tasks(
     *,
     task_ids: Sequence[str],
@@ -158,6 +298,12 @@ def _validate_delivery_tasks(
                 reasons,
                 f"任务-{task_id}类型“{task_type}”不允许自动合并",
             )
+        base_status = _task_field(TASK_STATUS_PATTERN, base_task)
+        if base_status not in DELIVERY_BASE_STATUSES:
+            _append_reason(
+                reasons,
+                f"任务-{task_id}基线状态“{base_status}”不可进入任务交付",
+            )
         if _task_field(AUTOMATION_SCOPE_PATTERN, base_task) != AUTOMATION_SCOPE:
             automation_authorized = False
 
@@ -175,10 +321,15 @@ def _validate_state_closure(
     changed_paths: Sequence[str],
     base_tasks: Mapping[str, str],
     head_tasks: Mapping[str, str],
+    base_board: str | None,
+    head_board: str | None,
+    merge_facts: Mapping[str, MergeFact],
     reasons: list[str],
 ) -> None:
     completed = 0
     unlocked = 0
+    completed_task_id: str | None = None
+    transitions: dict[str, tuple[str | None, str | None]] = {}
     if "docs/研发中心/看板.md" not in changed_paths:
         _append_reason(reasons, "合并后状态闭环必须同步看板")
     for path in changed_paths:
@@ -197,6 +348,7 @@ def _validate_state_closure(
             continue
         old_status = _task_field(TASK_STATUS_PATTERN, base_task)
         new_status = _task_field(TASK_STATUS_PATTERN, head_task)
+        transitions[task_id] = (old_status, new_status)
         if (old_status, new_status) not in STATE_CLOSURE_TRANSITIONS:
             _append_reason(
                 reasons,
@@ -204,18 +356,56 @@ def _validate_state_closure(
             )
         if (old_status, new_status) == ("待评审", "已完成"):
             completed += 1
-            if (
-                MERGE_SHA_PATTERN.search(head_task) is None
-                or MERGE_TIME_PATTERN.search(head_task) is None
-                or PULL_REQUEST_PATTERN.search(head_task) is None
-            ):
+            completed_task_id = task_id
+            declared_fact = _task_merge_fact(head_task)
+            if declared_fact is None:
                 _append_reason(reasons, f"任务-{task_id}缺少真实合并证据")
+            if declared_fact != merge_facts.get(task_id):
+                _append_reason(
+                    reasons,
+                    f"任务-{task_id}合并证据与main真实事实不一致",
+                )
+            if _without_mutable_lines(
+                base_task, COMPLETION_MUTABLE_PREFIXES
+            ) != _without_mutable_lines(head_task, COMPLETION_MUTABLE_PREFIXES):
+                _append_reason(reasons, f"任务-{task_id}状态闭环夹带合同改写")
         if (old_status, new_status) == ("阻塞", "待执行"):
             unlocked += 1
     if completed != 1:
         _append_reason(reasons, "合并后状态闭环必须且只能完成一个待评审任务")
     if unlocked > 1:
         _append_reason(reasons, "合并后状态闭环最多解除一个唯一后继")
+    for task_id, transition in transitions.items():
+        if transition != ("阻塞", "待执行"):
+            continue
+        base_task = base_tasks[task_id]
+        head_task = head_tasks[task_id]
+        dependency = _task_field(DEPENDENCY_PATTERN, base_task)
+        if completed_task_id is None or dependency != completed_task_id:
+            _append_reason(
+                reasons,
+                f"任务-{task_id}不是任务-{completed_task_id or '未知'}的唯一后继",
+            )
+        if _without_mutable_lines(
+            base_task, SUCCESSOR_MUTABLE_PREFIXES
+        ) != _without_mutable_lines(head_task, SUCCESSOR_MUTABLE_PREFIXES):
+            _append_reason(reasons, f"任务-{task_id}状态闭环夹带合同改写")
+        expected_blocker = (
+            f"- 当前阻塞原因：无；任务-{completed_task_id}已完成。"
+            if completed_task_id is not None
+            else ""
+        )
+        if expected_blocker not in head_task.splitlines() or "- 解除条件：已满足。" not in head_task.splitlines():
+            _append_reason(reasons, f"任务-{task_id}未如实登记唯一后继解锁")
+    _validate_board_closure(
+        task_ids=task_ids,
+        base_tasks=base_tasks,
+        head_tasks=head_tasks,
+        base_board=base_board,
+        head_board=head_board,
+        merge_facts=merge_facts,
+        reasons=reasons,
+    )
 
 
 def evaluate_eligibility(
@@ -227,6 +417,9 @@ def evaluate_eligibility(
     base_branch: str,
     repository: str,
     head_repository: str,
+    merge_facts: Mapping[str, MergeFact] | None = None,
+    base_board: str | None = None,
+    head_board: str | None = None,
 ) -> EligibilityResult:
     """按基线任务合同、严格PR合同和变更路径判定资格。"""
 
@@ -259,6 +452,9 @@ def evaluate_eligibility(
             changed_paths=changed_paths,
             base_tasks=base_tasks,
             head_tasks=head_tasks,
+            base_board=base_board,
+            head_board=head_board,
+            merge_facts=merge_facts or {},
             reasons=reasons,
         )
 
@@ -302,6 +498,17 @@ def _read_task_at_ref(repo_root: Path, ref: str, task_id: str) -> str | None:
     return result.stdout if result.returncode == 0 else None
 
 
+def _read_path_at_ref(repo_root: Path, ref: str, path: str) -> str | None:
+    result = subprocess.run(
+        ["git", "show", f"{ref}:{path}"],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout if result.returncode == 0 else None
+
+
 def _load_ref_tasks(
     repo_root: Path,
     ref: str,
@@ -313,6 +520,60 @@ def _load_ref_tasks(
         if content is not None:
             tasks[task_id] = content
     return tasks
+
+
+def _git_text(repo_root: Path, arguments: Sequence[str]) -> str | None:
+    result = subprocess.run(
+        ["git", *arguments],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _derive_merge_facts(
+    repo_root: Path,
+    base_ref: str,
+    head_tasks: Mapping[str, str],
+) -> dict[str, MergeFact]:
+    """只从已进入main基线的Git提交推导合并事实。"""
+
+    facts: dict[str, MergeFact] = {}
+    for task_id, task in head_tasks.items():
+        declared = _task_merge_fact(task)
+        if declared is None:
+            continue
+        ancestry = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", declared.sha, base_ref],
+            cwd=repo_root,
+            check=False,
+            capture_output=True,
+        )
+        if ancestry.returncode != 0:
+            continue
+        subject = _git_text(repo_root, ["show", "-s", "--format=%s", declared.sha])
+        committed_at = _git_text(
+            repo_root, ["show", "-s", "--format=%cI", declared.sha]
+        )
+        if subject is None or committed_at is None:
+            continue
+        pr_match = re.fullmatch(r"Merge pull request #(\d+) from .+", subject)
+        if pr_match is None:
+            continue
+        try:
+            normalized_time = datetime.fromisoformat(committed_at).strftime(
+                "%Y-%m-%d %H:%M:%S %z"
+            )
+        except ValueError:
+            continue
+        facts[task_id] = MergeFact(
+            sha=declared.sha,
+            merged_at=normalized_time,
+            pr_number=int(pr_match.group(1)),
+        )
+    return facts
 
 
 def _parse_arguments() -> argparse.Namespace:
@@ -350,14 +611,27 @@ def main() -> int:
             task_ids.add(match.group(1))
     ordered_ids = tuple(sorted(task_ids))
 
+    base_tasks = _load_ref_tasks(repo_root, arguments.base_ref, ordered_ids)
+    head_tasks = _load_ref_tasks(repo_root, arguments.head_ref, ordered_ids)
     result = evaluate_eligibility(
         changed_paths=changed_paths,
         pr_body=str(metadata.get("body", "")),
-        base_tasks=_load_ref_tasks(repo_root, arguments.base_ref, ordered_ids),
-        head_tasks=_load_ref_tasks(repo_root, arguments.head_ref, ordered_ids),
+        base_tasks=base_tasks,
+        head_tasks=head_tasks,
         base_branch=str(metadata.get("base_ref", "")),
         repository=str(metadata.get("repository", "")),
         head_repository=str(metadata.get("head_repository", "")),
+        merge_facts=_derive_merge_facts(
+            repo_root,
+            arguments.base_ref,
+            head_tasks,
+        ),
+        base_board=_read_path_at_ref(
+            repo_root, arguments.base_ref, "docs/研发中心/看板.md"
+        ),
+        head_board=_read_path_at_ref(
+            repo_root, arguments.head_ref, "docs/研发中心/看板.md"
+        ),
     )
     print(
         json.dumps(
