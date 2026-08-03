@@ -1057,7 +1057,14 @@ def _registration_field_value(text: str, field: str) -> str | None:
 
     lines = text.splitlines()
     first_section = next(
-        (index for index, line in enumerate(lines) if line.startswith("## ")),
+        (
+            index
+            for index, line in enumerate(lines)
+            if (
+                (parsed := _commonmark_atx_heading(line)) is not None
+                and parsed[0] == 2
+            )
+        ),
         len(lines),
     )
     prefix = f"- {field}："

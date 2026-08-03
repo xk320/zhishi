@@ -658,6 +658,30 @@ class AutoMergeEligibilityTests(unittest.TestCase):
                     result.reasons,
                 )
 
+    def test_任务登记元数据必须位于commonmark首个二级章节前(self):
+        complete_task = registration_task()
+        background = "## 背景\n\n- 背景的可验证合同。\n"
+        without_background = complete_task.replace(
+            "\n" + background,
+            "",
+            1,
+        )
+        title, remainder = without_background.split("\n\n", maxsplit=1)
+        task = (
+            title
+            + "\n\n   ## 背景 #\n\n- 背景的可验证合同。\n\n"
+            + remainder
+        )
+
+        result = self.evaluate_registration(task=task)
+
+        self.assertFalse(result.eligible)
+        for field in REGISTRATION_REQUIRED_FIELDS:
+            self.assertIn(
+                f"任务-000040合同字段“{field}”必须且只能出现一次",
+                result.reasons,
+            )
+
     def test_任务登记依赖和阻塞原因必须唯一(self):
         complete_task = registration_task()
         dependency_line = "- 唯一前序依赖：任务-000039完成后执行"
