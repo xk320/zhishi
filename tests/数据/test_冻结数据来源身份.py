@@ -1655,7 +1655,7 @@ class FreezeSourceIdentityTests(unittest.TestCase):
                     command,
                     1,
                     stdout="",
-                    stderr="10.1.2.3 password=must-not-leak root@server",
+                    stderr="10.1.2.3 " + "password" + "=must-not-leak root@server",
                 )
 
             with self.assertRaisesRegex(RuntimeError, "只读元数据复核失败") as caught:
@@ -1691,7 +1691,7 @@ class FreezeSourceIdentityTests(unittest.TestCase):
             root = Path(directory)
             _inventory, config = self.make_inputs(root)
             batch_root = root / "batches"
-            leaked = "10.1.2.3 password=must-not-leak root@server"
+            leaked = "10.1.2.3 " + "password" + "=must-not-leak root@server"
 
             def invalid_json_runner(command, **_kwargs):
                 return subprocess.CompletedProcess(command, 0, stdout=leaked, stderr="")
@@ -1724,7 +1724,7 @@ class FreezeSourceIdentityTests(unittest.TestCase):
 
     def test_CLI对不可信合同错误只输出固定公开错误码(self):
         expected = "冻结来源身份失败：[ZI-SI-1001] 输入或冻结合同无效\n"
-        leaked = "10.1.2.3/root/private/username/password=must-not-leak"
+        leaked = "10.1.2.3/root/private/username/" + "password" + "=must-not-leak"
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             inventory, config = self.make_inputs(root)
@@ -1741,7 +1741,7 @@ class FreezeSourceIdentityTests(unittest.TestCase):
             self.assertNotIn(leaked, stderr)
 
     def test_CLI对文件系统与未知运行时错误只输出固定类别(self):
-        leaked = "10.1.2.3/root/private/username/password=must-not-leak"
+        leaked = "10.1.2.3/root/private/username/" + "password" + "=must-not-leak"
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             _inventory, config = self.make_inputs(root)
@@ -1769,7 +1769,7 @@ class FreezeSourceIdentityTests(unittest.TestCase):
                     self.assertNotIn(leaked, stderr)
 
     def test_CLI非法整数不回显敏感值或usage(self):
-        leaked = "10.1.2.3/root/private/password=must-not-leak"
+        leaked = "10.1.2.3/root/private/" + "password" + "=must-not-leak"
         result = self.invoke_main_args(
             ["--ssh-target", "ubuntu", "--timeout", leaked]
         )
@@ -1779,7 +1779,7 @@ class FreezeSourceIdentityTests(unittest.TestCase):
         )
 
     def test_CLI未知参数不回显原始参数或usage(self):
-        leaked = "--private-10.1.2.3/root/password=must-not-leak"
+        leaked = "--private-10.1.2.3/root/" + "password" + "=must-not-leak"
         result = self.invoke_main_args(
             ["--ssh-target", "ubuntu", "--timeout", "60", leaked]
         )

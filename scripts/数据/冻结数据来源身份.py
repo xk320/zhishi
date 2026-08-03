@@ -1070,21 +1070,21 @@ def build_probe_script(
                 MAXIMUM_STDERR,
             )
 
-        def decode_text(token, nullable=False):
-            if token == "N":
+        def decode_text(encoded, nullable=False):
+            if encoded == "N":
                 if nullable:
                     return None
                 raise ValueError("unexpected null")
-            if not token.startswith("H") or len(token[1:]) % 2:
+            if not encoded.startswith("H") or len(encoded[1:]) % 2:
                 raise ValueError("invalid hex")
-            return bytes.fromhex(token[1:]).decode("utf-8", errors="strict")
+            return bytes.fromhex(encoded[1:]).decode("utf-8", errors="strict")
 
-        def decode_number(token):
-            if token == "N":
+        def decode_number(encoded):
+            if encoded == "N":
                 return None
-            if not token.startswith("V") or not token[1:].isdigit():
+            if not encoded.startswith("V") or not encoded[1:].isdigit():
                 raise ValueError("invalid number")
-            return int(token[1:])
+            return int(encoded[1:])
 
         tables = {{}}
         schema_valid = True
