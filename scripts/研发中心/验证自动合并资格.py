@@ -221,60 +221,34 @@ def _has_unique_metadata_fields(
 
 def _successor_mutable_layout(
     text: str,
-) -> tuple[str, int, int, int] | None:
+) -> str | None:
     """定位后继字段的固定任务头或依赖章节布局。"""
 
-    lines = text.splitlines()
-    first_section = next(
-        (index for index, line in enumerate(lines) if line.startswith("## ")),
-        len(lines),
-    )
-    mutable_locations: list[int] = []
-    for prefix in ("- 当前阻塞原因：", "- 解除条件："):
-        locations = [
-            index for index, line in enumerate(lines) if line.startswith(prefix)
+    current_section: str | None = None
+    located_lines: list[tuple[str, str | None]] = []
+    for line in text.splitlines():
+        if line.startswith("## "):
+            current_section = line[3:].strip()
+        located_lines.append((line, current_section))
+
+    def locations(prefix: str) -> list[str | None]:
+        return [
+            section
+            for line, section in located_lines
+            if line.startswith(prefix)
         ]
-        if len(locations) != 1:
-            return None
-        mutable_locations.extend(locations)
-    if all(index < first_section for index in mutable_locations):
-        return "header", first_section, -1, first_section
 
-    section_headings = [
-        index
-        for index, line in enumerate(lines)
-        if line.strip() == "## 依赖与阻塞条件"
-    ]
-    if len(section_headings) != 1:
+    if locations("- 状态：") != [None]:
         return None
-    section_start = section_headings[0]
-    section_end = next(
-        (
-            index
-            for index in range(section_start + 1, len(lines))
-            if lines[index].startswith("## ")
-        ),
-        len(lines),
-    )
-    if not all(section_start < index < section_end for index in mutable_locations):
+    blocker_locations = locations("- 当前阻塞原因：")
+    release_locations = locations("- 解除条件：")
+    if len(blocker_locations) != 1 or blocker_locations != release_locations:
         return None
-    return "dependency_section", first_section, section_start, section_end
-
-
-def _has_unique_successor_mutable_fields(text: str) -> bool:
-    """后继状态位于任务头，阻塞字段只允许位于依赖章节。"""
-
-    layout = _successor_mutable_layout(text)
-    if layout is None:
-        return False
-    _, first_section, _, _ = layout
-    lines = text.splitlines()
-    status_locations = [
-        index for index, line in enumerate(lines) if line.startswith("- 状态：")
-    ]
-    if len(status_locations) != 1 or status_locations[0] >= first_section:
-        return False
-    return True
+    if blocker_locations == [None]:
+        return "header"
+    if blocker_locations == ["依赖与阻塞条件"]:
+        return "dependency_section"
+    return None
 
 
 def _without_successor_mutable_lines(text: str) -> tuple[str, ...]:
@@ -283,22 +257,19 @@ def _without_successor_mutable_lines(text: str) -> tuple[str, ...]:
     layout = _successor_mutable_layout(text)
     if layout is None:
         return tuple(text.splitlines())
-    kind, first_section, section_start, section_end = layout
-    return tuple(
-        line
-        for index, line in enumerate(text.splitlines())
-        if not (
-            (index < first_section and line.startswith("- 状态："))
-            or (
-                (
-                    index < first_section
-                    if kind == "header"
-                    else section_start < index < section_end
-                )
-                and line.startswith(("- 当前阻塞原因：", "- 解除条件："))
-            )
+    current_section: str | None = None
+    retained_lines: list[str] = []
+    blocker_section = None if layout == "header" else "依赖与阻塞条件"
+    for line in text.splitlines():
+        if line.startswith("## "):
+            current_section = line[3:].strip()
+        is_status = current_section is None and line.startswith("- 状态：")
+        is_dependency_field = current_section == blocker_section and line.startswith(
+            ("- 当前阻塞原因：", "- 解除条件：")
         )
-    )
+        if not is_status and not is_dependency_field:
+            retained_lines.append(line)
+    return tuple(retained_lines)
 
 
 def _task_merge_fact(text: str) -> MergeFact | None:
@@ -560,13 +531,7 @@ def _validate_state_closure(
             )
         base_layout = _successor_mutable_layout(base_task)
         head_layout = _successor_mutable_layout(head_task)
-        fields_valid = (
-            _has_unique_successor_mutable_fields(base_task)
-            and _has_unique_successor_mutable_fields(head_task)
-            and base_layout is not None
-            and head_layout is not None
-            and base_layout[0] == head_layout[0]
-        )
+        fields_valid = base_layout is not None and base_layout == head_layout
         if not fields_valid or _without_successor_mutable_lines(
             base_task
         ) != _without_successor_mutable_lines(head_task):
