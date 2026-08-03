@@ -667,17 +667,11 @@ def _is_controlled_rd_path(path: str) -> bool:
         return False
     root = pure_path.parts[0]
     suffix = pure_path.suffix.lower()
-    for index, part in enumerate(pure_path.parts[1:], start=1):
+    for part in pure_path.parts[1:]:
         stem = PurePosixPath(part).stem.casefold()
         if stem not in CONTROLLED_PATH_DENY_STEMS and part.casefold() not in CONTROLLED_PATH_DENY_STEMS:
             continue
-        simulator_order = (
-            stem in {"order", "orders"}
-            and "模拟" in pure_path.parts
-            and "交易所" in pure_path.parts
-        )
-        if not simulator_order:
-            return False
+        return False
     if root == "docs":
         return suffix == ".md"
     if root == "config":

@@ -1323,6 +1323,7 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             "scripts/研究/部署/release.sh",
             "scripts/研究/生产/migrate.py",
             "scripts/模拟/交易/order.py",
+            "scripts/模拟/交易所/order.py",
             "/src/研究/信号.py",
             "src/研究/./信号.py",
             "src/研究/../信号.py",
@@ -1367,7 +1368,6 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             "artifacts/研究/result.tar.JSON",
             "scripts/研究/部署工具/release.sh",
             "scripts/研究/生产者/migrate.py",
-            "scripts/模拟/交易所/order.py",
         )
 
         for allowed_path in allowed_paths:
