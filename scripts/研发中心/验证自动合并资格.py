@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
@@ -44,6 +45,10 @@ TASK_TYPE_PATTERN = re.compile(r"^- 类型：(.+)$", re.MULTILINE)
 TASK_STATUS_PATTERN = re.compile(r"^- 状态：(.+)$", re.MULTILINE)
 TASK_PRIORITY_PATTERN = re.compile(r"^- 优先级：(.+)$", re.MULTILINE)
 EXECUTION_BRANCH_PATTERN = re.compile(r"^- 执行分支：`([^`]+)`$", re.MULTILINE)
+START_TIME_PATTERN = re.compile(
+    r"^- 开始时间：`(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2}:\d{2})`$",
+    re.MULTILINE,
+)
 TASK_TITLE_PATTERN = re.compile(r"^# 任务-\d{6}：(.+)$", re.MULTILINE)
 TASK_TITLE_WITH_ID_PATTERN = re.compile(
     r"^# 任务-(\d{6})：(.+)$", re.MULTILINE
@@ -181,9 +186,21 @@ REGISTRATION_DESIGN_PATTERN = re.compile(
 STATE_CLOSURE_TRANSITIONS = frozenset(
     {
         ("待评审", "已完成"),
+        ("待执行", "阻塞"),
+        ("执行中", "阻塞"),
+        ("需修复", "阻塞"),
         ("阻塞", "待执行"),
+        ("阻塞", "需修复"),
     }
 )
+BLOCKING_TRANSITIONS = frozenset(
+    {
+        ("待执行", "阻塞"),
+        ("执行中", "阻塞"),
+        ("需修复", "阻塞"),
+    }
+)
+RECOVERY_TRANSITIONS = frozenset({("阻塞", "待执行"), ("阻塞", "需修复")})
 DELIVERY_BASE_STATUSES = frozenset({"待执行", "需修复"})
 COMPLETION_MUTABLE_PREFIXES = (
     "- 状态：",
@@ -199,6 +216,7 @@ MAX_BASE_TASK_TREE_BYTES = 4 * 1024 * 1024
 MAX_BASE_TASK_COUNT = 10000
 SENSITIVE_TEXT_PATTERNS = (
     re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----", re.IGNORECASE),
+    re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])"),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b"),
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{82,}\b"),
     re.compile(r"\bAKIA[A-Z0-9]{16}\b"),
@@ -961,10 +979,32 @@ def _successor_mutable_layout(
         return None
     blocker_locations = locations("- 当前阻塞原因：")
     release_locations = locations("- 解除条件：")
-    if len(blocker_locations) != 1 or len(release_locations) != 1:
+    record_starts = [
+        index for index, line in enumerate(lines) if line == "## 执行记录"
+    ]
+    if len(record_starts) > 1:
         return None
-    mutable_locations = blocker_locations + release_locations
-    if all(index < first_section for index in mutable_locations):
+    record_start = record_starts[0] if record_starts else len(lines)
+    record_end = next(
+        (
+            index
+            for index in range(record_start + 1, len(lines))
+            if lines[index].startswith("## ")
+        ),
+        len(lines),
+    )
+
+    def in_record(index: int) -> bool:
+        return record_start < index < record_end
+
+    header_blockers = [index for index in blocker_locations if index < first_section]
+    header_releases = [index for index in release_locations if index < first_section]
+    if (
+        len(header_blockers) == 1
+        and len(header_releases) == 1
+        and all(in_record(index) or index < first_section for index in blocker_locations)
+        and all(in_record(index) or index < first_section for index in release_locations)
+    ):
         return "header", first_section, -1, first_section
 
     section_headings = [
@@ -983,7 +1023,18 @@ def _successor_mutable_layout(
         ),
         len(lines),
     )
-    if not all(section_start < index < section_end for index in mutable_locations):
+    section_blockers = [
+        index for index in blocker_locations if section_start < index < section_end
+    ]
+    section_releases = [
+        index for index in release_locations if section_start < index < section_end
+    ]
+    if (
+        len(section_blockers) != 1
+        or len(section_releases) != 1
+        or not all(in_record(index) or section_start < index < section_end for index in blocker_locations)
+        or not all(in_record(index) or section_start < index < section_end for index in release_locations)
+    ):
         return None
     return "dependency_section", first_section, section_start, section_end
 
@@ -1010,6 +1061,233 @@ def _without_successor_mutable_lines(text: str) -> tuple[str, ...]:
             )
         )
     )
+
+
+BLOCKING_RECORD_FIELDS = (
+    "- 执行分支：",
+    "- 开始时间：",
+    "- 尝试命令：",
+    "- 结果：",
+    "- 外部证据：",
+    "- 阻塞原因：",
+    "- 解除条件：",
+    "- 数据与安全：",
+)
+ALLOWED_BLOCKING_ALIASES = frozenset({"ubuntu"})
+BLOCKING_HOSTNAME_PATTERN = re.compile(
+    r"(?<![\w-])(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![\w-])"
+)
+BLOCKING_URL_PATTERN = re.compile(r"\b(?:https?|ssh)://", re.IGNORECASE)
+BLOCKING_IPV4_PATTERN = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
+
+
+def _section_bounds(text: str, heading: str) -> tuple[int, int] | None:
+    """返回唯一二级章节的行范围；重复或缺失均失败关闭。"""
+
+    lines = text.splitlines()
+    starts = [index for index, line in enumerate(lines) if line == heading]
+    if len(starts) != 1:
+        return None
+    start = starts[0]
+    end = next(
+        (
+            index
+            for index in range(start + 1, len(lines))
+            if lines[index].startswith("## ")
+        ),
+        len(lines),
+    )
+    return start, end
+
+
+def _blocking_record(text: str) -> tuple[str, ...] | None:
+    """验证阻塞执行记录只包含固定的脱敏字段。"""
+
+    bounds = _section_bounds(text, "## 执行记录")
+    if bounds is None:
+        return None
+    start, end = bounds
+    lines = text.splitlines()[start + 1 : end]
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if not lines:
+        return None
+    locations = {
+        prefix: [index for index, line in enumerate(lines) if line.startswith(prefix)]
+        for prefix in BLOCKING_RECORD_FIELDS
+    }
+    if any(len(indexes) != 1 for indexes in locations.values()):
+        return None
+    if any(
+        not line.startswith(BLOCKING_RECORD_FIELDS)
+        for line in lines
+        if line.strip()
+    ):
+        return None
+    return tuple(lines)
+
+
+def _blocking_record_aliases_allowed(record: tuple[str, ...]) -> bool:
+    """阻塞记录只允许固定SSH逻辑别名，不允许主机地址或URL。"""
+
+    for line in record:
+        if (
+            BLOCKING_HOSTNAME_PATTERN.search(line)
+            or BLOCKING_URL_PATTERN.search(line)
+            or BLOCKING_IPV4_PATTERN.search(line)
+        ):
+            return False
+        if not line.startswith("- 尝试命令："):
+            continue
+        command = line.split("：", 1)[1].strip()
+        if command.startswith("`") and command.endswith("`"):
+            command = command[1:-1]
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
+            return False
+        if "ssh" not in tokens:
+            continue
+        ssh_index = tokens.index("ssh")
+        target = None
+        index = ssh_index + 1
+        while index < len(tokens):
+            arg_value = tokens[index]
+            if arg_value == "-o":
+                index += 2
+                continue
+            if arg_value.startswith("-"):
+                index += 1
+                continue
+            target = arg_value
+            break
+        if target not in ALLOWED_BLOCKING_ALIASES:
+            return False
+    return True
+
+
+def _header_field_line(text: str, prefix: str) -> str | None:
+    """读取任务头部唯一字段，忽略执行记录中的同名字段。"""
+
+    lines = text.splitlines()
+    first_section = next(
+        (index for index, line in enumerate(lines) if line.startswith("## ")),
+        len(lines),
+    )
+    matches = [
+        line
+        for index, line in enumerate(lines)
+        if index < first_section and line.startswith(prefix)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _without_blocking_mutable_lines(
+    text: str, *, allow_initial_metadata: bool
+) -> tuple[str, ...]:
+    """移除阻塞迁移允许变化的状态字段和首次执行元数据。"""
+
+    lines = list(_without_successor_mutable_lines(text))
+    if not allow_initial_metadata:
+        return tuple(lines)
+    first_section = next(
+        (index for index, line in enumerate(lines) if line.startswith("## ")),
+        len(lines),
+    )
+    filtered: list[str] = []
+    skip_record = False
+    for index, line in enumerate(lines):
+        if index < first_section and line.startswith(("- 执行分支：", "- 开始时间：")):
+            continue
+        if line == "## 执行记录":
+            skip_record = True
+            continue
+        if skip_record:
+            if line.startswith("## "):
+                skip_record = False
+                filtered.append(line)
+            continue
+        filtered.append(line)
+    while filtered and not filtered[-1].strip():
+        filtered.pop()
+    return tuple(filtered)
+
+
+def _validate_blocking_transition(
+    *, base_task: str, head_task: str, old_status: str, reasons: list[str]
+) -> None:
+    """校验进入阻塞时的字段位置、不可变合同和首次执行记录。"""
+
+    base_layout = _successor_mutable_layout(base_task)
+    head_layout = _successor_mutable_layout(head_task)
+    if (
+        base_layout is None
+        or head_layout is None
+        or base_layout[0] != head_layout[0]
+    ):
+        _append_reason(reasons, "阻塞状态闭环字段位置无效")
+        return
+    baseline_has_execution_metadata = any(
+        (
+            _header_field_line(base_task, "- 开始时间：") is not None,
+            _section_bounds(base_task, "## 执行记录") is not None,
+        )
+    )
+    allow_initial_metadata = (
+        old_status == "待执行" and not baseline_has_execution_metadata
+    )
+    if _without_blocking_mutable_lines(
+        base_task, allow_initial_metadata=allow_initial_metadata
+    ) != _without_blocking_mutable_lines(
+        head_task, allow_initial_metadata=allow_initial_metadata
+    ):
+        _append_reason(reasons, "阻塞状态闭环夹带合同改写")
+    branch = _header_field_line(head_task, "- 执行分支：")
+    start = _header_field_line(head_task, "- 开始时间：")
+    if (
+        branch is None
+        or EXECUTION_BRANCH_PATTERN.fullmatch(branch) is None
+        or start is None
+        or START_TIME_PATTERN.fullmatch(start) is None
+    ):
+        _append_reason(reasons, "阻塞状态闭环缺少执行分支或开始时间")
+    if allow_initial_metadata:
+        head_record = _blocking_record(head_task)
+        if head_record is None:
+            _append_reason(reasons, "首次阻塞必须包含固定结构化执行记录")
+        elif not _blocking_record_aliases_allowed(head_record):
+            _append_reason(reasons, "阻塞执行记录包含未批准的外部目标")
+    else:
+        base_record = _blocking_record(base_task)
+        head_record = _blocking_record(head_task)
+        if base_record is None or head_record is None:
+            _append_reason(reasons, "阻塞状态闭环缺少既有结构化执行记录")
+        elif base_record != head_record:
+            _append_reason(reasons, "阻塞状态闭环改写既有执行记录")
+        elif not _blocking_record_aliases_allowed(head_record):
+            _append_reason(reasons, "阻塞执行记录包含未批准的外部目标")
+
+
+def _validate_recovery_transition(
+    *, base_task: str, head_task: str, reasons: list[str]
+) -> None:
+    """校验阻塞恢复为待执行或需修复时只改变状态字段。"""
+
+    base_layout = _successor_mutable_layout(base_task)
+    head_layout = _successor_mutable_layout(head_task)
+    if (
+        base_layout is None
+        or head_layout is None
+        or base_layout[0] != head_layout[0]
+    ):
+        _append_reason(reasons, "阻塞恢复状态闭环字段位置无效")
+        return
+    if _without_successor_mutable_lines(base_task) != _without_successor_mutable_lines(
+        head_task
+    ):
+        _append_reason(reasons, "阻塞恢复状态闭环夹带合同改写")
 
 
 def _task_merge_fact(text: str) -> MergeFact | None:
@@ -1053,7 +1331,11 @@ def _board_static_lines(text: str) -> tuple[str, ...]:
     static: list[str] = []
     for line in text.splitlines():
         stripped = line.strip()
-        if stripped == "无。" or BOARD_TASK_ROW_PATTERN.match(line):
+        if (
+            not stripped
+            or stripped == "无。"
+            or BOARD_TASK_ROW_PATTERN.match(line)
+        ):
             continue
         known_schema_lines = {
             schema_line
@@ -1156,6 +1438,30 @@ def _validate_board_closure(
             expected = (
                 f"| {priority} | 任务-{task_id} | {title} | {dependency} |"
                 if title is not None and priority is not None and dependency is not None
+                else ""
+            )
+        elif status == "阻塞":
+            dependency = _task_field(DEPENDENCY_PATTERN, task)
+            blocker = _task_field(BLOCKER_PATTERN, task)
+            expected = (
+                f"| {priority} | 任务-{task_id} | {title} | {dependency} | {blocker} |"
+                if title is not None
+                and priority is not None
+                and dependency is not None
+                and blocker is not None
+                else ""
+            )
+        elif status == "需修复":
+            branch = _task_field(EXECUTION_BRANCH_PATTERN, task)
+            pr_match = PULL_REQUEST_PATTERN.search(task)
+            pr_number = pr_match.group(1) if pr_match else None
+            expected = (
+                f"| {priority} | 任务-{task_id} | {title} | `{branch}` | "
+                f"[#{pr_number}](https://github.com/xk320/zhishi/pull/{pr_number}) |"
+                if title is not None
+                and priority is not None
+                and branch is not None
+                and pr_number is not None
                 else ""
             )
         else:
@@ -1585,6 +1891,8 @@ def _validate_state_closure(
 ) -> None:
     completed = 0
     unlocked = 0
+    blocking = 0
+    recovered = 0
     completed_task_id: str | None = None
     transitions: dict[str, tuple[str | None, str | None]] = {}
     if "docs/研发中心/看板.md" not in changed_paths:
@@ -1635,9 +1943,34 @@ def _validate_state_closure(
                 head_task, COMPLETION_MUTABLE_PREFIXES
             ):
                 _append_reason(reasons, f"任务-{task_id}状态闭环夹带合同改写")
+        if (old_status, new_status) in BLOCKING_TRANSITIONS:
+            blocking += 1
+            _validate_blocking_transition(
+                base_task=base_task,
+                head_task=head_task,
+                old_status=old_status or "",
+                reasons=reasons,
+            )
         if (old_status, new_status) == ("阻塞", "待执行"):
             unlocked += 1
-    if completed != 1:
+        if (old_status, new_status) == ("阻塞", "需修复"):
+            recovered += 1
+            _validate_recovery_transition(
+                base_task=base_task,
+                head_task=head_task,
+                reasons=reasons,
+            )
+    if blocking:
+        if blocking != 1:
+            _append_reason(reasons, "阻塞状态闭环必须且只能迁移一个任务")
+        if completed or unlocked or recovered:
+            _append_reason(reasons, "阻塞状态闭环不得夹带完成、解锁或恢复迁移")
+    elif recovered:
+        if recovered != 1:
+            _append_reason(reasons, "阻塞恢复状态闭环必须且只能迁移一个任务")
+        if completed or unlocked:
+            _append_reason(reasons, "阻塞恢复状态闭环不得夹带完成或解锁迁移")
+    elif completed != 1:
         _append_reason(reasons, "合并后状态闭环必须且只能完成一个待评审任务")
     if unlocked > 1:
         _append_reason(reasons, "合并后状态闭环最多解除一个唯一后继")
