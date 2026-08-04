@@ -40,6 +40,22 @@ def _insert_board_row(board: str, section: str, row: str) -> str:
     raise AssertionError(f"看板缺少可插入的{section}分区")
 
 
+def _replace_board_section_with_empty(board: str, section: str) -> str:
+    """按章节边界清空内存看板夹具中的一个状态分区。"""
+
+    lines = board.splitlines()
+    heading = f"## {section}"
+    try:
+        start = lines.index(heading)
+    except ValueError as error:
+        raise AssertionError(f"看板缺少{section}分区") from error
+    end = next(
+        (index for index in range(start + 1, len(lines)) if lines[index].startswith("## ")),
+        len(lines),
+    )
+    return "\n".join(lines[:start] + [heading, "", "无。"] + lines[end:]) + "\n"
+
+
 class ExternalStateConsistencyTests(unittest.TestCase):
     def test_现行入口引用任务031证据(self):
         for relative_path in FORBIDDEN_CURRENT_CLAIMS:
@@ -161,14 +177,11 @@ class ExternalStateConsistencyTests(unittest.TestCase):
             "| 任务-000043 | 统一外部环境事实与阶段状态声明 | "
             "PR #62；合并提交 `abe66037161332d350b9782492beedd8898a4f8a` |"
         )
-        review_header, review_separator = json.loads(
-            BOARD_SCHEMA_PATH.read_text(encoding="utf-8")
-        )["sections"]["待评审"]
-        review_table = f"## 待评审\n\n{review_header}\n{review_separator}"
-        empty_board = board.replace(completed_row, "").replace(
-            review_table, "## 待评审\n\n无。"
+        empty_board = _replace_board_section_with_empty(
+            board.replace(completed_row, ""), "待评审"
         )
-        self.assertIn("## 待评审\n\n无。", empty_board)
+        pending_section = empty_board.split("## 待评审", 1)[1].split("## 需修复", 1)[0]
+        self.assertEqual(pending_section.strip(), "无。")
         pending_task = task.replace("- 状态：已完成", "- 状态：待评审")
         pending_row = (
             "| P0 | 任务-000043 | 统一外部环境事实与阶段状态声明 | "
