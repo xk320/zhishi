@@ -187,6 +187,16 @@ def _load_board_table_schema():
 
 BOARD_TABLE_SCHEMA = _load_board_table_schema()
 AUTOMATION_SCOPE_PATTERN = re.compile(r"^- 自动合并范围：(.+)$", re.MULTILINE)
+BLOCKED_CONTRACT_REPAIR_TYPE = "阻塞任务合同修复"
+BLOCKED_CONTRACT_REPAIR_EXECUTOR = "000056"
+BLOCKED_CONTRACT_REPAIR_TARGET = "000055"
+BLOCKED_CONTRACT_REPAIR_FIELD = "- 自动合并范围：治理自动化"
+BLOCKED_CONTRACT_REPAIR_ALLOWED_PATHS = frozenset(
+    {
+        "docs/研发中心/看板.md",
+        "docs/治理/PR自动合并策略.md",
+    }
+)
 MERGE_SHA_PATTERN = re.compile(
     r"^- 合并提交SHA：`([0-9a-f]{40})`$", re.MULTILINE
 )
@@ -223,7 +233,9 @@ DEPENDENCY_PATTERN = re.compile(r"^- 唯一前序依赖：任务-(\d{6})(?:[^\r\
 TASK_REFERENCE_LINE = re.compile(
     r"^\s*-\s*任务-(\d{6})(?:\s*[（(][^\r\n]*[）)])?\s*$"
 )
-CHANGE_TYPES = frozenset({"任务登记", "任务交付", "合并后状态闭环"})
+CHANGE_TYPES = frozenset(
+    {"任务登记", "任务交付", "合并后状态闭环", "阻塞任务合同修复"}
+)
 REGISTRATION_STATUSES = frozenset({"待执行", "阻塞"})
 REQUIRED_TASK_FIELDS = (
     "状态",
@@ -490,7 +502,10 @@ def parse_change_type(pr_body: str) -> str | None:
 
 
 def _task_reference_limit(change_type: str | None) -> int:
-    return 2 if change_type == "合并后状态闭环" else 1
+    return 2 if change_type in {
+        "合并后状态闭环",
+        BLOCKED_CONTRACT_REPAIR_TYPE,
+    } else 1
 
 
 def _task_reference_limit_reason(change_type: str | None) -> str:
@@ -1643,6 +1658,171 @@ def _validate_delivery_tasks(
     return automation_authorized, controlled_rd_authorized
 
 
+def _delivery_contract_without_metadata(text: str) -> tuple[str, ...]:
+    """保留任务交付合同正文，排除执行和交付事实元数据。"""
+
+    lines = text.splitlines()
+    record_start = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if line.strip() == "## 执行记录"
+        ),
+        len(lines),
+    )
+    first_section = next(
+        (
+            index
+            for index, line in enumerate(lines[:record_start])
+            if line.startswith("## ")
+        ),
+        record_start,
+    )
+    mutable_prefixes = (
+        "- 状态：",
+        "- 执行分支：",
+        "- 开始时间：",
+        "- Pull Request：",
+        "- 实现提交SHA：",
+        "- 完成实现时间：",
+        "- 架构评审结论：",
+        "- 合并完成时间：",
+    )
+    return tuple(
+        line
+        for index, line in enumerate(lines[:record_start])
+        if not (
+            index < first_section
+            and any(line.startswith(prefix) for prefix in mutable_prefixes)
+        )
+    )
+
+
+def _validate_blocked_contract_repair(
+    *,
+    task_ids: Sequence[str],
+    changed_paths: Sequence[str],
+    base_tasks: Mapping[str, str],
+    head_tasks: Mapping[str, str],
+    base_board: str | None,
+    head_board: str | None,
+    reasons: list[str],
+) -> set[str]:
+    """验证任务-000056对任务-000055的唯一单字段合同修复。"""
+
+    executor_id = BLOCKED_CONTRACT_REPAIR_EXECUTOR
+    target_id = BLOCKED_CONTRACT_REPAIR_TARGET
+    allowed_unreferenced: set[str] = set()
+    if tuple(task_ids) != (executor_id,):
+        _append_reason(
+            reasons,
+            "阻塞任务合同修复必须且只能关联任务-000056",
+        )
+        return allowed_unreferenced
+
+    executor_path = f"docs/研发中心/任务/任务-{executor_id}.md"
+    target_path = f"docs/研发中心/任务/任务-{target_id}.md"
+    required_paths = {executor_path, target_path, "docs/研发中心/看板.md"}
+    if not required_paths.issubset(set(changed_paths)):
+        _append_reason(
+            reasons,
+            "阻塞任务合同修复必须同时修改执行任务、目标任务和看板",
+        )
+    for path in changed_paths:
+        if path in required_paths or path in BLOCKED_CONTRACT_REPAIR_ALLOWED_PATHS:
+            continue
+        pure_path = PurePosixPath(path)
+        if (
+            len(pure_path.parts) == 3
+            and pure_path.parts[:2] == ("tests", "研发中心")
+            and pure_path.suffix == ".py"
+        ):
+            continue
+        _append_reason(reasons, f"阻塞任务合同修复包含不允许路径“{path}”")
+
+    executor_base = base_tasks.get(executor_id)
+    executor_head = head_tasks.get(executor_id)
+    target_base = base_tasks.get(target_id)
+    target_head = head_tasks.get(target_id)
+    if None in (executor_base, executor_head, target_base, target_head):
+        _append_reason(reasons, "阻塞任务合同修复缺少执行任务或目标任务正文")
+        return allowed_unreferenced
+    assert executor_base is not None
+    assert executor_head is not None
+    assert target_base is not None
+    assert target_head is not None
+
+    # 合同修复PR本身仍是一次受控任务交付；任务-000056必须先由独立
+    # 状态闭环从阻塞恢复为待执行（或需修复），不能在阻塞/执行中直接改合同。
+    _validate_delivery_tasks(
+        task_ids=(executor_id,),
+        base_tasks=base_tasks,
+        head_tasks=head_tasks,
+        reasons=reasons,
+    )
+
+    # 任务-000056的输出合同和固定方案必须在基线中明确证明唯一目标，
+    # 不能由PR正文、Issue或执行者自行指定另一个阻塞任务。
+    required_contract_evidence = (
+        "更新后的`docs/研发中心/任务/任务-000055.md`",
+        "只在任务-000055任务文件中增加唯一的`自动合并范围：治理自动化`字段",
+        "任务-000055当前阻塞合同",
+    )
+    if any(item not in executor_base for item in required_contract_evidence):
+        _append_reason(reasons, "任务-000056合同未证明任务-000055唯一目标")
+    if _task_field(TASK_TYPE_PATTERN, executor_base) != "治理":
+        _append_reason(reasons, "任务-000056类型不是治理")
+    if _task_field(AUTOMATION_SCOPE_PATTERN, executor_base) != AUTOMATION_SCOPE:
+        _append_reason(reasons, "任务-000056未声明治理自动化授权")
+    if _task_field(TASK_STATUS_PATTERN, target_base) != "阻塞":
+        _append_reason(reasons, "目标任务-000055基线状态不是阻塞")
+    if _task_field(TASK_STATUS_PATTERN, target_head) != "阻塞":
+        _append_reason(reasons, "目标任务-000055状态不得在合同修复中迁移")
+
+    # 执行任务可以按普通任务交付更新状态和执行事实，但合同章节逐行不变。
+    if _delivery_contract_without_metadata(executor_base) != _delivery_contract_without_metadata(
+        executor_head
+    ):
+        _append_reason(reasons, "任务-000056阻塞合同修复夹带执行任务合同改写")
+
+    base_scope_lines = [
+        line
+        for line in target_base.splitlines()
+        if line.startswith("- 自动合并范围：")
+    ]
+    head_scope_lines = [
+        line
+        for line in target_head.splitlines()
+        if line.startswith("- 自动合并范围：")
+    ]
+    if base_scope_lines:
+        _append_reason(reasons, "目标任务-000055基线已存在自动合并范围字段")
+    if head_scope_lines != [BLOCKED_CONTRACT_REPAIR_FIELD]:
+        _append_reason(
+            reasons,
+            "目标任务-000055只能新增唯一的治理自动化授权字段",
+        )
+    base_without_scope = tuple(
+        line for line in target_base.splitlines() if line != BLOCKED_CONTRACT_REPAIR_FIELD
+    )
+    head_without_scope = tuple(
+        line for line in target_head.splitlines() if line != BLOCKED_CONTRACT_REPAIR_FIELD
+    )
+    if base_without_scope != head_without_scope:
+        _append_reason(reasons, "目标任务-000055合同修复夹带其他字段改写")
+
+    _validate_delivery_board(
+        task_ids=(executor_id,),
+        base_tasks=base_tasks,
+        head_tasks=head_tasks,
+        base_board=base_board,
+        head_board=head_board,
+        reasons=reasons,
+    )
+    allowed_unreferenced.add(target_id)
+    return allowed_unreferenced
+
+
 def _registration_field_value(text: str, field: str) -> str | None:
     """读取任务头部严格唯一且非空的合同字段。"""
 
@@ -2265,6 +2445,7 @@ def evaluate_eligibility(
 
     automation_authorized = False
     controlled_rd_authorized = False
+    allowed_unreferenced_task_ids: set[str] = set()
     if change_type == "任务登记":
         _validate_task_registration(
             task_ids=task_ids,
@@ -2308,6 +2489,16 @@ def evaluate_eligibility(
             merge_facts=merge_facts or {},
             reasons=reasons,
         )
+    elif change_type == BLOCKED_CONTRACT_REPAIR_TYPE:
+        allowed_unreferenced_task_ids = _validate_blocked_contract_repair(
+            task_ids=task_ids,
+            changed_paths=changed_paths,
+            base_tasks=base_tasks,
+            head_tasks=head_tasks,
+            base_board=base_board,
+            head_board=head_board,
+            reasons=reasons,
+        )
 
     referenced_task_ids = set(task_ids)
     changed_task_ids: set[str] = set()
@@ -2315,7 +2506,10 @@ def evaluate_eligibility(
         task_file_match = TASK_FILE_PATTERN.fullmatch(path)
         if task_file_match is not None:
             changed_task_ids.add(task_file_match.group(1))
-            if task_file_match.group(1) not in referenced_task_ids:
+            if (
+                task_file_match.group(1) not in referenced_task_ids
+                and task_file_match.group(1) not in allowed_unreferenced_task_ids
+            ):
                 _append_reason(
                     reasons,
                     f"修改了未在PR正文引用的任务-{task_file_match.group(1)}",
@@ -2337,6 +2531,24 @@ def evaluate_eligibility(
                 )
             if not allowed:
                 _append_reason(reasons, f"变更路径“{path}”不允许自动合并")
+        elif change_type == BLOCKED_CONTRACT_REPAIR_TYPE:
+            if path not in BLOCKED_CONTRACT_REPAIR_ALLOWED_PATHS:
+                task_match = TASK_FILE_PATTERN.fullmatch(path)
+                is_allowed_task = task_match is not None and task_match.group(1) in {
+                    BLOCKED_CONTRACT_REPAIR_EXECUTOR,
+                    BLOCKED_CONTRACT_REPAIR_TARGET,
+                }
+                is_allowed_test = (
+                    len(PurePosixPath(path).parts) == 3
+                    and
+                    PurePosixPath(path).parts[:2] == ("tests", "研发中心")
+                    and PurePosixPath(path).suffix == ".py"
+                )
+                if not is_allowed_task and not is_allowed_test:
+                    _append_reason(
+                        reasons,
+                        f"阻塞任务合同修复变更路径“{path}”不允许自动合并",
+                    )
 
     for task_id in task_ids:
         if task_id not in changed_task_ids:
@@ -2573,7 +2785,11 @@ def main() -> int:
             "head_sha": arguments.head_ref,
         },
         changed_paths=changed_paths,
-        task_id=next(iter(ordered_ids), ""),
+        task_id=(
+            BLOCKED_CONTRACT_REPAIR_EXECUTOR
+            if change_type == BLOCKED_CONTRACT_REPAIR_TYPE
+            else next(iter(ordered_ids), "")
+        ),
     )
     if conflict_reasons:
         result = EligibilityResult(

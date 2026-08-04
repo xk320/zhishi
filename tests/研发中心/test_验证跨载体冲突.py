@@ -183,6 +183,37 @@ class CrossCarrierConflictTests(unittest.TestCase):
         )
         self.assertEqual([], conflicts)
 
+    def test阻塞合同修复执行任务缺少开始时间失败(self):
+        task_text = (
+            "# 任务-000056：修复治理任务测试路径授权冲突\n\n"
+            "- 状态：待评审\n"
+            "- 执行分支：`codex/task-000056-repair`\n"
+        )
+        conflicts = []
+        with mock.patch.object(
+            CONFLICT,
+            "_read_at_ref",
+            return_value=task_text,
+        ):
+            CONFLICT._check_task_execution_metadata(
+                ROOT,
+                "codex/task-000056-repair",
+                "000056",
+                {
+                    "body": (
+                        "## 关联任务\n- 任务-000056\n\n"
+                        "## 变更类型\n- 阻塞任务合同修复\n"
+                    ),
+                    "head_ref": "codex/task-000056-repair",
+                    "pr_number": 124,
+                },
+                conflicts,
+            )
+        self.assertTrue(
+            any("缺少开始时间" in item.repair_mode for item in conflicts),
+            conflicts,
+        )
+
     def test空评审证据失败关闭(self):
         conflicts = []
         CONFLICT._check_review_evidence(

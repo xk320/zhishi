@@ -83,6 +83,71 @@ def task_text(
     )
 
 
+def blocked_contract_repair_executor_text(*, status: str) -> str:
+    """任务-000056的最小可验证合同夹具。"""
+
+    review = (
+        "- Pull Request：[#200](https://github.com/xk320/zhishi/pull/200)\n"
+        if status == "待评审"
+        else ""
+    )
+    return (
+        "# 任务-000056：修复治理任务测试路径授权冲突\n\n"
+        f"- 状态：{status}\n"
+        "- 类型：治理\n"
+        "- 自动合并范围：治理自动化\n"
+        "- 优先级：P0\n"
+        "- 执行分支：`codex/task-000056-repair`\n"
+        "- 开始时间：`2026-08-05T07:00:00+08:00`\n"
+        f"{review}"
+        "- 唯一前序依赖：任务-000033已完成；\n\n"
+        "## 背景\n\n- 治理授权冲突。\n\n"
+        "## 任务目标\n\n- 修复唯一授权。\n\n"
+        "## 固定执行方案\n\n"
+        "- 只在任务-000055任务文件中增加唯一的`自动合并范围：治理自动化`字段；\n\n"
+        "## 默认工程决策\n\n- 最小字段授权。\n\n"
+        "## 允许停止条件\n\n- 需要生产权限时停止。\n\n"
+        "## 输入合同\n\n- 任务-000055当前阻塞合同。\n\n"
+        "## 输出合同\n\n"
+        "- 更新后的`docs/研发中心/任务/任务-000055.md`，仅增加受控治理自动化授权字段；\n\n"
+        "## 工作范围\n\n- 对齐任务-000055合同。\n\n"
+        "## 不在范围\n\n- 不执行任务-000055。\n\n"
+        "## 安全边界\n\n- 不访问服务器或数据。\n\n"
+        "## 验收标准\n\n- 目标任务仍为阻塞。\n\n"
+        "## 验证命令\n\n```bash\npython3 -m unittest\n```\n\n"
+        "## 完成定义\n\n- 授权字段进入main。\n\n"
+        "## 执行记录\n\n- 交付状态：待评审。\n"
+    )
+
+
+def blocked_contract_repair_target_text(*, authorized: bool = False) -> str:
+    scope = "- 自动合并范围：治理自动化\n" if authorized else ""
+    return (
+        "# 任务-000055：修复现行外部状态与双标的范围文档漂移\n\n"
+        "- 状态：阻塞\n"
+        "- 类型：治理\n"
+        f"{scope}"
+        "- 优先级：P0\n"
+        "- 执行分支：`codex/task-000055-repair`\n"
+        "- 开始时间：`2026-08-05T07:00:00+08:00`\n"
+        "- 当前阻塞原因：等待治理规则修复。\n"
+        "- 解除条件：治理规则修复进入main。\n\n"
+        "## 背景\n\n- 现行入口存在范围漂移。\n\n"
+        "## 任务目标\n\n- 修复文档。\n\n"
+        "## 固定执行方案\n\n- 绑定最新脱敏事实。\n\n"
+        "## 默认工程决策\n\n- 保守处理。\n\n"
+        "## 允许停止条件\n\n- 需要服务器写入时停止。\n\n"
+        "## 输入合同\n\n- 现行入口。\n\n"
+        "## 输出合同\n\n- 文档与测试。\n\n"
+        "## 工作范围\n\n- 治理文档。\n\n"
+        "## 不在范围\n\n- 不修改数据。\n\n"
+        "## 安全边界\n\n- 只读。\n\n"
+        "## 验收标准\n\n- 状态一致。\n\n"
+        "## 验证命令\n\n```bash\npython3 -m unittest\n```\n\n"
+        "## 完成定义\n\n- 通过评审。\n"
+    )
+
+
 def cancellation_task_text(*, status: str = "已取消", support_task: str = "000014", reason: str = "任务-000013的原交付路径已被任务-000014替代。") -> str:
     base = task_text(status="待执行", dependency="000012")
     if status != "已取消":
@@ -947,6 +1012,140 @@ class AutoMergeEligibilityTests(unittest.TestCase):
 
         self.assertTrue(result.eligible)
         self.assertEqual((), result.reasons)
+
+    def blocked_repair_inputs(self, **overrides):
+        base_executor = blocked_contract_repair_executor_text(status="待执行")
+        head_executor = blocked_contract_repair_executor_text(status="待评审")
+        base_target = blocked_contract_repair_target_text()
+        head_target = blocked_contract_repair_target_text(authorized=True)
+        inputs = {
+            "changed_paths": [
+                "docs/研发中心/任务/任务-000056.md",
+                "docs/研发中心/任务/任务-000055.md",
+                "docs/研发中心/看板.md",
+                "docs/治理/PR自动合并策略.md",
+                "tests/研发中心/test_验证自动合并资格.py",
+            ],
+            "pr_body": (
+                "## 关联任务\n\n- 任务-000056\n\n"
+                "## 变更类型\n\n- 阻塞任务合同修复\n"
+            ),
+            "base_tasks": {
+                "000056": base_executor,
+                "000055": base_target,
+            },
+            "head_tasks": {
+                "000056": head_executor,
+                "000055": head_target,
+            },
+            "base_board": delivery_board(
+                head=False,
+                task_id="000056",
+                title="修复治理任务测试路径授权冲突",
+                priority="P0",
+                dependency="000033",
+                pr_number="200",
+            ),
+            "head_board": delivery_board(
+                head=True,
+                task_id="000056",
+                title="修复治理任务测试路径授权冲突",
+                priority="P0",
+                dependency="000033",
+                pr_number="200",
+                branch="codex/task-000056-repair",
+            ),
+            "base_branch": "main",
+            "repository": "xk320/zhishi",
+            "head_repository": "xk320/zhishi",
+        }
+        inputs["path_facts"] = [
+            self.path_fact(path, text="安全治理文本")
+            for path in inputs["changed_paths"]
+        ]
+        inputs.update(overrides)
+        return inputs
+
+    def evaluate_blocked_repair(self, **overrides):
+        return self.policy.evaluate_eligibility(**self.blocked_repair_inputs(**overrides))
+
+    def test_阻塞任务合同修复只允许单字段目标映射(self):
+        result = self.evaluate_blocked_repair()
+        self.assertTrue(result.eligible, result.reasons)
+
+        blocked_executor = self.blocked_repair_inputs(
+            base_tasks={
+                "000056": blocked_contract_repair_executor_text(status="阻塞"),
+                "000055": blocked_contract_repair_target_text(),
+            }
+        )
+        result = self.policy.evaluate_eligibility(**blocked_executor)
+        self.assertFalse(result.eligible)
+        self.assertIn(
+            "任务-000056基线状态“阻塞”不可进入任务交付",
+            result.reasons,
+        )
+
+        wrong_target = self.blocked_repair_inputs(
+            head_tasks={
+                "000056": blocked_contract_repair_executor_text(status="待评审"),
+                "000055": blocked_contract_repair_target_text(),
+                "000054": blocked_contract_repair_target_text(authorized=True),
+            },
+            changed_paths=self.blocked_repair_inputs()["changed_paths"]
+            + ["docs/研发中心/任务/任务-000054.md"],
+        )
+        result = self.policy.evaluate_eligibility(**wrong_target)
+        self.assertFalse(result.eligible)
+        self.assertTrue(
+            any("阻塞任务合同修复包含不允许路径" in reason for reason in result.reasons),
+            result.reasons,
+        )
+
+        multi_field = self.blocked_repair_inputs(
+            head_tasks={
+                "000056": blocked_contract_repair_executor_text(status="待评审"),
+                "000055": blocked_contract_repair_target_text(authorized=True).replace(
+                    "- 类型：治理", "- 类型：文档", 1
+                ),
+            }
+        )
+        result = self.policy.evaluate_eligibility(**multi_field)
+        self.assertFalse(result.eligible)
+        self.assertIn("目标任务-000055合同修复夹带其他字段改写", result.reasons)
+
+        migrated = self.blocked_repair_inputs(
+            head_tasks={
+                "000056": blocked_contract_repair_executor_text(status="待评审"),
+                "000055": blocked_contract_repair_target_text(authorized=True).replace(
+                    "- 状态：阻塞", "- 状态：待执行", 1
+                ),
+            }
+        )
+        result = self.policy.evaluate_eligibility(**migrated)
+        self.assertFalse(result.eligible)
+        self.assertIn("目标任务-000055状态不得在合同修复中迁移", result.reasons)
+
+    def test_阻塞任务合同修复拒绝未知变更类型和高风险路径(self):
+        unknown = self.blocked_repair_inputs(
+            pr_body=(
+                "## 关联任务\n\n- 任务-000056\n\n"
+                "## 变更类型\n\n- 任务交付\n"
+            )
+        )
+        result = self.policy.evaluate_eligibility(**unknown)
+        self.assertFalse(result.eligible)
+
+        unsafe = self.blocked_repair_inputs(
+            changed_paths=self.blocked_repair_inputs()["changed_paths"]
+            + ["src/交易/订单.py"]
+        )
+        result = self.evaluate_blocked_repair(**unsafe)
+        self.assertFalse(result.eligible)
+        self.assertTrue(
+            any("不允许路径" in reason for reason in result.reasons),
+            result.reasons,
+        )
 
     def test_任务交付必须验证看板模式和唯一映射(self):
         changed_paths = [
@@ -3061,6 +3260,77 @@ class GitPathFactIntegrationTests(unittest.TestCase):
         self.assertNotIn(
             "合并后状态闭环最多关联2个任务",
             payload["reasons"],
+        )
+
+    def test_cli阻塞合同修复允许正文单任务加目标任务文件(self):
+        metadata_path = self.repo / "blocked-repair.json"
+        metadata_path.write_text(
+            json.dumps(
+                {
+                    "body": (
+                        "## 关联任务\n\n- 任务-000056\n\n"
+                        "## 变更类型\n\n- 阻塞任务合同修复\n"
+                    ),
+                    "base_ref": "main",
+                    "repository": "xk320/zhishi",
+                    "head_repository": "xk320/zhishi",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        arguments = SimpleNamespace(
+            repo_root=self.repo,
+            base_ref="base",
+            head_ref="head",
+            metadata=metadata_path,
+        )
+        facts = tuple(
+            self.policy.PathFact(
+                path=path,
+                status="M",
+                mode="100644",
+                object_type="blob",
+                size=4,
+                text="safe",
+            )
+            for path in (
+                "docs/研发中心/任务/任务-000056.md",
+                "docs/研发中心/任务/任务-000055.md",
+                "docs/研发中心/看板.md",
+            )
+        )
+        output = io.StringIO()
+        with (
+            mock.patch.object(self.policy, "_parse_arguments", return_value=arguments),
+            mock.patch.object(self.policy, "_load_path_facts", return_value=facts),
+            mock.patch.object(
+                self.policy,
+                "_load_ref_task_ids",
+                return_value=("000055", "000056"),
+            ),
+            mock.patch.object(
+                self.policy,
+                "_load_ref_tasks",
+                side_effect=({}, {}),
+            ) as load_tasks,
+            mock.patch.object(self.policy, "_read_path_at_ref", return_value=None),
+            mock.patch.object(
+                self.policy,
+                "_cross_carrier_conflict_reasons",
+                return_value=(),
+            ) as conflict_check,
+            redirect_stdout(output),
+        ):
+            return_code = self.policy.main()
+
+        self.assertEqual(1, return_code)
+        self.assertEqual(2, load_tasks.call_count)
+        payload = json.loads(output.getvalue())
+        self.assertNotIn("阻塞任务合同修复最多关联1个任务", payload["reasons"])
+        self.assertEqual(
+            "000056",
+            conflict_check.call_args.kwargs["task_id"],
         )
 
     def test_普通中文路径新增修改能生成事实并通过cli(self):
