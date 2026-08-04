@@ -1,0 +1,2 @@
+验证批次,合同版本,来源身份清单SHA-256,质量验证清单SHA-256,代码SHA-256,候选成员总数,拒绝数,无法判定数,通过数,远端预检,状态
+replay-20260805T012335+0800-3156feb21c31,trusted-replay-source-1.0,d1aaa54761d5af4af4f9ace7ee768fc766153699f3ebbfba2c07c89a9f4eb636,10d2cf2a91f97066c28a6331cffcc33582381fa49b17368b5e3eaa9ff735c11c,e87a78a94478584293d9fb3922bbb91882f48c58a8684db89186175facf03cc2,630,14,616,0,通过,已发布
