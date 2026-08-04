@@ -211,6 +211,11 @@ def 执行(
     总时长秒数: int = 30,
     测试模式: bool = False,
 ) -> Path:
+    if 测试模式:
+        if 最小可用字节数 <= 0 or 总时长秒数 <= 0:
+            raise 合同错误("测试资源参数必须为正数")
+    elif 最小可用字节数 != 10 * 1024 * 1024 or 总时长秒数 != 30:
+        raise 合同错误("生产演练资源上限必须固定为10MiB安全余量和30秒")
     试点 = 限制路径(试点, 批准试点根, "试点")
     配置路径 = 限制路径(配置路径, 批准配置根, "配置")
     if 测试模式:
@@ -229,6 +234,8 @@ def 执行(
     资源前 = 检查资源(输出根, 最小可用字节数, 开始 + 总时长秒数)
     _, 输入文件 = 校验试点(试点)
     临时父 = Path(tempfile.mkdtemp(prefix="zhishi-capacity-"))
+    目标: Path | None = None
+    成功 = False
     try:
         恢复结果, 副本统计 = 复制并恢复(试点, 临时父)
         资源后 = 检查资源(输出根, 最小可用字节数, 开始 + 总时长秒数)
@@ -296,9 +303,12 @@ def 执行(
         })
         if sum(项.stat().st_size for 项 in 目标.iterdir()) > 最大输出字节数:
             raise 合同错误(f"输出产物超过字节上限：{最大输出字节数}")
+        成功 = True
         return 目标
     finally:
         shutil.rmtree(临时父, ignore_errors=False)
+        if not 成功 and 目标 is not None:
+            shutil.rmtree(目标, ignore_errors=True)
 
 
 def main() -> int:

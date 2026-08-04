@@ -51,6 +51,21 @@ class 容量恢复合同测试(unittest.TestCase):
             with self.assertRaises(模块.合同错误):
                 模块.检查资源(Path(临时), 1, 截止时间=0)
 
+    def test_生产资源上限不可被调用方降低(self):
+        with self.assertRaises(模块.合同错误):
+            模块.执行(self.试点, self.配置, 根 / "artifacts/审计/容量恢复", 最小可用字节数=1)
+
+    def test_输出超限清理失败产物(self):
+        with tempfile.TemporaryDirectory(prefix="zhishi-capacity-test-") as 临时:
+            原上限 = 模块.最大输出字节数
+            模块.最大输出字节数 = 1
+            try:
+                with self.assertRaises(模块.合同错误):
+                    模块.执行(self.试点, self.配置, Path(临时), 最小可用字节数=1, 测试模式=True)
+                self.assertEqual(list(Path(临时).iterdir()), [])
+            finally:
+                模块.最大输出字节数 = 原上限
+
 
 if __name__ == "__main__":
     unittest.main()
