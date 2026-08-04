@@ -154,6 +154,30 @@ class ExternalStateConsistencyTests(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 self._assert_task043_state_mapping(malformed, board)
 
+    def test_任务043完成态且待评审为空时可构造反向夹具(self):
+        task = (ROOT / "docs/研发中心/任务/任务-000043.md").read_text(encoding="utf-8")
+        board = (ROOT / "docs/研发中心/看板.md").read_text(encoding="utf-8")
+        completed_row = (
+            "| 任务-000043 | 统一外部环境事实与阶段状态声明 | "
+            "PR #62；合并提交 `abe66037161332d350b9782492beedd8898a4f8a` |"
+        )
+        review_header, review_separator = json.loads(
+            BOARD_SCHEMA_PATH.read_text(encoding="utf-8")
+        )["sections"]["待评审"]
+        review_table = f"## 待评审\n\n{review_header}\n{review_separator}"
+        empty_board = board.replace(completed_row, "").replace(
+            review_table, "## 待评审\n\n无。"
+        )
+        self.assertIn("## 待评审\n\n无。", empty_board)
+        pending_task = task.replace("- 状态：已完成", "- 状态：待评审")
+        pending_row = (
+            "| P0 | 任务-000043 | 统一外部环境事实与阶段状态声明 | "
+            "`codex/000043-external-state-consistency-v1` | "
+            "[#62](https://github.com/xk320/zhishi/pull/62) |"
+        )
+        pending_board = _insert_board_row(empty_board, "待评审", pending_row)
+        self._assert_task043_state_mapping(pending_task, pending_board)
+
     def test_历史任务记录仍保留(self):
         historical = (ROOT / "docs/研发中心/任务/任务-000028.md").read_text(encoding="utf-8")
         def assert_historical_record(text: str) -> None:
