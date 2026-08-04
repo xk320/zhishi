@@ -3315,6 +3315,11 @@ class GitPathFactIntegrationTests(unittest.TestCase):
                 side_effect=({}, {}),
             ) as load_tasks,
             mock.patch.object(self.policy, "_read_path_at_ref", return_value=None),
+            mock.patch.object(
+                self.policy,
+                "_cross_carrier_conflict_reasons",
+                return_value=(),
+            ) as conflict_check,
             redirect_stdout(output),
         ):
             return_code = self.policy.main()
@@ -3323,6 +3328,10 @@ class GitPathFactIntegrationTests(unittest.TestCase):
         self.assertEqual(2, load_tasks.call_count)
         payload = json.loads(output.getvalue())
         self.assertNotIn("阻塞任务合同修复最多关联1个任务", payload["reasons"])
+        self.assertEqual(
+            "000056",
+            conflict_check.call_args.kwargs["task_id"],
+        )
 
     def test_普通中文路径新增修改能生成事实并通过cli(self):
         self._prepare_task_delivery()

@@ -2785,7 +2785,11 @@ def main() -> int:
             "head_sha": arguments.head_ref,
         },
         changed_paths=changed_paths,
-        task_id=next(iter(ordered_ids), ""),
+        task_id=(
+            BLOCKED_CONTRACT_REPAIR_EXECUTOR
+            if change_type == BLOCKED_CONTRACT_REPAIR_TYPE
+            else next(iter(ordered_ids), "")
+        ),
     )
     if conflict_reasons:
         result = EligibilityResult(
