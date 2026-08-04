@@ -21,7 +21,7 @@ STATUS_PATTERN = re.compile(r"^- 状态：(.+)$", re.MULTILINE)
 PRIORITY_PATTERN = re.compile(r"^- 优先级：(.+)$", re.MULTILINE)
 BRANCH_PATTERN = re.compile(r"^- 执行分支：`([^`]+)`$", re.MULTILINE)
 START_PATTERN = re.compile(
-    r"^- 开始时间：`(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2}:\d{2})`$",
+    r"^- 开始时间：`(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2}:?\d{2})`$",
     re.MULTILINE,
 )
 BLOCKER_PATTERN = re.compile(r"^- 当前阻塞原因：(.+)$", re.MULTILINE)
@@ -755,7 +755,9 @@ MUTABLE_TASK_PREFIXES = (
 )
 
 
-def _immutable_task_contract(text: str) -> str:
+def _immutable_task_contract(
+    text: str, *, allow_dependency_mutation: bool = False
+) -> str:
     """保留任务合同，排除状态和执行/合并证据记录。"""
 
     lines = text.splitlines()
@@ -767,18 +769,47 @@ def _immutable_task_contract(text: str) -> str:
         (index for index, line in enumerate(lines[:record_start]) if line.startswith("## ")),
         record_start,
     )
+    dependency_start = next(
+        (
+            index
+            for index, line in enumerate(lines[:record_start])
+            if line.strip() == "## 依赖与阻塞条件"
+        ),
+        -1,
+    )
+    dependency_end = next(
+        (
+            index
+            for index in range(dependency_start + 1, record_start)
+            if lines[index].startswith("## ")
+        ),
+        record_start,
+    ) if dependency_start >= 0 else -1
     return "\n".join(
         line
         for index, line in enumerate(lines[:record_start])
         if not (
-            index < first_section
-            and any(line.startswith(prefix) for prefix in MUTABLE_TASK_PREFIXES)
+            (
+                index < first_section
+                and any(line.startswith(prefix) for prefix in MUTABLE_TASK_PREFIXES)
+            )
+            or (
+                allow_dependency_mutation
+                and
+                dependency_start <= index < dependency_end
+                and line.startswith(("- 当前阻塞原因：", "- 解除条件："))
+            )
         )
     ).strip()
 
 
 def _check_task_contract_drift(
-    repo_root: Path, base_ref: str, head_ref: str, conflicts: list[Conflict]
+    repo_root: Path,
+    base_ref: str,
+    head_ref: str,
+    conflicts: list[Conflict],
+    *,
+    allow_dependency_mutation: bool = False,
 ) -> None:
     """阻止交付或状态PR静默改写目标、范围、输入输出和安全边界。"""
 
@@ -800,7 +831,11 @@ def _check_task_contract_drift(
         head_text = _read_at_ref(repo_root, head_ref, path)
         if base_text is None or head_text is None:
             continue
-        if _immutable_task_contract(base_text) != _immutable_task_contract(head_text):
+        if _immutable_task_contract(
+            base_text, allow_dependency_mutation=allow_dependency_mutation
+        ) != _immutable_task_contract(
+            head_text, allow_dependency_mutation=allow_dependency_mutation
+        ):
             conflicts.append(
                 _conflict(
                     "TASK_CONTRACT_CONFLICT",
@@ -897,11 +932,18 @@ def _check_task_execution_metadata(
 
     if metadata is None or not task_id:
         return
+    body = str(metadata.get("body", ""))
+    if "- 合并后状态闭环" in body or "- 任务登记" in body:
+        # 状态闭环使用独立PR，必须保留任务文件中的原交付分支/PR；任务登记
+        # 尚未开始执行，不能要求不存在的执行元数据。
+        return
     path = f"{TASK_DIR}/任务-{task_id}.md"
     text = _read_at_ref(repo_root, head_ref, path)
     if text is None:
         return
     status = _field(STATUS_PATTERN, text) or ""
+    if status == "已完成":
+        return
     task_branch = _field(BRANCH_PATTERN, text)
     task_started = _field(START_PATTERN, text)
     head_branch = metadata.get("head_ref")
@@ -1157,7 +1199,16 @@ def check_refs(
     _, head_conflicts = check_tree(repo_root, head_ref)
     conflicts.extend((*base_conflicts, *head_conflicts))
     if base_sha and head_sha:
-        _check_task_contract_drift(repo_root, base_sha, head_sha, conflicts)
+        _check_task_contract_drift(
+            repo_root,
+            base_sha,
+            head_sha,
+            conflicts,
+            allow_dependency_mutation=(
+                metadata is not None
+                and "- 合并后状态闭环" in str(metadata.get("body", ""))
+            ),
+        )
         _check_historical_immutability(repo_root, base_sha, head_sha, conflicts)
     _check_metadata(
         metadata,

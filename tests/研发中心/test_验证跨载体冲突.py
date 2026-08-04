@@ -166,6 +166,23 @@ class CrossCarrierConflictTests(unittest.TestCase):
             sum("PR_BASELINE_DRIFT" in reason for reason in report.reasons), 2
         )
 
+    def test状态闭环保留原交付证据而不绑定新分支(self):
+        base_sha = CONFLICT._resolve_ref(ROOT, "main")
+        head_sha = CONFLICT._resolve_ref(ROOT, "HEAD")
+        conflicts = []
+        CONFLICT._check_task_execution_metadata(
+            ROOT,
+            head_sha,
+            "000049",
+            {
+                "body": "## 变更类型\n- 合并后状态闭环\n",
+                "head_ref": "codex/closure-000049",
+                "pr_number": 84,
+            },
+            conflicts,
+        )
+        self.assertEqual([], conflicts)
+
     def test空评审证据失败关闭(self):
         conflicts = []
         CONFLICT._check_review_evidence(
@@ -194,6 +211,26 @@ class CrossCarrierConflictTests(unittest.TestCase):
         ):
             CONFLICT._check_task_contract_drift(ROOT, "base", "head", conflicts)
         self.assertTrue(any(item.code == "TASK_CONTRACT_CONFLICT" for item in conflicts))
+
+    def test阻塞原因在依赖区段允许状态闭环(self):
+        base_text = (
+            "# 任务-000049：示例\n\n- 状态：阻塞\n\n"
+            "## 依赖与阻塞条件\n\n- 当前阻塞原因：旧原因。\n"
+            "- 解除条件：旧条件。\n\n## 任务目标\n\n保持目标。\n"
+        )
+        head_text = base_text.replace("旧原因", "新原因").replace("旧条件", "新条件")
+        self.assertNotEqual(
+            CONFLICT._immutable_task_contract(base_text),
+            CONFLICT._immutable_task_contract(head_text),
+        )
+        self.assertEqual(
+            CONFLICT._immutable_task_contract(
+                base_text, allow_dependency_mutation=True
+            ),
+            CONFLICT._immutable_task_contract(
+                head_text, allow_dependency_mutation=True
+            ),
+        )
 
     def test有损看板修复被拒绝(self):
         schema = CONFLICT._schema_at_ref(ROOT, "main")
