@@ -1,5 +1,7 @@
 import hashlib
+import importlib.util
 import re
+import sys
 import unittest
 from pathlib import Path
 
@@ -7,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 TASK_DIR = ROOT / "docs" / "研发中心" / "任务"
 BOARD_PATH = ROOT / "docs" / "研发中心" / "看板.md"
+BOARD_POLICY_PATH = ROOT / "scripts" / "研发中心" / "验证自动合并资格.py"
 
 STANDARD_STATUSES = {
     "待执行",
@@ -117,6 +120,18 @@ def board_sections(text):
     return sections
 
 
+def board_policy():
+    spec = importlib.util.spec_from_file_location(
+        "project_scope_board_policy", BOARD_POLICY_PATH
+    )
+    if spec is None or spec.loader is None:
+        raise AssertionError(f"无法加载可信看板校验器：{BOARD_POLICY_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 class TaskCenterMappingTests(unittest.TestCase):
     def test_任务文件名与标题编号一致(self):
         for task_id, (path, _, _) in task_documents().items():
@@ -175,6 +190,10 @@ class TaskCenterMappingTests(unittest.TestCase):
                 1,
                 f"{task_id}未位于看板的{status}分区",
             )
+
+    def test_任务映射使用同一机器看板合同(self):
+        board = BOARD_PATH.read_text(encoding="utf-8")
+        self.assertTrue(board_policy()._board_schema_is_valid(board))
 
 
 class TaskContractTests(unittest.TestCase):

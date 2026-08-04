@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -42,6 +43,7 @@ TASK_FILE_PATTERN = re.compile(r"^docs/研发中心/任务/任务-(\d{6})\.md$")
 TASK_TYPE_PATTERN = re.compile(r"^- 类型：(.+)$", re.MULTILINE)
 TASK_STATUS_PATTERN = re.compile(r"^- 状态：(.+)$", re.MULTILINE)
 TASK_PRIORITY_PATTERN = re.compile(r"^- 优先级：(.+)$", re.MULTILINE)
+EXECUTION_BRANCH_PATTERN = re.compile(r"^- 执行分支：`([^`]+)`$", re.MULTILINE)
 TASK_TITLE_PATTERN = re.compile(r"^# 任务-\d{6}：(.+)$", re.MULTILINE)
 TASK_TITLE_WITH_ID_PATTERN = re.compile(
     r"^# 任务-(\d{6})：(.+)$", re.MULTILINE
@@ -50,28 +52,83 @@ BLOCKER_PATTERN = re.compile(r"^- 当前阻塞原因：(.+)$", re.MULTILINE)
 BOARD_TASK_ROW_PATTERN = re.compile(
     r"^\|\s*(?:P[0-3]\s*\|\s*)?任务-(\d{6})\s*\|"
 )
-BOARD_TABLE_SCHEMA = {
-    "待执行": (
-        "| 优先级 | 任务 | 名称 | 唯一前序依赖 |",
-        "| --- | --- | --- | --- |",
-    ),
-    "阻塞": (
-        "| 优先级 | 任务 | 名称 | 唯一前序依赖 | 阻塞原因 |",
-        "| --- | --- | --- | --- | --- |",
-    ),
-    "执行中": (
-        "| 优先级 | 任务 | 名称 | 执行分支 | 开始时间 |",
-        "| --- | --- | --- | --- | --- |",
-    ),
-    "待评审": (
-        "| 优先级 | 任务 | 名称 | 分支 | PR |",
-        "| --- | --- | --- | --- | --- |",
-    ),
-    "已完成": (
-        "| 任务 | 名称 | 完成证据 |",
-        "| --- | --- | --- |",
-    ),
-}
+BOARD_SCHEMA_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "docs"
+    / "研发中心"
+    / "任务看板模式.md"
+)
+REQUIRED_BOARD_SECTIONS = frozenset(
+    {"待执行", "执行中", "阻塞", "待评审", "需修复", "已完成", "已取消"}
+)
+BOARD_AUXILIARY_SECTIONS = frozenset({"状态维护要求"})
+GOVERNANCE_CONTROL_PATHS = frozenset({"docs/研发中心/任务看板模式.md"})
+
+
+def _board_schema_payload(schema_version, sections):
+    return {"schema_version": schema_version, "sections": sections}
+
+
+def _board_schema_digest(schema_version, sections):
+    payload = json.dumps(
+        _board_schema_payload(schema_version, sections),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _reject_duplicate_json_keys(pairs):
+    document = {}
+    for key, value in pairs:
+        if key in document:
+            raise ValueError("看板机器合同包含重复JSON键")
+        document[key] = value
+    return document
+
+
+def _load_board_table_schema():
+    """从唯一机器合同加载看板模式；缺失或损坏时失败关闭。"""
+
+    if not BOARD_SCHEMA_PATH.exists():
+        return {}
+    try:
+        document = json.loads(
+            BOARD_SCHEMA_PATH.read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+        if set(document) != {"schema_version", "content_sha256", "sections"}:
+            return {}
+        version = document["schema_version"]
+        sections = document["sections"]
+        if version != "zhishi-task-board/v1" or not isinstance(sections, dict):
+            return {}
+        if set(sections) != REQUIRED_BOARD_SECTIONS:
+            return {}
+        normalized = {}
+        for section, schema in sections.items():
+            if (
+                not isinstance(schema, list)
+                or len(schema) != 2
+                or not all(
+                    isinstance(line, str) and line.startswith("|")
+                    for line in schema
+                )
+            ):
+                return {}
+            normalized[section] = tuple(schema)
+        if document["content_sha256"] != _board_schema_digest(version, sections):
+            return {}
+        review_header = normalized["待评审"][0]
+        if "| PR |" not in review_header or "Pull Request" in review_header:
+            return {}
+        return normalized
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        return {}
+
+
+BOARD_TABLE_SCHEMA = _load_board_table_schema()
 AUTOMATION_SCOPE_PATTERN = re.compile(r"^- 自动合并范围：(.+)$", re.MULTILINE)
 MERGE_SHA_PATTERN = re.compile(
     r"^- 合并提交SHA：`([0-9a-f]{40})`$", re.MULTILINE
@@ -658,7 +715,7 @@ def _is_automation_path(path: str) -> bool:
 def _is_governance_control_path(path: str) -> bool:
     """识别只有治理自动化任务才能修改的可信控制面路径。"""
 
-    if path in AUTOMATION_FILES:
+    if path in AUTOMATION_FILES or path in GOVERNANCE_CONTROL_PATHS:
         return True
     pure_path = PurePosixPath(path)
     return (
@@ -1011,11 +1068,18 @@ def _board_static_lines(text: str) -> tuple[str, ...]:
 
 def _board_schema_is_valid(text: str) -> bool:
     current_section = ""
+    seen_sections: set[str] = set()
     schema_counts: dict[str, dict[str, int]] = {}
     task_sections: set[str] = set()
     for line in text.splitlines():
         if line.startswith("## "):
             current_section = line[3:].strip()
+            if current_section in REQUIRED_BOARD_SECTIONS:
+                if current_section in seen_sections:
+                    return False
+                seen_sections.add(current_section)
+            elif current_section not in BOARD_AUXILIARY_SECTIONS:
+                return False
             continue
         if not line.startswith("|"):
             continue
@@ -1032,7 +1096,14 @@ def _board_schema_is_valid(text: str) -> bool:
         counts = schema_counts.get(section, {})
         if schema is None or any(counts.get(line) != 1 for line in schema):
             return False
-    return all(count <= 1 for counts in schema_counts.values() for count in counts.values())
+    if any(section == "重复" for section, _ in _board_rows(text).values()):
+        return False
+    return (
+        seen_sections == REQUIRED_BOARD_SECTIONS
+        and all(
+            count <= 1 for counts in schema_counts.values() for count in counts.values()
+        )
+    )
 
 
 def _validate_board_closure(
@@ -1229,6 +1300,116 @@ def _validate_registration_board(
         _append_reason(reasons, mapping_reason)
 
 
+def _board_row_cells(row: str) -> tuple[str, ...]:
+    if not row.startswith("|") or not row.endswith("|"):
+        return ()
+    return tuple(cell.strip() for cell in row[1:-1].split("|"))
+
+
+def _validate_delivery_board(
+    *,
+    task_ids: Sequence[str],
+    base_tasks: Mapping[str, str],
+    head_tasks: Mapping[str, str],
+    base_board: str | None,
+    head_board: str | None,
+    reasons: list[str],
+) -> None:
+    """验证任务交付只迁移目标任务且看板映射仍可由任务复算。"""
+
+    mapping_reason = "任务交付看板不是唯一可复算映射"
+    if base_board is None or head_board is None:
+        _append_reason(reasons, mapping_reason)
+        return
+    if not _board_schema_is_valid(base_board) or not _board_schema_is_valid(
+        head_board
+    ):
+        _append_reason(reasons, mapping_reason)
+        return
+    if _board_static_lines(base_board) != _board_static_lines(head_board):
+        _append_reason(reasons, mapping_reason)
+    base_rows = _board_rows(base_board)
+    head_rows = _board_rows(head_board)
+    referenced = set(task_ids)
+    for task_id in set(base_rows) | set(head_rows):
+        if task_id not in referenced and base_rows.get(task_id) != head_rows.get(task_id):
+            _append_reason(reasons, mapping_reason)
+    for task_id in task_ids:
+        base_task = base_tasks.get(task_id)
+        head_task = head_tasks.get(task_id)
+        base_row = base_rows.get(task_id)
+        head_row = head_rows.get(task_id)
+        if (
+            base_task is None
+            or head_task is None
+            or base_row is None
+            or head_row is None
+            or base_row[0] == "重复"
+            or head_row[0] == "重复"
+        ):
+            _append_reason(reasons, mapping_reason)
+            continue
+        base_title = _task_field(TASK_TITLE_PATTERN, base_task)
+        head_title = _task_field(TASK_TITLE_PATTERN, head_task)
+        base_priority = _task_field(TASK_PRIORITY_PATTERN, base_task)
+        head_priority = _task_field(TASK_PRIORITY_PATTERN, head_task)
+        base_status = _task_field(TASK_STATUS_PATTERN, base_task)
+        base_branch = _task_field(EXECUTION_BRANCH_PATTERN, base_task)
+        head_branch = _task_field(EXECUTION_BRANCH_PATTERN, head_task)
+        base_cells = _board_row_cells(base_row[1])
+        head_cells = _board_row_cells(head_row[1])
+        dependency = _task_field(DEPENDENCY_PATTERN, base_task)
+        base_pr_match = PULL_REQUEST_PATTERN.search(base_task)
+        base_row_valid = (
+            len(base_cells) == 4
+            and base_cells[3] == dependency
+            if base_status == "待执行"
+            else (
+                base_status == "需修复"
+                and len(base_cells) == 5
+                and base_branch is not None
+                and base_cells[3] == f"`{base_branch}`"
+                and base_pr_match is not None
+                and base_cells[4]
+                == (
+                    f"[#{base_pr_match.group(1)}]"
+                    f"(https://github.com/xk320/zhishi/pull/{base_pr_match.group(1)})"
+                )
+            )
+        )
+        if (
+            base_row[0] != base_status
+            or head_row[0] != "待评审"
+            or not base_row_valid
+            or len(head_cells) != 5
+            or base_cells[1] != f"任务-{task_id}"
+            or head_cells[1] != f"任务-{task_id}"
+            or base_title is None
+            or head_title is None
+            or base_cells[2] != base_title
+            or head_cells[2] != head_title
+            or base_priority is None
+            or head_priority is None
+            or base_cells[0] != base_priority
+            or head_cells[0] != head_priority
+            or (base_status == "待执行" and dependency is None)
+        ):
+            _append_reason(reasons, mapping_reason)
+            continue
+        pr_match = PULL_REQUEST_PATTERN.search(head_task)
+        if pr_match is None:
+            _append_reason(reasons, mapping_reason)
+            continue
+        expected_pr = (
+            f"[#{pr_match.group(1)}]"
+            f"(https://github.com/xk320/zhishi/pull/{pr_match.group(1)})"
+        )
+        if (
+            head_branch is None
+            or head_cells[3] != f"`{head_branch}`"
+            or head_cells[4] != expected_pr
+        ):
+            _append_reason(reasons, mapping_reason)
 def _validate_task_registration(
     *,
     task_ids: Sequence[str],
@@ -1510,6 +1691,7 @@ def evaluate_eligibility(
     base_board: str | None = None,
     head_board: str | None = None,
     path_facts: Sequence[PathFact] | None = None,
+    enforce_board_sync: bool = False,
 ) -> EligibilityResult:
     """按基线任务合同、严格PR合同和变更路径判定资格。"""
 
@@ -1555,6 +1737,17 @@ def evaluate_eligibility(
                 reasons=reasons,
             )
         )
+        if enforce_board_sync and "docs/研发中心/看板.md" not in changed_paths:
+            _append_reason(reasons, "任务交付必须同步看板")
+        if enforce_board_sync or "docs/研发中心/看板.md" in changed_paths:
+            _validate_delivery_board(
+                task_ids=task_ids,
+                base_tasks=base_tasks,
+                head_tasks=head_tasks,
+                base_board=base_board,
+                head_board=head_board,
+                reasons=reasons,
+            )
     elif change_type == "合并后状态闭环":
         _validate_state_closure(
             task_ids=task_ids,
@@ -1580,16 +1773,19 @@ def evaluate_eligibility(
                 )
 
         if change_type == "任务交付":
-            allowed = (
-                _is_automation_path(path)
-                if automation_authorized
-                else (
-                    _is_controlled_rd_path(path)
-                    and not _is_governance_control_path(path)
-                    if controlled_rd_authorized
-                    else _is_low_risk_path(path)
+            if _is_governance_control_path(path) and not automation_authorized:
+                allowed = False
+            else:
+                allowed = (
+                    _is_automation_path(path)
+                    if automation_authorized
+                    else (
+                        _is_controlled_rd_path(path)
+                        and not _is_governance_control_path(path)
+                        if controlled_rd_authorized
+                        else _is_low_risk_path(path)
+                    )
                 )
-            )
             if not allowed:
                 _append_reason(reasons, f"变更路径“{path}”不允许自动合并")
 
@@ -1802,6 +1998,7 @@ def main() -> int:
             repo_root, arguments.head_ref, "docs/研发中心/看板.md"
         ),
         path_facts=path_facts,
+        enforce_board_sync=True,
     )
     print(
         json.dumps(

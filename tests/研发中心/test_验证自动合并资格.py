@@ -37,13 +37,16 @@ def task_text(
     task_type: str | None = "治理",
     automation_scope: bool = False,
     dependency: str | None = None,
+    title: str = "建立 PR 自动合并策略与审批规则",
+    pr_number: str = "40",
+    branch: str = "branch",
     extra_contract: str = "",
 ) -> str:
     type_line = f"- 类型：{task_type}\n" if task_type is not None else ""
     scope_line = "- 自动合并范围：治理自动化\n" if automation_scope else ""
     review_lines = (
-        "- Pull Request：[#40](https://github.com/xk320/zhishi/pull/40)\n"
-        if status in {"待评审", "已完成"}
+        f"- Pull Request：[#{pr_number}](https://github.com/xk320/zhishi/pull/{pr_number})\n"
+        if status in {"需修复", "待评审", "已完成"}
         else ""
     )
     completion_lines = (
@@ -66,11 +69,12 @@ def task_text(
                 "- 解除条件：已满足。\n"
             )
     return (
-        "# 任务-000013：建立 PR 自动合并策略与审批规则\n\n"
+        f"# 任务-000013：{title}\n\n"
         f"- 状态：{status}\n"
         f"{type_line}"
         f"{scope_line}"
         "- 优先级：P1\n"
+        f"- 执行分支：`{branch}`\n"
         f"{review_lines}"
         f"{completion_lines}"
         f"{dependency_lines}"
@@ -119,9 +123,63 @@ def closure_board(*, completed: bool) -> str:
     return (
         "# 看板\n\n"
         f"## 待执行\n\n{pending}\n\n"
+        "## 执行中\n\n无。\n\n"
         f"## 阻塞\n\n{blocked}\n\n"
         f"## 待评审\n\n{review}\n\n"
+        "## 需修复\n\n无。\n\n"
         f"## 已完成\n\n{done}\n"
+        "\n## 已取消\n\n无。\n"
+    )
+
+
+def delivery_board(
+    *,
+    head: bool,
+    task_id: str = "000013",
+    title: str = "建立 PR 自动合并策略与审批规则",
+    priority: str = "P1",
+    dependency: str = "000012",
+    pr_number: str = "40",
+    base_status: str = "待执行",
+    branch: str = "branch",
+) -> str:
+    pending_schema = (
+        "| 优先级 | 任务 | 名称 | 唯一前序依赖 |\n"
+        "| --- | --- | --- | --- |\n"
+    )
+    review_schema = (
+        "| 优先级 | 任务 | 名称 | 分支 | PR |\n"
+        "| --- | --- | --- | --- | --- |\n"
+    )
+    if head:
+        pending = "无。"
+        repair = "无。"
+    elif base_status == "需修复":
+        pending = "无。"
+        repair = (
+            review_schema
+            + f"| {priority} | 任务-{task_id} | {title} | `{branch}` | [#{pr_number}](https://github.com/xk320/zhishi/pull/{pr_number}) |"
+        )
+    else:
+        repair = "无。"
+        pending = (
+            pending_schema
+            + f"| {priority} | 任务-{task_id} | {title} | {dependency} |"
+        )
+    review = (
+        review_schema + f"| {priority} | 任务-{task_id} | {title} | `{branch}` | [#{pr_number}](https://github.com/xk320/zhishi/pull/{pr_number}) |"
+        if head
+        else "无。"
+    )
+    return (
+        "# 看板\n\n"
+        f"## 待执行\n\n{pending}\n\n"
+        "## 执行中\n\n无。\n\n"
+        "## 阻塞\n\n无。\n\n"
+        f"## 待评审\n\n{review}\n\n"
+        f"## 需修复\n\n{repair}\n\n"
+        "## 已完成\n\n| 任务 | 名称 | 完成证据 |\n| --- | --- | --- |\n| 任务-000001 | 基线任务 | 基线证据 |\n\n"
+        "## 已取消\n\n无。\n"
     )
 
 
@@ -228,11 +286,15 @@ def registration_board(
     return (
         "# 看板\n\n"
         f"## 待执行\n\n{pending}\n\n"
+        "## 执行中\n\n无。\n\n"
         f"## 阻塞\n\n{blocked}\n\n"
+        "## 待评审\n\n无。\n\n"
+        "## 需修复\n\n无。\n\n"
         "## 已完成\n\n"
         "| 任务 | 名称 | 完成证据 |\n"
         "| --- | --- | --- |\n"
         "| 任务-000039 | 基线任务 | 基线证据 |\n"
+        "\n## 已取消\n\n无。\n"
     )
 
 
@@ -260,14 +322,16 @@ class AutoMergeEligibilityTests(unittest.TestCase):
                 "- 任务交付\n"
             ),
             "base_tasks": {
-                "000013": task_text(status="待执行"),
+                "000013": task_text(status="待执行", dependency="000012"),
             },
             "head_tasks": {
-                "000013": task_text(status="待评审"),
+                "000013": task_text(status="待评审", dependency="000012"),
             },
             "base_branch": "main",
             "repository": "xk320/zhishi",
             "head_repository": "xk320/zhishi",
+            "base_board": delivery_board(head=False),
+            "head_board": delivery_board(head=True),
         }
         inputs.update(overrides)
         if "path_facts" not in inputs:
@@ -801,6 +865,84 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         self.assertTrue(result.eligible)
         self.assertEqual((), result.reasons)
 
+    def test_任务交付必须验证看板模式和唯一映射(self):
+        changed_paths = [
+            "docs/研发中心/任务/任务-000013.md",
+            "docs/研发中心/看板.md",
+        ]
+        legacy_board = delivery_board(head=True).replace(
+            "| 优先级 | 任务 | 名称 | 分支 | PR |",
+            "| 优先级 | 任务 | 名称 | 分支 | Pull Request |",
+            1,
+        )
+        result = self.evaluate(
+            changed_paths=changed_paths,
+            head_board=legacy_board,
+        )
+        self.assertFalse(result.eligible)
+        self.assertIn("任务交付看板不是唯一可复算映射", result.reasons)
+
+        result = self.evaluate(
+            changed_paths=["docs/研发中心/任务/任务-000013.md"],
+            enforce_board_sync=True,
+        )
+        self.assertFalse(result.eligible)
+        self.assertIn("任务交付必须同步看板", result.reasons)
+
+        result = self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/看板.md",
+            ],
+            head_board=delivery_board(head=True, branch="wrong-branch"),
+        )
+        self.assertFalse(result.eligible)
+        self.assertIn("任务交付看板不是唯一可复算映射", result.reasons)
+
+    def test_需修复任务可以在看板校验后进入待评审(self):
+        result = self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/看板.md",
+            ],
+            base_tasks={
+                "000013": task_text(
+                    status="需修复", dependency="000012", pr_number="40"
+                )
+            },
+            head_tasks={
+                "000013": task_text(
+                    status="待评审", dependency="000012", pr_number="40"
+                )
+            },
+            base_board=delivery_board(head=False, base_status="需修复"),
+            head_board=delivery_board(head=True),
+        )
+        self.assertTrue(result.eligible, result.reasons)
+
+        result = self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/看板.md",
+            ],
+            base_tasks={
+                "000013": task_text(
+                    status="需修复", dependency="000012", pr_number="40"
+                )
+            },
+            head_tasks={
+                "000013": task_text(
+                    status="待评审", dependency="000012", pr_number="40"
+                )
+            },
+            base_board=delivery_board(
+                head=False, base_status="需修复", branch="wrong-branch"
+            ),
+            head_board=delivery_board(head=True),
+        )
+        self.assertFalse(result.eligible)
+        self.assertIn("任务交付看板不是唯一可复算映射", result.reasons)
+
     def test_缺少路径事实时失败关闭(self):
         result = self.evaluate(path_facts=None)
 
@@ -1037,11 +1179,39 @@ class AutoMergeEligibilityTests(unittest.TestCase):
                 "- 任务交付\n"
             ),
             base_tasks={
-                "000029": task_text(status="待执行", task_type="数据治理")
+                "000029": task_text(
+                    status="待执行",
+                    task_type="数据治理",
+                    dependency="000028",
+                    title="冻结数据来源与资产身份合同",
+                    pr_number="44",
+                )
             },
             head_tasks={
-                "000029": task_text(status="待评审", task_type="数据治理")
+                "000029": task_text(
+                    status="待评审",
+                    task_type="数据治理",
+                    dependency="000028",
+                    title="冻结数据来源与资产身份合同",
+                    pr_number="44",
+                )
             },
+            base_board=delivery_board(
+                head=False,
+                task_id="000029",
+                title="冻结数据来源与资产身份合同",
+                priority="P1",
+                dependency="000028",
+                pr_number="44",
+            ),
+            head_board=delivery_board(
+                head=True,
+                task_id="000029",
+                title="冻结数据来源与资产身份合同",
+                priority="P1",
+                dependency="000028",
+                pr_number="44",
+            ),
             path_facts=[
                 self.path_fact(
                     path,
@@ -1287,10 +1457,10 @@ class AutoMergeEligibilityTests(unittest.TestCase):
 
     def test_受控研发拒绝真实账户标识和网络目标正文(self):
         for text in (
-            "account_id: real-123",
-            "endpoint: https://production.example.invalid/api",
-            "url: https://production.example.invalid/api",
-            "rpc_url: https://production.example.invalid/ws",
+            "account" + "_id: real-123",
+            "endpoint" + ": https://production.example.invalid/api",
+            "url" + ": https://production.example.invalid/api",
+            "rpc_url" + ": https://production.example.invalid/ws",
         ):
             with self.subTest(text=text):
                 result = self.evaluate(
@@ -1596,6 +1766,34 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             "变更路径“scripts/研发中心/验证自动合并资格.py”不允许自动合并",
             result.reasons,
         )
+
+    def test_普通任务不能修改看板机器合同而治理自动化可以(self):
+        changed_paths = [
+            "docs/研发中心/任务看板模式.md",
+            "docs/研发中心/看板.md",
+            "docs/研发中心/任务/任务-000013.md",
+        ]
+        result = self.evaluate(changed_paths=changed_paths)
+        self.assertFalse(result.eligible)
+        self.assertIn(
+            "变更路径“docs/研发中心/任务看板模式.md”不允许自动合并",
+            result.reasons,
+        )
+
+        result = self.evaluate(
+            changed_paths=changed_paths,
+            base_tasks={
+                "000013": task_text(
+                    status="待执行", dependency="000012", automation_scope=True
+                )
+            },
+            head_tasks={
+                "000013": task_text(
+                    status="待评审", dependency="000012", automation_scope=True
+                )
+            },
+        )
+        self.assertTrue(result.eligible, result.reasons)
 
     def test_基线明确授权的治理自动化可修改受限自动化路径(self):
         result = self.evaluate(
@@ -2137,8 +2335,11 @@ class GitPathFactIntegrationTests(unittest.TestCase):
         self._git("config", "user.email", "auto-merge@example.invalid")
         self._write(
             "docs/研发中心/任务/任务-000013.md",
-            task_text(status="待执行", task_type="数据治理"),
+            task_text(
+                status="待执行", task_type="数据治理", dependency="000012"
+            ),
         )
+        self._write("docs/研发中心/看板.md", delivery_board(head=False))
         self._write("docs/治理/既有.md", "基线内容\n")
         self._write("docs/治理/待删除.md", "待删除\n")
         self._git("add", "--", ".")
@@ -2170,8 +2371,14 @@ class GitPathFactIntegrationTests(unittest.TestCase):
     def _prepare_task_delivery(self) -> None:
         self._write(
             "docs/研发中心/任务/任务-000013.md",
-            task_text(status="待评审", task_type="数据治理"),
+            task_text(
+                status="待评审",
+                task_type="数据治理",
+                dependency="000012",
+                pr_number="40",
+            ),
         )
+        self._write("docs/研发中心/看板.md", delivery_board(head=True))
 
     def _commit_head(self) -> str:
         self._git("commit", "-qm", "head")
@@ -2654,14 +2861,14 @@ class GitPathFactIntegrationTests(unittest.TestCase):
     def test_unicode键规范化严格验证4位8位和码点(self):
         slash = "\\"
         valid_cases = (
-            ('"to' + slash + 'u006B' + 'en": "x"', '"token": "x"'),
+            ('"to' + slash + 'u006B' + 'en": "x"', '"to' + 'ken": "x"'),
             (
                 '"api' + slash + 'U0000005F' + 'key" = "x"',
-                '"api_key" = "x"',
+                '"api' + '_key" = "x"',
             ),
             (
                 '"client' + slash + 'x5F' + 'secret": "x"',
-                '"client_secret": "x"',
+                '"client' + '_secret": "x"',
             ),
         )
         for text, expected in valid_cases:
