@@ -1154,14 +1154,14 @@ def _blocking_record_aliases_allowed(record: tuple[str, ...]) -> bool:
         target = None
         index = ssh_index + 1
         while index < len(tokens):
-            token = tokens[index]
-            if token == "-o":
+            arg_value = tokens[index]
+            if arg_value == "-o":
                 index += 2
                 continue
-            if token.startswith("-"):
+            if arg_value.startswith("-"):
                 index += 1
                 continue
-            target = token
+            target = arg_value
             break
         if target not in ALLOWED_BLOCKING_ALIASES:
             return False
