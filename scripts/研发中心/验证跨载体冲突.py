@@ -23,6 +23,9 @@ START_PATTERN = re.compile(
     r"^- 开始时间：`(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2}:\d{2})`$",
     re.MULTILINE,
 )
+BLOCKER_PATTERN = re.compile(r"^- 当前阻塞原因：(.+)$", re.MULTILINE)
+PR_PATTERN = re.compile(r"^- Pull Request：(.+)$", re.MULTILINE)
+MERGE_PATTERN = re.compile(r"^- 合并提交SHA：`([0-9a-f]{40})`$", re.MULTILINE)
 DEPENDENCY_PATTERN = re.compile(r"任务-(\d{6})")
 STANDARD_STATUSES = frozenset(
     {"待执行", "执行中", "阻塞", "待评审", "需修复", "已完成", "已取消"}
@@ -208,7 +211,7 @@ def _field(pattern: re.Pattern[str], text: str) -> str | None:
 
 def _task_records(
     repo_root: Path, ref: str, conflicts: list[Conflict]
-) -> dict[str, tuple[str, str, str, str, tuple[str, ...]]]:
+) -> dict[str, tuple[str, str, str, str, tuple[str, ...], str, str, str, str, str]]:
     paths = _list_task_paths(repo_root, ref)
     if paths is None:
         conflicts.append(
@@ -222,7 +225,7 @@ def _task_records(
             )
         )
         return {}
-    records: dict[str, tuple[str, str, str, str, tuple[str, ...]]] = {}
+    records: dict[str, tuple[str, str, str, str, tuple[str, ...], str, str, str, str, str]] = {}
     for path in paths:
         match = TASK_PATTERN.fullmatch(path)
         assert match is not None
@@ -257,6 +260,9 @@ def _task_records(
         priority = _field(PRIORITY_PATTERN, text) or ""
         branch = _field(BRANCH_PATTERN, text) or ""
         started = _field(START_PATTERN, text) or ""
+        blocker = _field(BLOCKER_PATTERN, text) or ""
+        pr = _field(PR_PATTERN, text) or ""
+        merge = _field(MERGE_PATTERN, text) or ""
         dependency_lines = [
             line for line in text.splitlines() if line.startswith("- 唯一前序依赖：")
         ]
@@ -304,6 +310,11 @@ def _task_records(
             status_matches[0] if status_matches else "",
             priority,
             dependencies,
+            branch,
+            started,
+            blocker,
+            pr,
+            merge,
         )
         if status_matches and status_matches[0] == "执行中" and (not branch or not started):
             conflicts.append(
@@ -368,7 +379,7 @@ def _board_sections(text: str) -> dict[str, str] | None:
 def _check_board(
     repo_root: Path,
     ref: str,
-    records: Mapping[str, tuple[str, str, str, str, tuple[str, ...]]],
+    records: Mapping[str, tuple],
     conflicts: list[Conflict],
 ) -> None:
     schema = _schema_at_ref(repo_root, ref)
@@ -424,7 +435,8 @@ def _check_board(
             match = re.match(r"^\|\s*(?:P[0-3]\s*\|\s*)?任务-(\d{6})\s*\|", line)
             if match:
                 rows_by_id.setdefault(match.group(1), []).append((section, line))
-    for task_id, (_, title, status, priority, _) in records.items():
+    for task_id, record in records.items():
+        _, title, status, priority, _ = record[:5]
         rows = rows_by_id.get(task_id, [])
         if len(rows) != 1:
             conflicts.append(
@@ -466,14 +478,15 @@ def _check_board(
 
 
 def _check_dependencies(
-    records: Mapping[str, tuple[str, str, str, str, tuple[str, ...]]],
+    records: Mapping[str, tuple],
     conflicts: list[Conflict],
 ) -> None:
     graph = {
         task_id: tuple(dep for dep in record[4] if dep in records)
         for task_id, record in records.items()
     }
-    for task_id, (_, _, _, _, dependencies) in records.items():
+    for task_id, record in records.items():
+        dependencies = record[4]
         unknown = sorted(set(dependencies).difference(records))
         if unknown:
             conflicts.append(
@@ -642,7 +655,7 @@ def check_refs(repo_root: Path, base_ref: str, head_ref: str) -> ConflictReport:
 
 def repair_board_text(
     board: str,
-    records: Mapping[str, tuple[str, str, str, str, tuple[str, ...]]],
+    records: Mapping[str, tuple],
     schema: Mapping[str, object],
 ) -> str:
     """从任务文件生成派生看板文本；不修改任务合同或历史证据。"""
@@ -651,18 +664,28 @@ def repair_board_text(
     if sections is None:
         raise ValueError("看板分区不完整，不能生成修复计划")
     rows_by_status: dict[str, list[str]] = {section: [] for section in SECTIONS}
-    for task_id, (_, title, status, priority, dependencies) in sorted(
+    for task_id, record in sorted(
         records.items(), key=lambda item: (item[1][3], item[0])
     ):
+        _, title, status, priority, dependencies = record[:5]
+        branch = record[5] if len(record) > 5 else ""
+        started = record[6] if len(record) > 6 else ""
+        blocker = record[7] if len(record) > 7 else ""
+        pr = record[8] if len(record) > 8 else ""
+        merge = record[9] if len(record) > 9 else ""
         dependency = dependencies[0] if dependencies else "无"
         if status == "待执行":
             rows_by_status[status].append(f"| {priority} | 任务-{task_id} | {title} | {dependency} |")
         elif status == "阻塞":
-            rows_by_status[status].append(f"| {priority} | 任务-{task_id} | {title} | {dependency} | 任务文件记录阻塞原因 |")
+            rows_by_status[status].append(f"| {priority} | 任务-{task_id} | {title} | {dependency} | {blocker or '任务文件记录阻塞原因'} |")
         elif status in {"执行中", "待评审", "需修复"}:
-            rows_by_status[status].append(f"| {priority} | 任务-{task_id} | {title} | 任务文件记录 | 任务文件记录 |")
+            if status == "执行中":
+                rows_by_status[status].append(f"| {priority} | 任务-{task_id} | {title} | `{branch or '任务文件记录'}` | {started or '任务文件记录'} |")
+            else:
+                rows_by_status[status].append(f"| {priority} | 任务-{task_id} | {title} | `{branch or '任务文件记录'}` | {pr or '任务文件记录'} |")
         else:
-            rows_by_status[status].append(f"| 任务-{task_id} | {title} | 任务文件记录 |")
+            evidence = f"{pr}；合并提交 `{merge}`" if pr and merge else "任务文件记录"
+            rows_by_status[status].append(f"| 任务-{task_id} | {title} | {evidence} |")
     lines = board.splitlines()
     heading_indexes = [index for index, line in enumerate(lines) if line.startswith("## ") and line[3:] in SECTIONS]
     output: list[str] = []
