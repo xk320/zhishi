@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
 import shlex
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -68,6 +70,29 @@ REQUIRED_BOARD_SECTIONS = frozenset(
 )
 BOARD_AUXILIARY_SECTIONS = frozenset({"状态维护要求"})
 GOVERNANCE_CONTROL_PATHS = frozenset({"docs/研发中心/任务看板模式.md"})
+
+
+def _cross_carrier_conflict_reasons(
+    repo_root: Path, base_ref: str, head_ref: str
+) -> tuple[str, ...]:
+    """从main可信树加载冲突检查器；缺少新入口时保持旧基线兼容。"""
+
+    conflict_checker_path = repo_root / "scripts/研发中心/验证跨载体冲突.py"
+    if not conflict_checker_path.exists():
+        return ()
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "zhishi_cross_carrier_conflict", conflict_checker_path
+        )
+        if spec is None or spec.loader is None:
+            return ("UNCLASSIFIED_CONFLICT:冲突检查器:失败关闭",)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        report = module.check_refs(repo_root, base_ref, head_ref)
+        return tuple(report.reasons)
+    except (OSError, ImportError, TypeError, ValueError, AttributeError):
+        return ("UNCLASSIFIED_CONFLICT:冲突检查器:失败关闭",)
 
 
 def _board_schema_payload(schema_version, sections):
@@ -2333,6 +2358,14 @@ def main() -> int:
         path_facts=path_facts,
         enforce_board_sync=True,
     )
+    conflict_reasons = _cross_carrier_conflict_reasons(
+        repo_root, arguments.base_ref, arguments.head_ref
+    )
+    if conflict_reasons:
+        result = EligibilityResult(
+            eligible=False,
+            reasons=tuple(dict.fromkeys((*result.reasons, *conflict_reasons))),
+        )
     print(
         json.dumps(
             {
