@@ -59,22 +59,28 @@ class ExternalStateConsistencyTests(unittest.TestCase):
         status = status_lines[0]
         self.assertIn(status, {"待评审", "已完成"})
 
-        task_rows = [
-            line
-            for line in board.splitlines()
-            if re.match(r"^\|\s*(?:P[0-3]\s*\|\s*)?任务-000043\s*\|", line)
-        ]
+        current_section = ""
+        task_rows = []
+        for line in board.splitlines():
+            if line.startswith("## "):
+                current_section = line[3:].strip()
+                continue
+            if re.match(r"^\|\s*(?:P[0-3]\s*\|\s*)?任务-000043\s*\|", line):
+                task_rows.append((current_section, line))
         self.assertEqual(len(task_rows), 1)
+        section, row = task_rows[0]
         if status == "待评审":
+            self.assertEqual(section, "待评审")
             self.assertEqual(
-                task_rows[0],
+                row,
                 "| P0 | 任务-000043 | 统一外部环境事实与阶段状态声明 | "
                 "`codex/000043-external-state-consistency-v1` | "
                 "[#62](https://github.com/xk320/zhishi/pull/62) |",
             )
         else:
+            self.assertEqual(section, "已完成")
             self.assertEqual(
-                task_rows[0],
+                row,
                 "| 任务-000043 | 统一外部环境事实与阶段状态声明 | "
                 "PR #62；合并提交 `abe66037161332d350b9782492beedd8898a4f8a` |",
             )
@@ -88,11 +94,34 @@ class ExternalStateConsistencyTests(unittest.TestCase):
 
         completed_task = task.replace("- 状态：待评审", "- 状态：已完成")
         completed_task += "\n- 合并提交SHA：`abe66037161332d350b9782492beedd8898a4f8a`\n"
+        pending_row = (
+            "| P0 | 任务-000043 | 统一外部环境事实与阶段状态声明 | `codex/000043-external-state-consistency-v1` | "
+            "[#62](https://github.com/xk320/zhishi/pull/62) |"
+        )
+        completed_row = (
+            "| 任务-000043 | 统一外部环境事实与阶段状态声明 | "
+            "PR #62；合并提交 `abe66037161332d350b9782492beedd8898a4f8a` |"
+        )
         completed_board = board.replace(
             "| P0 | 任务-000043 | 统一外部环境事实与阶段状态声明 | `codex/000043-external-state-consistency-v1` | [#62](https://github.com/xk320/zhishi/pull/62) |",
-            "| 任务-000043 | 统一外部环境事实与阶段状态声明 | PR #62；合并提交 `abe66037161332d350b9782492beedd8898a4f8a` |",
+            "",
+        )
+        completed_board = completed_board.replace(
+            "## 已完成\n\n| 任务 | 名称 | 完成证据 |\n| --- | --- | --- |",
+            "## 已完成\n\n| 任务 | 名称 | 完成证据 |\n| --- | --- | --- |\n" + completed_row,
         )
         self._assert_task043_state_mapping(completed_task, completed_board)
+
+        wrong_section_board = board.replace(pending_row, "")
+        wrong_section_board = wrong_section_board.replace(
+            "## 已完成\n\n| 任务 | 名称 | 完成证据 |\n| --- | --- | --- |",
+            "## 已完成\n\n| 任务 | 名称 | 完成证据 |\n| --- | --- | --- |\n" + pending_row,
+        )
+        with self.assertRaises(AssertionError):
+            self._assert_task043_state_mapping(task, wrong_section_board)
+
+        with self.assertRaises(AssertionError):
+            self._assert_task043_state_mapping(task, board.replace(pending_row, ""))
 
     def test_任务043拒绝未知缺失和重复状态(self):
         task = (ROOT / "docs/研发中心/任务/任务-000043.md").read_text(encoding="utf-8")
@@ -107,8 +136,13 @@ class ExternalStateConsistencyTests(unittest.TestCase):
 
     def test_历史任务记录仍保留(self):
         historical = (ROOT / "docs/研发中心/任务/任务-000028.md").read_text(encoding="utf-8")
-        self.assertIn("任务-000028：统一阶段状态与BTC、ETH研究范围", historical)
-        self.assertIn("执行记录", historical)
+        def assert_historical_record(text: str) -> None:
+            self.assertIn("任务-000028：统一阶段状态与BTC、ETH研究范围", text)
+            self.assertIn("执行记录", text)
+
+        assert_historical_record(historical)
+        with self.assertRaises(AssertionError):
+            assert_historical_record(historical.replace("执行记录", ""))
 
     def test_四个现行外部状态词汇已冻结(self):
         design = (ROOT / "docs/superpowers/specs/2026-08-04-external-state-consistency-design.md").read_text(encoding="utf-8")
