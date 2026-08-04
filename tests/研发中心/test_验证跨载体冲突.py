@@ -271,8 +271,6 @@ class CrossCarrierConflictTests(unittest.TestCase):
 
     def test历史证据变更失败关闭(self):
         original = CONFLICT._read_at_ref
-        main_sha = CONFLICT._resolve_ref(ROOT, "main")
-        head_sha = CONFLICT._resolve_ref(ROOT, "HEAD")
         path = next(
             path
             for path in CONFLICT.HISTORICAL_IMMUTABLE_PATHS
@@ -281,13 +279,15 @@ class CrossCarrierConflictTests(unittest.TestCase):
 
         def altered(repo_root, ref, requested):
             value = original(repo_root, ref, requested)
-            if requested == path and ref == head_sha:
+            if requested == path and ref == "head-ref":
                 return (value or "") + "\n未经授权变更"
             return value
 
         conflicts = []
         with mock.patch.object(CONFLICT, "_read_at_ref", side_effect=altered):
-            CONFLICT._check_historical_immutability(ROOT, main_sha, head_sha, conflicts)
+            CONFLICT._check_historical_immutability(
+                ROOT, "base-ref", "head-ref", conflicts
+            )
         self.assertTrue(any(item.code == "SCOPE_BOUNDARY_DRIFT" for item in conflicts))
 
 
