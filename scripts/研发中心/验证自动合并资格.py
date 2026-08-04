@@ -53,9 +53,9 @@ BOARD_TASK_ROW_PATTERN = re.compile(
 )
 BOARD_SCHEMA_PATH = (
     Path(__file__).resolve().parents[2]
-    / "config"
+    / "docs"
     / "研发中心"
-    / "任务看板模式.json"
+    / "任务看板模式.md"
 )
 _BOOTSTRAP_BOARD_TABLE_SCHEMA = {
     "待执行": (

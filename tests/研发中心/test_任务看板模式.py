@@ -9,7 +9,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 POLICY_PATH = ROOT / "scripts" / "研发中心" / "验证自动合并资格.py"
-MANIFEST_PATH = ROOT / "config" / "研发中心" / "任务看板模式.json"
+MANIFEST_PATH = ROOT / "docs" / "研发中心" / "任务看板模式.md"
 BOARD_PATH = ROOT / "docs" / "研发中心" / "看板.md"
 
 
