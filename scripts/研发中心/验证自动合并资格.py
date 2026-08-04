@@ -1749,6 +1749,15 @@ def _validate_blocked_contract_repair(
     assert target_base is not None
     assert target_head is not None
 
+    # 合同修复PR本身仍是一次受控任务交付；任务-000056必须先由独立
+    # 状态闭环从阻塞恢复为待执行（或需修复），不能在阻塞/执行中直接改合同。
+    _validate_delivery_tasks(
+        task_ids=(executor_id,),
+        base_tasks=base_tasks,
+        head_tasks=head_tasks,
+        reasons=reasons,
+    )
+
     # 任务-000056的输出合同和固定方案必须在基线中明确证明唯一目标，
     # 不能由PR正文、Issue或执行者自行指定另一个阻塞任务。
     required_contract_evidence = (

@@ -1073,6 +1073,19 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         result = self.evaluate_blocked_repair()
         self.assertTrue(result.eligible, result.reasons)
 
+        blocked_executor = self.blocked_repair_inputs(
+            base_tasks={
+                "000056": blocked_contract_repair_executor_text(status="阻塞"),
+                "000055": blocked_contract_repair_target_text(),
+            }
+        )
+        result = self.policy.evaluate_eligibility(**blocked_executor)
+        self.assertFalse(result.eligible)
+        self.assertIn(
+            "任务-000056基线状态“阻塞”不可进入任务交付",
+            result.reasons,
+        )
+
         wrong_target = self.blocked_repair_inputs(
             head_tasks={
                 "000056": blocked_contract_repair_executor_text(status="待评审"),
