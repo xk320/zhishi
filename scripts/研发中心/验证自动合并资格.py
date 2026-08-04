@@ -198,6 +198,27 @@ PULL_REQUEST_PATTERN = re.compile(
     r"^- Pull Request：\[#(\d+)\]\(https://github\.com/xk320/zhishi/pull/\1\)$",
     re.MULTILINE,
 )
+CANCELLATION_TIME_PATTERN = re.compile(
+    r"^- 取消时间：(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4})$",
+    re.MULTILINE,
+)
+CANCELLATION_REASON_PATTERN = re.compile(
+    r"^- 取消原因：([^|\r\n]+)$", re.MULTILINE
+)
+CANCELLATION_SUPPORT_TASK_PATTERN = re.compile(
+    r"^- 取消依据任务：任务-(\d{6})$", re.MULTILINE
+)
+CANCELLATION_PR_PATTERN = re.compile(
+    r"^- 取消依据PR：\[#(\d+)\]\(https://github\.com/xk320/zhishi/pull/\1\)$",
+    re.MULTILINE,
+)
+CANCELLATION_MERGE_TIME_PATTERN = re.compile(
+    r"^- 取消依据合并时间：(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4})$",
+    re.MULTILINE,
+)
+CANCELLATION_MERGE_SHA_PATTERN = re.compile(
+    r"^- 取消依据合并提交SHA：`([0-9a-f]{40})`$", re.MULTILINE
+)
 DEPENDENCY_PATTERN = re.compile(r"^- 唯一前序依赖：任务-(\d{6})(?:[^\r\n]*)$", re.MULTILINE)
 TASK_REFERENCE_LINE = re.compile(
     r"^\s*-\s*任务-(\d{6})(?:\s*[（(][^\r\n]*[）)])?\s*$"
@@ -243,6 +264,11 @@ STATE_CLOSURE_TRANSITIONS = frozenset(
         ("需修复", "阻塞"),
         ("阻塞", "待执行"),
         ("阻塞", "需修复"),
+        ("待执行", "已取消"),
+        ("执行中", "已取消"),
+        ("阻塞", "已取消"),
+        ("待评审", "已取消"),
+        ("需修复", "已取消"),
     }
 )
 BLOCKING_TRANSITIONS = frozenset(
@@ -253,11 +279,26 @@ BLOCKING_TRANSITIONS = frozenset(
     }
 )
 RECOVERY_TRANSITIONS = frozenset({("阻塞", "待执行"), ("阻塞", "需修复")})
+CANCELLATION_TRANSITIONS = frozenset(
+    {
+        (old_status, "已取消")
+        for old_status in ("待执行", "执行中", "阻塞", "待评审", "需修复")
+    }
+)
 DELIVERY_BASE_STATUSES = frozenset({"待执行", "需修复"})
 COMPLETION_MUTABLE_PREFIXES = (
     "- 状态：",
     "- 合并时间：",
     "- 合并提交SHA：",
+)
+CANCELLATION_MUTABLE_PREFIXES = (
+    "- 状态：",
+    "- 取消时间：",
+    "- 取消原因：",
+    "- 取消依据任务：",
+    "- 取消依据PR：",
+    "- 取消依据合并时间：",
+    "- 取消依据合并提交SHA：",
 )
 MAX_CHANGED_FILES = 500
 MAX_FILE_SIZE = 5 * 1024 * 1024
@@ -1355,6 +1396,26 @@ def _task_merge_fact(text: str) -> MergeFact | None:
     )
 
 
+def _task_cancellation_fact(text: str) -> MergeFact | None:
+    """读取取消状态引用的、已进入main的替代合并事实。"""
+
+    sha_match = CANCELLATION_MERGE_SHA_PATTERN.search(text)
+    time_match = CANCELLATION_MERGE_TIME_PATTERN.search(text)
+    pr_match = CANCELLATION_PR_PATTERN.search(text)
+    if sha_match is None or time_match is None or pr_match is None:
+        return None
+    return MergeFact(
+        sha=sha_match.group(1),
+        merged_at=time_match.group(1),
+        pr_number=int(pr_match.group(1)),
+    )
+
+
+def _cancellation_support_task_id(text: str) -> str | None:
+    match = CANCELLATION_SUPPORT_TASK_PATTERN.search(text)
+    return match.group(1) if match is not None else None
+
+
 def _board_rows(text: str) -> dict[str, tuple[str, str]]:
     """读取看板中任务所在状态和完整行。"""
 
@@ -1483,6 +1544,23 @@ def _validate_board_closure(
             expected = (
                 f"| 任务-{task_id} | {title} | PR #{fact.pr_number}；合并提交 `{fact.sha}` |"
                 if title is not None and fact is not None
+                else ""
+            )
+        elif status == "已取消":
+            support_task_id = _cancellation_support_task_id(task)
+            fact = (
+                merge_facts.get(support_task_id)
+                if support_task_id is not None
+                else None
+            )
+            reason = _task_field(CANCELLATION_REASON_PATTERN, task)
+            expected = (
+                f"| 任务-{task_id} | {title} | 替代任务-{support_task_id}；"
+                f"PR #{fact.pr_number}；合并提交 `{fact.sha}`；取消原因：{reason} |"
+                if title is not None
+                and support_task_id is not None
+                and fact is not None
+                and reason is not None
                 else ""
             )
         elif status == "待执行":
@@ -1945,7 +2023,9 @@ def _validate_state_closure(
     unlocked = 0
     blocking = 0
     recovered = 0
+    canceled = 0
     completed_task_id: str | None = None
+    canceled_task_id: str | None = None
     transitions: dict[str, tuple[str | None, str | None]] = {}
     if "docs/研发中心/看板.md" not in changed_paths:
         _append_reason(reasons, "合并后状态闭环必须同步看板")
@@ -1995,6 +2075,72 @@ def _validate_state_closure(
                 head_task, COMPLETION_MUTABLE_PREFIXES
             ):
                 _append_reason(reasons, f"任务-{task_id}状态闭环夹带合同改写")
+        if (old_status, new_status) in CANCELLATION_TRANSITIONS:
+            canceled += 1
+            canceled_task_id = task_id
+            support_task_id = _cancellation_support_task_id(head_task)
+            declared_fact = _task_cancellation_fact(head_task)
+            support_task = (
+                base_tasks.get(support_task_id)
+                if support_task_id is not None
+                else None
+            )
+            support_status = (
+                _task_field(TASK_STATUS_PATTERN, support_task)
+                if support_task is not None
+                else None
+            )
+            actual_fact = (
+                merge_facts.get(support_task_id)
+                if support_task_id is not None
+                else None
+            )
+            fields_valid = _has_unique_metadata_fields(
+                base_task,
+                {
+                    "- 状态：": 1,
+                    "- 取消时间：": 0,
+                    "- 取消原因：": 0,
+                    "- 取消依据任务：": 0,
+                    "- 取消依据PR：": 0,
+                    "- 取消依据合并时间：": 0,
+                    "- 取消依据合并提交SHA：": 0,
+                },
+            ) and _has_unique_metadata_fields(
+                head_task,
+                {
+                    "- 状态：": 1,
+                    "- 取消时间：": 1,
+                    "- 取消原因：": 1,
+                    "- 取消依据任务：": 1,
+                    "- 取消依据PR：": 1,
+                    "- 取消依据合并时间：": 1,
+                    "- 取消依据合并提交SHA：": 1,
+                },
+            )
+            if (
+                not fields_valid
+                or _without_mutable_metadata_lines(
+                    base_task, CANCELLATION_MUTABLE_PREFIXES
+                )
+                != _without_mutable_metadata_lines(
+                    head_task, CANCELLATION_MUTABLE_PREFIXES
+                )
+            ):
+                _append_reason(reasons, f"任务-{task_id}取消状态闭环夹带合同改写")
+            if (
+                support_task_id is None
+                or support_task_id == task_id
+                or support_task is None
+                or support_status != "已完成"
+            ):
+                _append_reason(reasons, f"任务-{task_id}取消依据任务不是已完成的其他任务")
+            if declared_fact is None or actual_fact is None or declared_fact != actual_fact:
+                _append_reason(reasons, f"任务-{task_id}取消依据合并事实与main不一致")
+            if _task_field(CANCELLATION_TIME_PATTERN, head_task) is None:
+                _append_reason(reasons, f"任务-{task_id}缺少有效取消时间")
+            if _task_field(CANCELLATION_REASON_PATTERN, head_task) is None:
+                _append_reason(reasons, f"任务-{task_id}缺少有效取消原因")
         if (old_status, new_status) in BLOCKING_TRANSITIONS:
             blocking += 1
             _validate_blocking_transition(
@@ -2015,13 +2161,18 @@ def _validate_state_closure(
     if blocking:
         if blocking != 1:
             _append_reason(reasons, "阻塞状态闭环必须且只能迁移一个任务")
-        if completed or unlocked or recovered:
-            _append_reason(reasons, "阻塞状态闭环不得夹带完成、解锁或恢复迁移")
+        if completed or unlocked or recovered or canceled:
+            _append_reason(reasons, "阻塞状态闭环不得夹带完成、解锁、恢复或取消迁移")
     elif recovered:
         if recovered != 1:
             _append_reason(reasons, "阻塞恢复状态闭环必须且只能迁移一个任务")
-        if completed or unlocked:
-            _append_reason(reasons, "阻塞恢复状态闭环不得夹带完成或解锁迁移")
+        if completed or unlocked or canceled:
+            _append_reason(reasons, "阻塞恢复状态闭环不得夹带完成、解锁或取消迁移")
+    elif canceled:
+        if canceled != 1:
+            _append_reason(reasons, "取消状态闭环必须且只能迁移一个未完成任务")
+        if completed or unlocked or recovered:
+            _append_reason(reasons, "取消状态闭环不得夹带完成、解锁或恢复迁移")
     elif completed != 1:
         _append_reason(reasons, "合并后状态闭环必须且只能完成一个待评审任务")
     if unlocked > 1:
@@ -2267,7 +2418,7 @@ def _derive_merge_facts(
 
     facts: dict[str, MergeFact] = {}
     for task_id, task in head_tasks.items():
-        declared = _task_merge_fact(task)
+        declared = _task_merge_fact(task) or _task_cancellation_fact(task)
         if declared is None:
             continue
         ancestry = subprocess.run(
@@ -2362,6 +2513,20 @@ def main() -> int:
 
     base_tasks = _load_ref_tasks(repo_root, arguments.base_ref, ordered_ids)
     head_tasks = _load_ref_tasks(repo_root, arguments.head_ref, ordered_ids)
+    # 取消状态的替代任务只作为证据引用，不属于本次状态迁移；仍从同一
+    # PR 的基线/头提交加载其任务文件，以便用main中的真实合并事实复算。
+    for task in tuple(head_tasks.values()):
+        support_task_id = _cancellation_support_task_id(task)
+        if support_task_id is None or support_task_id not in base_task_ids:
+            continue
+        base_tasks.setdefault(
+            support_task_id,
+            _read_task_at_ref(repo_root, arguments.base_ref, support_task_id) or "",
+        )
+        head_tasks.setdefault(
+            support_task_id,
+            _read_task_at_ref(repo_root, arguments.head_ref, support_task_id) or "",
+        )
     result = evaluate_eligibility(
         changed_paths=changed_paths,
         pr_body=pr_body,
