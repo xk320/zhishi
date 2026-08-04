@@ -220,6 +220,13 @@ class InventoryAndRuleTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 self.audit.validate_ssh_target(invalid)
 
+    def test_mysql元数据查询绑定单成员超时(self):
+        program = self.audit.REMOTE_AUDIT_PROGRAM
+        self.assertIn("def mysql_metadata(units, object_timeout):", program)
+        self.assertIn("timeout=object_timeout", program)
+        self.assertNotIn("timeout=60", program)
+        self.assertIn("mysql_metadata(databases, object_timeout)", program)
+
     def test_字段名只能形成时间候选不能证明时间语义(self):
         schema = {
             "audit_version": "1.0",
@@ -801,7 +808,7 @@ def file_identity(path, data_format):
             "audit_version": "1.0", "objects": [frozen_schema]
         })
         prelude = '''
-def mysql_metadata(units):
+def mysql_metadata(units, object_timeout):
     return [{
         "asset_id": units[0]["asset_id"],
         "status": "已发现结构",
