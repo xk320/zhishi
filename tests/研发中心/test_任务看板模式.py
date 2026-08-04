@@ -37,6 +37,10 @@ class BoardModeContractTests(unittest.TestCase):
         )
         self.assertEqual("zhishi-task-board/v1", self.manifest["schema_version"])
         self.assertEqual(
+            set(self.policy.REQUIRED_BOARD_SECTIONS),
+            set(self.manifest["sections"]),
+        )
+        self.assertEqual(
             self.manifest["content_sha256"],
             self.policy._board_schema_digest(
                 self.manifest["schema_version"], self.manifest["sections"]
@@ -71,14 +75,11 @@ class BoardModeContractTests(unittest.TestCase):
         )
         self.assertFalse(self.policy._board_schema_is_valid(duplicate))
 
-    def test_机器合同缺失时仅使用固定引导模式(self):
+    def test_机器合同缺失时失败关闭(self):
         with tempfile.TemporaryDirectory() as directory:
             missing = Path(directory) / "missing.json"
             with mock.patch.object(self.policy, "BOARD_SCHEMA_PATH", missing):
-                self.assertEqual(
-                    self.policy._load_board_table_schema(),
-                    self.policy._BOOTSTRAP_BOARD_TABLE_SCHEMA,
-                )
+                self.assertEqual(self.policy._load_board_table_schema(), {})
 
     def test_机器合同指纹损坏时失败关闭(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -89,6 +90,18 @@ class BoardModeContractTests(unittest.TestCase):
                 json.dumps(document, ensure_ascii=False), encoding="utf-8"
             )
             with mock.patch.object(self.policy, "BOARD_SCHEMA_PATH", broken):
+                self.assertEqual(self.policy._load_board_table_schema(), {})
+
+    def test_机器合同重复JSON键失败关闭(self):
+        with tempfile.TemporaryDirectory() as directory:
+            duplicate = Path(directory) / "duplicate.json"
+            duplicate.write_text(
+                '{"schema_version":"zhishi-task-board/v1",'
+                '"schema_version":"zhishi-task-board/v1",'
+                '"content_sha256":"0", "sections":{}}',
+                encoding="utf-8",
+            )
+            with mock.patch.object(self.policy, "BOARD_SCHEMA_PATH", duplicate):
                 self.assertEqual(self.policy._load_board_table_schema(), {})
 
 
