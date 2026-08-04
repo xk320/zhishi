@@ -20,6 +20,7 @@ from typing import Mapping, Sequence
 
 
 PROBE_VERSION = "1.0"
+CURRENT_TARGETS = ("BTC", "ETH")
 ALLOWED_ROOTS = (
     "/opt/binance-event",
     "/opt/celueqing",
@@ -527,8 +528,6 @@ def infer_symbols(text: str) -> str:
         symbols.append("BTC")
     if matches({"eth", "ethereum"}):
         symbols.append("ETH")
-    if matches({"sol", "solana"}):
-        symbols.append("SOL")
     return "、".join(symbols) if symbols else "未限定"
 
 
@@ -839,7 +838,7 @@ def render_markdown(
             for asset in assets
             if symbol in asset.get("标的范围", "").split("、")
         )
-        for symbol in ("BTC", "ETH", "SOL")
+        for symbol in CURRENT_TARGETS
     }
     database = payload["database"]
     lines = [
@@ -878,7 +877,7 @@ def render_markdown(
     lines.extend(
         [
             "",
-            "## BTC、ETH、SOL覆盖",
+            "## BTC、ETH覆盖",
             "",
             "覆盖数量仅表示名称或路径中出现明确标的词，不表示时间范围、完整性、质量或",
             "研究可用性已经验证。",
@@ -887,7 +886,7 @@ def render_markdown(
             "| --- | ---: |",
         ]
     )
-    lines.extend(f"| {symbol} | {symbol_counts[symbol]} |" for symbol in ("BTC", "ETH", "SOL"))
+    lines.extend(f"| {symbol} | {symbol_counts[symbol]} |" for symbol in CURRENT_TARGETS)
     lines.extend(
         [
             "",
@@ -1136,7 +1135,7 @@ def run_discovery(
 
 def _parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="只读发现《知势》BTC、ETH、SOL候选数据资产"
+        description="只读发现《知势》BTC、ETH候选数据资产"
     )
     parser.add_argument("--target", default="ubuntu", help="本机SSH配置中的逻辑别名")
     parser.add_argument("--ssh-bin", default="ssh", help="SSH客户端路径")

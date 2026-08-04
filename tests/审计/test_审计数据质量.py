@@ -993,11 +993,11 @@ class OutputContractTests(unittest.TestCase):
             },
         )
 
-        for symbol in ("BTC", "ETH", "SOL"):
+        for symbol in ("BTC", "ETH"):
             self.assertIn(f"| {symbol} | 无法判定 |", report)
         self.assertIn("## 技术摘要", report)
         self.assertIn("## 全部验证单元均未达到可用性证据门槛", report)
-        self.assertIn("## BTC、ETH、SOL均无法判定", report)
+        self.assertIn("## BTC、ETH均无法判定", report)
         self.assertIn("## 作用域与指标定义", report)
         self.assertIn("## 方法与稳健性检查", report)
         self.assertIn("## 推荐的解除路径", report)
@@ -1085,7 +1085,7 @@ class OutputContractTests(unittest.TestCase):
 
         self.assertIn("| BTC | 无法判定 | 2个已登记候选验证单元", report)
         self.assertIn("| ETH | 无法判定 | 1个已登记候选验证单元", report)
-        self.assertIn("| SOL | 无法判定 | 0个已登记候选验证单元", report)
+        self.assertNotIn("| SOL |", report)
         self.assertNotIn("清单中的SOL候选资产", report)
 
     def test_脱敏覆盖地址私钥令牌和明文凭据(self):

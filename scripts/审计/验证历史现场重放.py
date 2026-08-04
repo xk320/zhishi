@@ -23,6 +23,7 @@ from typing import Iterable, Mapping, Sequence, TextIO
 
 REPLAY_VERSION = "historical-replay-1.0"
 REPLAY_SNAPSHOT_CONTRACT_VERSION = "replay-snapshot-contract-1.0"
+CURRENT_TARGETS = ("BTC", "ETH")
 CANONICAL_JSON_VERSION = "canonical-json-v1"
 MAX_SAFE_INTEGER_FLOAT = 2**53 - 1
 UNREPLAYABLE_REMEDIATIONS = {
@@ -826,10 +827,10 @@ def summarize_formal_conclusion(rows: Sequence[Mapping[str, str]]) -> str:
 def render_report(rows: Sequence[Mapping[str, str]], metadata: Mapping[str, str]) -> str:
     symbol_counts = {
         symbol: sum(_scope_contains(row.get("候选标的范围", ""), symbol) for row in rows)
-        for symbol in ("BTC", "ETH", "SOL")
+        for symbol in CURRENT_TARGETS
     }
     conclusions = {}
-    for symbol in ("BTC", "ETH", "SOL"):
+    for symbol in CURRENT_TARGETS:
         symbol_rows = [
             row for row in rows
             if _scope_contains(row.get("候选标的范围", ""), symbol)
@@ -890,11 +891,11 @@ def render_report(rows: Sequence[Mapping[str, str]], metadata: Mapping[str, str]
         "| 标的 | 候选覆盖单元 | 结论 |",
         "| --- | ---: | --- |",
     ]
-    for symbol in ("BTC", "ETH", "SOL"):
+    for symbol in CURRENT_TARGETS:
         lines.append(f"| {symbol} | {symbol_counts[symbol]} | {conclusions[symbol]} |")
     lines.extend([
         "",
-        "“未限定”或其他标的的证据不得外推给 BTC、ETH 或 SOL；BTC 和 ETH 的结果也不得外推给 SOL。",
+        "“未限定”或其他标的的证据不得外推给 BTC 或 ETH；BTC 与 ETH 的结果也不得互相外推。",
         "",
         "## 快照与版本合同",
         "",

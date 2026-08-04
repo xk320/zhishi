@@ -752,7 +752,7 @@ class OutputTests(unittest.TestCase):
                     "safe report",
                 )
 
-    def test_报告独立统计BTC_ETH_SOL且不外推(self):
+    def test_报告独立统计BTC_ETH且不外推(self):
         rows = [
             {"资产编号": "DS-000001", "候选标的范围": "BTC", "重放结论": "无法判定"},
             {"资产编号": "DS-000002", "候选标的范围": "BTC、ETH", "重放结论": "无法判定"},
@@ -764,7 +764,7 @@ class OutputTests(unittest.TestCase):
         )
         self.assertIn("| BTC | 2 |", report)
         self.assertIn("| ETH | 1 |", report)
-        self.assertIn("| SOL | 0 |", report)
+        self.assertNotIn("| SOL |", report)
         self.assertIn("不得外推", report)
         self.assertIn("smoke-only", report)
         self.assertIn("None或精确内建空字典", report)
@@ -786,7 +786,7 @@ class OutputTests(unittest.TestCase):
         self.assertIn("证据不足无法判定：1 个", report)
         self.assertIn("| BTC | 1 | 通过（全部候选验证单元通过双门重放） |", report)
         self.assertIn("| ETH | 1 | 无法判定", report)
-        self.assertIn("| SOL | 1 | 拒绝", report)
+        self.assertNotIn("| SOL |", report)
 
     def test_正式原因分类和扩展列完整(self):
         with tempfile.TemporaryDirectory() as directory:

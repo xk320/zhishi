@@ -51,7 +51,8 @@ EXPECTED_STATE_MAP = {
 }
 MAIN_SCALES = ["4小时", "8小时", "24小时", "48小时"]
 RESULT_WINDOWS = ["15分钟", "1小时"]
-TARGETS = ["BTC", "ETH", "SOL"]
+CURRENT_TARGETS = ("BTC", "ETH")
+TARGETS = list(CURRENT_TARGETS)
 GROUP_DIMENSIONS = [
     "标的",
     "交易场所",
@@ -182,7 +183,7 @@ def load_plan(plan_path: Path, inventory_path: Path, auditor_path: Path) -> dict
         raise ValueError("持续验证方案必须是对象")
     _require_exact_keys(plan, PLAN_KEYS, "持续验证方案")
 
-    if plan["方案版本"] != "dq-continuous-plan-1.0":
+    if plan["方案版本"] != "dq-continuous-plan-1.1":
         raise ValueError("持续验证方案版本不受支持")
     auditor = load_auditor_module(auditor_path)
     if plan["底层审计规则版本"] != auditor.RULE_VERSION:
@@ -207,7 +208,7 @@ def load_plan(plan_path: Path, inventory_path: Path, auditor_path: Path) -> dict
         raise ValueError("作用域必须是对象")
     _require_exact_keys(scope, SCOPE_KEYS, "作用域")
     if scope["标的"] != TARGETS:
-        raise ValueError("标的作用域必须严格为BTC、ETH、SOL")
+        raise ValueError("标的作用域必须严格为BTC、ETH")
     if scope["主研究尺度"] != MAIN_SCALES:
         raise ValueError("主研究尺度漂移")
     if scope["结果观察窗口"] != RESULT_WINDOWS:

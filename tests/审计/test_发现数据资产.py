@@ -180,7 +180,7 @@ class DataAssetDiscoveryTests(unittest.TestCase):
     def test_交易对名称映射到明确标的(self):
         self.assertEqual("BTC", self.discovery.infer_symbols("BTCUSDT_seconds.csv"))
         self.assertEqual("ETH", self.discovery.infer_symbols("ethusdc.parquet"))
-        self.assertEqual("SOL", self.discovery.infer_symbols("SOL-USD.jsonl"))
+        self.assertEqual("未限定", self.discovery.infer_symbols("SOL-USD.jsonl"))
         self.assertEqual("BTC、ETH", self.discovery.infer_symbols("ETHBTC.sqlite"))
 
     def test_csv和markdown共享批次且声明不可推导结论(self):
@@ -200,7 +200,7 @@ class DataAssetDiscoveryTests(unittest.TestCase):
         self.assertIn("不证明数据完整、可重放或可用于研究", markdown)
         self.assertIn("BTC", markdown)
         self.assertIn("ETH", markdown)
-        self.assertIn("SOL", markdown)
+        self.assertNotIn("SOL", markdown)
 
         rows = list(csv.reader(io.StringIO(csv_text)))
         self.assertEqual(EXPECTED_CSV_COLUMNS, rows[0])

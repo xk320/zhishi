@@ -1,5 +1,5 @@
 {
-  "方案版本": "dq-continuous-plan-1.0",
+  "方案版本": "dq-continuous-plan-1.1",
   "底层审计规则版本": "dq-rules-1.0",
   "资产清单指纹": "019010d64fe47d89c81bfaedafd458f1d886025bb34292c0c32eafcfa4392657",
   "允许SSH目标": [
@@ -21,8 +21,7 @@
   "作用域": {
     "标的": [
       "BTC",
-      "ETH",
-      "SOL"
+      "ETH"
     ],
     "主研究尺度": [
       "4小时",

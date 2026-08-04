@@ -59,7 +59,12 @@ class BoardModeContractTests(unittest.TestCase):
         self.assertNotIn("Pull Request", self.board)
 
     def test_旧表头别名失败关闭(self):
-        legacy = self.board.replace(
+        board_with_empty_review_schema = self.board.replace(
+            "## 待评审\n\n无。",
+            "## 待评审\n\n| 优先级 | 任务 | 名称 | 分支 | PR |\n| --- | --- | --- | --- | --- |",
+            1,
+        )
+        legacy = board_with_empty_review_schema.replace(
             "| 优先级 | 任务 | 名称 | 分支 | PR |",
             "| 优先级 | 任务 | 名称 | 分支 | Pull Request |",
             1,
