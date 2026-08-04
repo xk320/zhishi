@@ -43,6 +43,7 @@ TASK_FILE_PATTERN = re.compile(r"^docs/研发中心/任务/任务-(\d{6})\.md$")
 TASK_TYPE_PATTERN = re.compile(r"^- 类型：(.+)$", re.MULTILINE)
 TASK_STATUS_PATTERN = re.compile(r"^- 状态：(.+)$", re.MULTILINE)
 TASK_PRIORITY_PATTERN = re.compile(r"^- 优先级：(.+)$", re.MULTILINE)
+EXECUTION_BRANCH_PATTERN = re.compile(r"^- 执行分支：`([^`]+)`$", re.MULTILINE)
 TASK_TITLE_PATTERN = re.compile(r"^# 任务-\d{6}：(.+)$", re.MULTILINE)
 TASK_TITLE_WITH_ID_PATTERN = re.compile(
     r"^# 任务-(\d{6})：(.+)$", re.MULTILINE
@@ -60,6 +61,7 @@ BOARD_SCHEMA_PATH = (
 REQUIRED_BOARD_SECTIONS = frozenset(
     {"待执行", "执行中", "阻塞", "待评审", "需修复", "已完成", "已取消"}
 )
+BOARD_AUXILIARY_SECTIONS = frozenset({"状态维护要求"})
 GOVERNANCE_CONTROL_PATHS = frozenset({"docs/研发中心/任务看板模式.md"})
 
 
@@ -1066,11 +1068,18 @@ def _board_static_lines(text: str) -> tuple[str, ...]:
 
 def _board_schema_is_valid(text: str) -> bool:
     current_section = ""
+    seen_sections: set[str] = set()
     schema_counts: dict[str, dict[str, int]] = {}
     task_sections: set[str] = set()
     for line in text.splitlines():
         if line.startswith("## "):
             current_section = line[3:].strip()
+            if current_section in REQUIRED_BOARD_SECTIONS:
+                if current_section in seen_sections:
+                    return False
+                seen_sections.add(current_section)
+            elif current_section not in BOARD_AUXILIARY_SECTIONS:
+                return False
             continue
         if not line.startswith("|"):
             continue
@@ -1087,7 +1096,14 @@ def _board_schema_is_valid(text: str) -> bool:
         counts = schema_counts.get(section, {})
         if schema is None or any(counts.get(line) != 1 for line in schema):
             return False
-    return all(count <= 1 for counts in schema_counts.values() for count in counts.values())
+    if any(section == "重复" for section, _ in _board_rows(text).values()):
+        return False
+    return (
+        seen_sections == REQUIRED_BOARD_SECTIONS
+        and all(
+            count <= 1 for counts in schema_counts.values() for count in counts.values()
+        )
+    )
 
 
 def _validate_board_closure(
@@ -1338,6 +1354,8 @@ def _validate_delivery_board(
         base_priority = _task_field(TASK_PRIORITY_PATTERN, base_task)
         head_priority = _task_field(TASK_PRIORITY_PATTERN, head_task)
         base_status = _task_field(TASK_STATUS_PATTERN, base_task)
+        base_branch = _task_field(EXECUTION_BRANCH_PATTERN, base_task)
+        head_branch = _task_field(EXECUTION_BRANCH_PATTERN, head_task)
         base_cells = _board_row_cells(base_row[1])
         head_cells = _board_row_cells(head_row[1])
         dependency = _task_field(DEPENDENCY_PATTERN, base_task)
@@ -1349,7 +1367,8 @@ def _validate_delivery_board(
             else (
                 base_status == "需修复"
                 and len(base_cells) == 5
-                and bool(base_cells[3])
+                and base_branch is not None
+                and base_cells[3] == base_branch
                 and base_pr_match is not None
                 and base_cells[4]
                 == (
@@ -1385,7 +1404,11 @@ def _validate_delivery_board(
             f"[#{pr_match.group(1)}]"
             f"(https://github.com/xk320/zhishi/pull/{pr_match.group(1)})"
         )
-        if head_cells[4] != expected_pr or not head_cells[3]:
+        if (
+            head_branch is None
+            or head_cells[3] != head_branch
+            or head_cells[4] != expected_pr
+        ):
             _append_reason(reasons, mapping_reason)
 def _validate_task_registration(
     *,

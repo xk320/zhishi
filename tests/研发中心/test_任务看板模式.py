@@ -75,6 +75,21 @@ class BoardModeContractTests(unittest.TestCase):
         )
         self.assertFalse(self.policy._board_schema_is_valid(duplicate))
 
+    def test_缺少标准状态分区失败关闭(self):
+        for section in ("需修复", "已取消"):
+            with self.subTest(section=section):
+                missing = self.board.replace(f"## {section}\n", "", 1)
+                self.assertFalse(self.policy._board_schema_is_valid(missing))
+
+    def test_无关任务重复映射失败关闭(self):
+        row = next(
+            line
+            for line in self.board.splitlines()
+            if line.startswith("|") and "| 任务-" in line
+        )
+        duplicate = self.board.replace(row, row + "\n" + row, 1)
+        self.assertFalse(self.policy._board_schema_is_valid(duplicate))
+
     def test_机器合同缺失时失败关闭(self):
         with tempfile.TemporaryDirectory() as directory:
             missing = Path(directory) / "missing.json"

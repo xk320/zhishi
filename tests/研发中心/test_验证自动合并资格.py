@@ -39,6 +39,7 @@ def task_text(
     dependency: str | None = None,
     title: str = "建立 PR 自动合并策略与审批规则",
     pr_number: str = "40",
+    branch: str = "branch",
     extra_contract: str = "",
 ) -> str:
     type_line = f"- 类型：{task_type}\n" if task_type is not None else ""
@@ -73,6 +74,7 @@ def task_text(
         f"{type_line}"
         f"{scope_line}"
         "- 优先级：P1\n"
+        f"- 执行分支：`{branch}`\n"
         f"{review_lines}"
         f"{completion_lines}"
         f"{dependency_lines}"
@@ -121,9 +123,12 @@ def closure_board(*, completed: bool) -> str:
     return (
         "# 看板\n\n"
         f"## 待执行\n\n{pending}\n\n"
+        "## 执行中\n\n无。\n\n"
         f"## 阻塞\n\n{blocked}\n\n"
         f"## 待评审\n\n{review}\n\n"
+        "## 需修复\n\n无。\n\n"
         f"## 已完成\n\n{done}\n"
+        "\n## 已取消\n\n无。\n"
     )
 
 
@@ -136,6 +141,7 @@ def delivery_board(
     dependency: str = "000012",
     pr_number: str = "40",
     base_status: str = "待执行",
+    branch: str = "branch",
 ) -> str:
     pending_schema = (
         "| 优先级 | 任务 | 名称 | 唯一前序依赖 |\n"
@@ -152,7 +158,7 @@ def delivery_board(
         pending = "无。"
         repair = (
             review_schema
-            + f"| {priority} | 任务-{task_id} | {title} | branch | [#{pr_number}](https://github.com/xk320/zhishi/pull/{pr_number}) |"
+            + f"| {priority} | 任务-{task_id} | {title} | {branch} | [#{pr_number}](https://github.com/xk320/zhishi/pull/{pr_number}) |"
         )
     else:
         repair = "无。"
@@ -161,7 +167,7 @@ def delivery_board(
             + f"| {priority} | 任务-{task_id} | {title} | {dependency} |"
         )
     review = (
-        review_schema + f"| {priority} | 任务-{task_id} | {title} | branch | [#{pr_number}](https://github.com/xk320/zhishi/pull/{pr_number}) |"
+        review_schema + f"| {priority} | 任务-{task_id} | {title} | {branch} | [#{pr_number}](https://github.com/xk320/zhishi/pull/{pr_number}) |"
         if head
         else "无。"
     )
@@ -280,11 +286,15 @@ def registration_board(
     return (
         "# 看板\n\n"
         f"## 待执行\n\n{pending}\n\n"
+        "## 执行中\n\n无。\n\n"
         f"## 阻塞\n\n{blocked}\n\n"
+        "## 待评审\n\n无。\n\n"
+        "## 需修复\n\n无。\n\n"
         "## 已完成\n\n"
         "| 任务 | 名称 | 完成证据 |\n"
         "| --- | --- | --- |\n"
         "| 任务-000039 | 基线任务 | 基线证据 |\n"
+        "\n## 已取消\n\n无。\n"
     )
 
 
@@ -879,6 +889,16 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         self.assertFalse(result.eligible)
         self.assertIn("任务交付必须同步看板", result.reasons)
 
+        result = self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/看板.md",
+            ],
+            head_board=delivery_board(head=True, branch="wrong-branch"),
+        )
+        self.assertFalse(result.eligible)
+        self.assertIn("任务交付看板不是唯一可复算映射", result.reasons)
+
     def test_需修复任务可以在看板校验后进入待评审(self):
         result = self.evaluate(
             changed_paths=[
@@ -899,6 +919,29 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             head_board=delivery_board(head=True),
         )
         self.assertTrue(result.eligible, result.reasons)
+
+        result = self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/看板.md",
+            ],
+            base_tasks={
+                "000013": task_text(
+                    status="需修复", dependency="000012", pr_number="40"
+                )
+            },
+            head_tasks={
+                "000013": task_text(
+                    status="待评审", dependency="000012", pr_number="40"
+                )
+            },
+            base_board=delivery_board(
+                head=False, base_status="需修复", branch="wrong-branch"
+            ),
+            head_board=delivery_board(head=True),
+        )
+        self.assertFalse(result.eligible)
+        self.assertIn("任务交付看板不是唯一可复算映射", result.reasons)
 
     def test_缺少路径事实时失败关闭(self):
         result = self.evaluate(path_facts=None)
