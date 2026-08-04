@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -53,6 +54,12 @@ class TrustedReplayTest(unittest.TestCase):
         records = [{"id": "at", "到达时间": "2026-08-05T01:00:00+08:00"}, {"id": "future", "到达时间": "2026-08-05T01:00:01+08:00"}]
         visible = self.mod.visible_records(records, decision)
         self.assertEqual([record["id"] for record in visible], ["at"])
+
+    def test_远端预检记录实际日志字节(self):
+        completed = type("Completed", (), {"returncode": 0, "stdout": '{"python":"3.10.12","runtime":"trusted-replay-read-only-preflight","status":"ok"}', "stderr": "xy"})()
+        with mock.patch.object(self.mod.subprocess, "run", return_value=completed):
+            result = self.mod.run_remote_preflight("ubuntu")
+        self.assertEqual(result["日志字节数"], 2)
 
     def test_源清单指纹漂移失败(self):
         broken = json.loads(json.dumps(self.config))

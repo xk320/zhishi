@@ -179,7 +179,7 @@ REMOTE_PREFLIGHT = (
 )
 
 
-def run_remote_preflight(target: str, timeout: int = 30, max_log_bytes: int = 4096) -> dict[str, str]:
+def run_remote_preflight(target: str, timeout: int = 30, max_log_bytes: int = 4096) -> dict[str, object]:
     if target != "ubuntu":
         raise ValueError("ssh_target_not_allowlisted")
     command = [
@@ -200,7 +200,10 @@ def run_remote_preflight(target: str, timeout: int = 30, max_log_bytes: int = 40
         raise RuntimeError("remote_preflight_invalid_response") from error
     if not isinstance(value, dict) or set(value) != {"status", "python", "runtime"} or value.get("status") != "ok" or value.get("runtime") != "trusted-replay-read-only-preflight":
         raise RuntimeError("remote_preflight_invalid_response")
-    return {"status": "ok", "python": str(value["python"]), "runtime": str(value["runtime"])}
+    return {
+        "status": "ok", "python": str(value["python"]), "runtime": str(value["runtime"]),
+        "日志字节数": len(result.stderr.encode("utf-8", errors="replace")),
+    }
 
 
 def visible_records(records: Iterable[Mapping[str, object]], decision_time: dt.datetime) -> list[Mapping[str, object]]:
@@ -414,7 +417,7 @@ def execute(repo_root: Path, config_path: Path, batch_root: Path, batch: str, ta
         "来源身份清单SHA-256": fingerprints["source"], "质量验证清单SHA-256": fingerprints["quality_manifest"],
         "代码SHA-256": code_sha, "远端预检": remote, "历史决策登记": "未登记；未创建样例文件",
         "资源上限": resources,
-        "资源实测": {"本地峰值RSS字节": peak_rss, "远端预检日志字节": 0, "批次耗时秒": round(time.monotonic() - started, 6)},
+        "资源实测": {"本地峰值RSS字节": peak_rss, "远端预检日志字节": remote["日志字节数"], "批次耗时秒": round(time.monotonic() - started, 6)},
         "安全声明": {"远端读取业务正文": False, "远端落盘": False, "原始数据修改": False, "交易结论": False},
     }
     index_row = {
