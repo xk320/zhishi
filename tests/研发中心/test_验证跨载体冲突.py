@@ -271,8 +271,9 @@ class CrossCarrierConflictTests(unittest.TestCase):
 
     def test历史证据变更失败关闭(self):
         original = CONFLICT._read_at_ref
-        main_sha = CONFLICT._resolve_ref(ROOT, "main")
-        head_sha = CONFLICT._resolve_ref(ROOT, "HEAD")
+        # 使用合成引用，避免测试在main与HEAD相同或不同的拓扑下出现分支依赖。
+        main_sha = "base-ref"
+        head_sha = "head-ref"
         path = next(
             path
             for path in CONFLICT.HISTORICAL_IMMUTABLE_PATHS
@@ -280,7 +281,7 @@ class CrossCarrierConflictTests(unittest.TestCase):
         )
 
         def altered(repo_root, ref, requested):
-            value = original(repo_root, ref, requested)
+            value = original(repo_root, "main", requested)
             if requested == path and ref == head_sha:
                 return (value or "") + "\n未经授权变更"
             return value
