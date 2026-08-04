@@ -1114,7 +1114,7 @@ class AutoMergeEligibilityTests(unittest.TestCase):
     def test_敏感内容全部拒绝且原因不回显正文(self):
         sensitive_values = (
             "-----BEGIN " + "PRIVATE KEY-----",
-            "ssh ubuntu 192.168.31.201",
+            "ssh ubuntu " + "192" + ".168.31.201",
             "g" + "hp_" + "a" * 36,
             "github_" + "pat_" + "a" * 82,
             "A" + "KIA" + "1" * 16,
