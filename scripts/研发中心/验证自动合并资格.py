@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
@@ -1072,6 +1073,12 @@ BLOCKING_RECORD_FIELDS = (
     "- 解除条件：",
     "- 数据与安全：",
 )
+ALLOWED_BLOCKING_ALIASES = frozenset({"ubuntu"})
+BLOCKING_HOSTNAME_PATTERN = re.compile(
+    r"(?<![\w-])(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![\w-])"
+)
+BLOCKING_URL_PATTERN = re.compile(r"\b(?:https?|ssh)://", re.IGNORECASE)
+BLOCKING_IPV4_PATTERN = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
 
 
 def _section_bounds(text: str, heading: str) -> tuple[int, int] | None:
@@ -1120,6 +1127,45 @@ def _blocking_record(text: str) -> tuple[str, ...] | None:
     ):
         return None
     return tuple(lines)
+
+
+def _blocking_record_aliases_allowed(record: tuple[str, ...]) -> bool:
+    """阻塞记录只允许固定SSH逻辑别名，不允许主机地址或URL。"""
+
+    for line in record:
+        if (
+            BLOCKING_HOSTNAME_PATTERN.search(line)
+            or BLOCKING_URL_PATTERN.search(line)
+            or BLOCKING_IPV4_PATTERN.search(line)
+        ):
+            return False
+        if not line.startswith("- 尝试命令："):
+            continue
+        command = line.split("：", 1)[1].strip()
+        if command.startswith("`") and command.endswith("`"):
+            command = command[1:-1]
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
+            return False
+        if "ssh" not in tokens:
+            continue
+        ssh_index = tokens.index("ssh")
+        target = None
+        index = ssh_index + 1
+        while index < len(tokens):
+            token = tokens[index]
+            if token == "-o":
+                index += 2
+                continue
+            if token.startswith("-"):
+                index += 1
+                continue
+            target = token
+            break
+        if target not in ALLOWED_BLOCKING_ALIASES:
+            return False
+    return True
 
 
 def _header_field_line(text: str, prefix: str) -> str | None:
@@ -1183,7 +1229,15 @@ def _validate_blocking_transition(
     ):
         _append_reason(reasons, "阻塞状态闭环字段位置无效")
         return
-    allow_initial_metadata = old_status == "待执行"
+    baseline_has_execution_metadata = any(
+        (
+            _header_field_line(base_task, "- 开始时间：") is not None,
+            _section_bounds(base_task, "## 执行记录") is not None,
+        )
+    )
+    allow_initial_metadata = (
+        old_status == "待执行" and not baseline_has_execution_metadata
+    )
     if _without_blocking_mutable_lines(
         base_task, allow_initial_metadata=allow_initial_metadata
     ) != _without_blocking_mutable_lines(
@@ -1200,8 +1254,11 @@ def _validate_blocking_transition(
     ):
         _append_reason(reasons, "阻塞状态闭环缺少执行分支或开始时间")
     if allow_initial_metadata:
-        if _blocking_record(head_task) is None:
+        head_record = _blocking_record(head_task)
+        if head_record is None:
             _append_reason(reasons, "首次阻塞必须包含固定结构化执行记录")
+        elif not _blocking_record_aliases_allowed(head_record):
+            _append_reason(reasons, "阻塞执行记录包含未批准的外部目标")
     else:
         base_record = _blocking_record(base_task)
         head_record = _blocking_record(head_task)
@@ -1209,6 +1266,8 @@ def _validate_blocking_transition(
             _append_reason(reasons, "阻塞状态闭环缺少既有结构化执行记录")
         elif base_record != head_record:
             _append_reason(reasons, "阻塞状态闭环改写既有执行记录")
+        elif not _blocking_record_aliases_allowed(head_record):
+            _append_reason(reasons, "阻塞执行记录包含未批准的外部目标")
 
 
 def _validate_recovery_transition(

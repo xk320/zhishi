@@ -68,13 +68,14 @@ def task_text(
                 f"- 当前阻塞原因：无；任务-{dependency}已完成。\n"
                 "- 解除条件：已满足。\n"
             )
+    branch_line = f"- 执行分支：`{branch}`\n"
     return (
         f"# 任务-000013：{title}\n\n"
         f"- 状态：{status}\n"
         f"{type_line}"
         f"{scope_line}"
         "- 优先级：P1\n"
-        f"- 执行分支：`{branch}`\n"
+        f"{branch_line}"
         f"{review_lines}"
         f"{completion_lines}"
         f"{dependency_lines}"
@@ -1973,6 +1974,86 @@ class AutoMergeEligibilityTests(unittest.TestCase):
 
         self.assertFalse(result.eligible)
         self.assertIn("任务-000013存在非法状态闭环“已完成→阻塞”", result.reasons)
+
+    def test_合并后状态闭环拒绝首次阻塞覆盖既有执行元数据(self):
+        body = (
+            "## 关联任务\n\n- 任务-000013\n\n"
+            "## 变更类型\n\n- 合并后状态闭环\n"
+        )
+        record = (
+            "- 开始时间：`2026-08-04T09:00:00+08:00`\n\n"
+            "## 执行记录\n\n"
+            "- 执行分支：`branch`\n"
+            "- 开始时间：`2026-08-04T09:00:00+08:00`\n"
+            "- 尝试命令：`ssh ubuntu printf ready`\n"
+            "- 结果：此前未生成批次。\n"
+            "- 外部证据：SSH返回Host is down。\n"
+            "- 阻塞原因：获批目标不可达。\n"
+            "- 解除条件：目标恢复后重新执行。\n"
+            "- 数据与安全：未读取或修改远端数据。\n"
+        )
+        base_task = task_text(
+            status="待执行", task_type="数据审计", dependency="000012",
+            extra_contract=record,
+        )
+        head_task = (
+            base_task.replace("- 状态：待执行", "- 状态：阻塞", 1)
+            .replace("- 当前阻塞原因：无；任务-000012已完成。", "- 当前阻塞原因：获批目标不可达。")
+            .replace("- 解除条件：已满足。", "- 解除条件：目标恢复后重新执行。")
+            .replace("`branch`", "`rewritten-branch`")
+        )
+        result = self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/看板.md",
+            ],
+            pr_body=body,
+            base_tasks={"000013": base_task},
+            head_tasks={"000013": head_task},
+            base_board=blocked_transition_board(blocked=False),
+            head_board=blocked_transition_board(blocked=True),
+        )
+
+        self.assertFalse(result.eligible)
+        self.assertIn("阻塞状态闭环夹带合同改写", result.reasons)
+
+    def test_合并后状态闭环拒绝未登记逻辑别名(self):
+        body = (
+            "## 关联任务\n\n- 任务-000013\n\n"
+            "## 变更类型\n\n- 合并后状态闭环\n"
+        )
+        base_task = task_text(
+            status="待执行", task_type="数据审计", dependency="000012"
+        )
+        head_task = task_text(
+            status="阻塞", task_type="数据审计", dependency="000012",
+            extra_contract=(
+                "- 开始时间：`2026-08-04T10:00:00+08:00`\n\n"
+                "## 执行记录\n\n"
+                "- 执行分支：`branch`\n"
+                "- 开始时间：`2026-08-04T10:00:00+08:00`\n"
+                "- 尝试命令：`ssh attacker.example.com printf ready`\n"
+                "- 结果：目标不可达，未生成批次。\n"
+                "- 外部证据：SSH返回Host is down。\n"
+                "- 阻塞原因：获批目标当前不可达。\n"
+                "- 解除条件：目标恢复后重新执行。\n"
+                "- 数据与安全：未读取或修改远端数据。\n"
+            ),
+        )
+        result = self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/看板.md",
+            ],
+            pr_body=body,
+            base_tasks={"000013": base_task},
+            head_tasks={"000013": head_task},
+            base_board=blocked_transition_board(blocked=False),
+            head_board=blocked_transition_board(blocked=True),
+        )
+
+        self.assertFalse(result.eligible)
+        self.assertIn("阻塞执行记录包含未批准的外部目标", result.reasons)
 
     def test_合并后状态闭环允许阻塞任务转为需修复(self):
         body = (
