@@ -143,6 +143,68 @@ class CrossCarrierConflictTests(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertTrue(any("PR_BASELINE_DRIFT" in reason for reason in report.reasons))
 
+    def test任务分支和PR编号必须精确绑定(self):
+        base_sha = CONFLICT._resolve_ref(ROOT, "main")
+        head_sha = CONFLICT._resolve_ref(ROOT, "HEAD")
+        report = CONFLICT.check_refs(
+            ROOT,
+            base_sha,
+            head_sha,
+            task_id="000049",
+            metadata={
+                "base_ref": "main",
+                "base_sha": base_sha,
+                "head_ref": "codex/wrong-branch",
+                "head_sha": head_sha,
+                "pr_number": 999,
+                "repository": "xk320/zhishi",
+                "head_repository": "xk320/zhishi",
+            },
+        )
+        self.assertFalse(report.ok)
+        self.assertGreaterEqual(
+            sum("PR_BASELINE_DRIFT" in reason for reason in report.reasons), 2
+        )
+
+    def test空评审证据失败关闭(self):
+        conflicts = []
+        CONFLICT._check_review_evidence(
+            {"base_sha": "a", "head_sha": "b", "reviews": []},
+            base_sha="a",
+            head_sha="b",
+            conflicts=conflicts,
+        )
+        self.assertTrue(any(item.code == "REVIEW_EVIDENCE_STALE" for item in conflicts))
+
+    def test合同正文漂移失败关闭(self):
+        path = "docs/研发中心/任务/任务-000049.md"
+        base_text = "# 任务-000049：示例\n\n## 任务目标\n\n保持安全边界。\n"
+        head_text = base_text.replace("保持安全边界", "扩大范围并降低门槛")
+
+        def paths(_repo, _ref):
+            return (path,)
+
+        def read(_repo, ref, requested):
+            self.assertEqual(path, requested)
+            return base_text if ref == "base" else head_text
+
+        conflicts = []
+        with mock.patch.object(CONFLICT, "_list_task_paths", side_effect=paths), mock.patch.object(
+            CONFLICT, "_read_at_ref", side_effect=read
+        ):
+            CONFLICT._check_task_contract_drift(ROOT, "base", "head", conflicts)
+        self.assertTrue(any(item.code == "TASK_CONTRACT_CONFLICT" for item in conflicts))
+
+    def test有损看板修复被拒绝(self):
+        schema = CONFLICT._schema_at_ref(ROOT, "main")
+        board = CONFLICT._read_at_ref(ROOT, "main", CONFLICT.BOARD_PATH)
+        conflicts = []
+        records = CONFLICT._task_records(ROOT, "main", conflicts)
+        self.assertIsNotNone(schema)
+        self.assertIsNotNone(board)
+        with self.assertRaises(ValueError):
+            CONFLICT.repair_board_text(board, records, schema)
+
     def test研究尺度越界失败关闭(self):
         original = CONFLICT._read_at_ref
 
@@ -151,6 +213,19 @@ class CrossCarrierConflictTests(unittest.TestCase):
             if path == CONFLICT.SCALE_SCOPE_DOCS[0] and text is not None:
                 return text.replace("15分钟", "")
             return text
+
+        with mock.patch.object(CONFLICT, "_read_at_ref", side_effect=altered):
+            conflicts = []
+            CONFLICT._check_scope(ROOT, "main", conflicts)
+        self.assertTrue(any(item.code == "SCOPE_BOUNDARY_DRIFT" for item in conflicts))
+
+    def test前向文档出现未标注SOL失败关闭(self):
+        original = CONFLICT._read_at_ref
+
+        def altered(repo_root, ref, path):
+            if path == "AGENTS.md":
+                return "当前范围：BTC、ETH、SOL\n"
+            return original(repo_root, ref, path)
 
         with mock.patch.object(CONFLICT, "_read_at_ref", side_effect=altered):
             conflicts = []

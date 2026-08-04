@@ -27,6 +27,7 @@ START_PATTERN = re.compile(
 BLOCKER_PATTERN = re.compile(r"^- 当前阻塞原因：(.+)$", re.MULTILINE)
 PR_PATTERN = re.compile(r"^- Pull Request：(.+)$", re.MULTILINE)
 MERGE_PATTERN = re.compile(r"^- 合并提交SHA：`([0-9a-f]{40})`$", re.MULTILINE)
+PR_NUMBER_PATTERN = re.compile(r"#(\d+)")
 DEPENDENCY_PATTERN = re.compile(r"任务-(\d{6})")
 STANDARD_STATUSES = frozenset(
     {"待执行", "执行中", "阻塞", "待评审", "需修复", "已完成", "已取消"}
@@ -482,7 +483,29 @@ def _check_board(
             continue
         section, row = rows[0]
         priority_mismatch = status in {"待执行", "执行中", "阻塞", "待评审", "需修复"} and f"| {priority} |" not in row
-        if section != status or f"| {title} |" not in row or priority_mismatch:
+        branch = record[5] if len(record) > 5 else ""
+        started = record[6] if len(record) > 6 else ""
+        blocker = record[7] if len(record) > 7 else ""
+        pr = record[8] if len(record) > 8 else ""
+        merge = record[9] if len(record) > 9 else ""
+        metadata_mismatch = False
+        if status == "执行中" and branch and f"`{branch}`" not in row:
+            metadata_mismatch = True
+        if status == "执行中" and started and started not in row:
+            metadata_mismatch = True
+        if status in {"待评审", "需修复"} and branch and f"`{branch}`" not in row:
+            metadata_mismatch = True
+        if status in {"待评审", "需修复"} and pr:
+            pr_match = PR_NUMBER_PATTERN.search(pr)
+            if pr_match is not None and f"#{pr_match.group(1)}" not in row:
+                metadata_mismatch = True
+        if status in {"已完成", "已取消"} and pr and merge and (
+            (PR_NUMBER_PATTERN.search(pr) is not None
+             and f"#{PR_NUMBER_PATTERN.search(pr).group(1)}" not in row)
+            or merge not in row
+        ):
+            metadata_mismatch = True
+        if section != status or f"| {title} |" not in row or priority_mismatch or metadata_mismatch:
             conflicts.append(
                 _conflict(
                     "BOARD_DERIVED_DRIFT",
@@ -613,6 +636,21 @@ def _check_scope(repo_root: Path, ref: str, conflicts: list[Conflict]) -> None:
                     release_condition="补齐BTC/ETH现行范围声明",
                 )
             )
+            continue
+        for line in text.splitlines():
+            if "SOL" in line and not any(
+                marker in line for marker in ("历史", "不可变", "仅历史", "不属于当前", "未纳入")
+            ):
+                conflicts.append(
+                    _conflict(
+                        "SCOPE_BOUNDARY_DRIFT",
+                        path,
+                        authority="当前前向研究范围",
+                        decision="失败关闭",
+                        repair_mode="禁止把历史SOL纳入当前入口",
+                        release_condition="将SOL限定为明确历史上下文或移出前向文档",
+                    )
+                )
     for path in SCALE_SCOPE_DOCS:
         text = _read_at_ref(repo_root, ref, path)
         if text is None:
@@ -698,6 +736,83 @@ def _check_historical_immutability(
             )
 
 
+MUTABLE_TASK_PREFIXES = (
+    "- 状态：",
+    "- 执行分支：",
+    "- 开始时间：",
+    "- Pull Request：",
+    "- 合并时间：",
+    "- 合并提交SHA：",
+    "- 当前阻塞原因：",
+    "- 解除条件：",
+    "- 登记时间：",
+    "- 登记PR：",
+    "- 登记合并SHA：",
+    "- 完成实现时间：",
+    "- 实现提交SHA：",
+    "- 架构评审结论：",
+    "- 合并完成时间：",
+)
+
+
+def _immutable_task_contract(text: str) -> str:
+    """保留任务合同，排除状态和执行/合并证据记录。"""
+
+    lines = text.splitlines()
+    record_start = next(
+        (index for index, line in enumerate(lines) if line.strip() == "## 执行记录"),
+        len(lines),
+    )
+    first_section = next(
+        (index for index, line in enumerate(lines[:record_start]) if line.startswith("## ")),
+        record_start,
+    )
+    return "\n".join(
+        line
+        for index, line in enumerate(lines[:record_start])
+        if not (
+            index < first_section
+            and any(line.startswith(prefix) for prefix in MUTABLE_TASK_PREFIXES)
+        )
+    ).strip()
+
+
+def _check_task_contract_drift(
+    repo_root: Path, base_ref: str, head_ref: str, conflicts: list[Conflict]
+) -> None:
+    """阻止交付或状态PR静默改写目标、范围、输入输出和安全边界。"""
+
+    base_paths = set(_list_task_paths(repo_root, base_ref) or ())
+    head_paths = set(_list_task_paths(repo_root, head_ref) or ())
+    for path in sorted(base_paths - head_paths):
+        conflicts.append(
+            _conflict(
+                "TASK_CONTRACT_CONFLICT",
+                path,
+                authority="任务文件",
+                decision="失败关闭",
+                repair_mode="禁止删除任务合同",
+                release_condition="恢复任务文件并通过独立治理任务处理取消",
+            )
+        )
+    for path in sorted(base_paths & head_paths):
+        base_text = _read_at_ref(repo_root, base_ref, path)
+        head_text = _read_at_ref(repo_root, head_ref, path)
+        if base_text is None or head_text is None:
+            continue
+        if _immutable_task_contract(base_text) != _immutable_task_contract(head_text):
+            conflicts.append(
+                _conflict(
+                    "TASK_CONTRACT_CONFLICT",
+                    path,
+                    authority="任务文件合同",
+                    decision="阻塞",
+                    repair_mode="禁止静默改写目标、范围或安全边界",
+                    release_condition="恢复基线合同或登记独立治理修复任务",
+                )
+            )
+
+
 def _check_metadata(
     metadata: Mapping[str, object] | None,
     *,
@@ -771,6 +886,86 @@ def _check_metadata(
             )
 
 
+def _check_task_execution_metadata(
+    repo_root: Path,
+    head_ref: str,
+    task_id: str,
+    metadata: Mapping[str, object] | None,
+    conflicts: list[Conflict],
+) -> None:
+    """把任务文件中的执行分支和PR证据绑定到当前GitHub事件。"""
+
+    if metadata is None or not task_id:
+        return
+    path = f"{TASK_DIR}/任务-{task_id}.md"
+    text = _read_at_ref(repo_root, head_ref, path)
+    if text is None:
+        return
+    status = _field(STATUS_PATTERN, text) or ""
+    task_branch = _field(BRANCH_PATTERN, text)
+    task_started = _field(START_PATTERN, text)
+    head_branch = metadata.get("head_ref")
+    if status in {"执行中", "待评审", "需修复", "已完成"} and not task_branch:
+        conflicts.append(
+            _conflict(
+                "TASK_CONTRACT_CONFLICT",
+                path,
+                authority="任务文件执行元数据",
+                decision="失败关闭",
+                repair_mode="禁止缺少执行分支",
+                release_condition="补齐任务合同中的执行分支并重新检查",
+            )
+        )
+    if status in {"执行中", "待评审", "需修复", "已完成"} and not task_started:
+        conflicts.append(
+            _conflict(
+                "TASK_CONTRACT_CONFLICT",
+                path,
+                authority="任务文件执行元数据",
+                decision="失败关闭",
+                repair_mode="禁止缺少开始时间",
+                release_condition="补齐任务合同中的开始时间并重新检查",
+            )
+        )
+    if task_branch and isinstance(head_branch, str) and task_branch != head_branch:
+        conflicts.append(
+            _conflict(
+                "PR_BASELINE_DRIFT",
+                path,
+                authority="任务文件执行分支与GitHub元数据",
+                decision="失败关闭",
+                repair_mode="禁止执行非任务合同分支",
+                release_condition="将任务执行分支与PR头分支精确绑定",
+            )
+        )
+    task_pr = _field(PR_PATTERN, text)
+    pr_number = metadata.get("pr_number")
+    if status in {"待评审", "需修复", "已完成"} and not task_pr:
+        conflicts.append(
+            _conflict(
+                "TASK_CONTRACT_CONFLICT",
+                path,
+                authority="任务文件Pull Request元数据",
+                decision="失败关闭",
+                repair_mode="禁止缺少PR交付证据",
+                release_condition="补齐当前PR引用并重新检查",
+            )
+        )
+    if task_pr and pr_number is not None:
+        task_match = PR_NUMBER_PATTERN.search(task_pr)
+        if task_match is None or task_match.group(1) != str(pr_number):
+            conflicts.append(
+                _conflict(
+                    "PR_BASELINE_DRIFT",
+                    path,
+                    authority="任务文件Pull Request与GitHub元数据",
+                    decision="失败关闭",
+                    repair_mode="禁止错绑Pull Request证据",
+                    release_condition="将任务文件PR编号与当前PR精确绑定",
+                )
+            )
+
+
 def _check_resource_policy(
     resource_policy: Mapping[str, object] | None, conflicts: list[Conflict]
 ) -> None:
@@ -836,6 +1031,16 @@ def _check_review_evidence(
         )
     reviews = review_evidence.get("reviews")
     if not isinstance(reviews, list) or len(reviews) != 2:
+        conflicts.append(
+            _conflict(
+                "REVIEW_EVIDENCE_STALE",
+                "review_evidence.reviews",
+                authority="双子智能体评审证据",
+                decision="失败关闭",
+                repair_mode="禁止缺少或增加评审者",
+                release_condition="提供恰好两个独立且绑定当前SHA的评审",
+            )
+        )
         return
     for review in reviews:
         if not isinstance(review, Mapping) or not review_evidence_is_current(
@@ -854,6 +1059,31 @@ def _check_review_evidence(
                     release_condition="两个独立评审均绑定当前base/head SHA",
                 )
             )
+            continue
+        if review.get("conclusion") not in {None, "APPROVE"}:
+            conflicts.append(
+                _conflict(
+                    "REVIEW_EVIDENCE_STALE",
+                    "review_evidence.reviews",
+                    authority="双子智能体评审证据",
+                    decision="失败关闭",
+                    repair_mode="拒绝未批准评审",
+                    release_condition="两个独立评审均为APPROVE",
+                )
+            )
+        for field in ("p0", "p1"):
+            value = review.get(field)
+            if value is not None and value != 0:
+                conflicts.append(
+                    _conflict(
+                        "REVIEW_EVIDENCE_STALE",
+                        "review_evidence.reviews",
+                        authority="双子智能体评审证据",
+                        decision="失败关闭",
+                        repair_mode="拒绝含P0/P1阻断的评审",
+                        release_condition="修复阻断问题并重新评审",
+                    )
+                )
 
 
 def check_tree(repo_root: Path, ref: str) -> tuple[str, tuple[Conflict, ...]]:
@@ -927,6 +1157,7 @@ def check_refs(
     _, head_conflicts = check_tree(repo_root, head_ref)
     conflicts.extend((*base_conflicts, *head_conflicts))
     if base_sha and head_sha:
+        _check_task_contract_drift(repo_root, base_sha, head_sha, conflicts)
         _check_historical_immutability(repo_root, base_sha, head_sha, conflicts)
     _check_metadata(
         metadata,
@@ -934,6 +1165,9 @@ def check_refs(
         head_sha=head_sha,
         task_id=task_id,
         conflicts=conflicts,
+    )
+    _check_task_execution_metadata(
+        repo_root, head_ref, task_id, metadata, conflicts
     )
     _check_resource_policy(resource_policy, conflicts)
     _check_review_evidence(
@@ -959,6 +1193,19 @@ def repair_board_text(
     sections = _board_sections(board)
     if sections is None:
         raise ValueError("看板分区不完整，不能生成修复计划")
+    for task_id, record in records.items():
+        status = record[2]
+        pr = record[8] if len(record) > 8 else ""
+        merge = record[9] if len(record) > 9 else ""
+        if status in {"已完成", "已取消"} and (not pr or not merge):
+            raise ValueError(
+                f"任务-{task_id}缺少完整PR与合并证据，拒绝生成可能丢失历史的看板修复"
+            )
+        if status == "执行中" and (
+            not (record[5] if len(record) > 5 else "")
+            or not (record[6] if len(record) > 6 else "")
+        ):
+            raise ValueError(f"任务-{task_id}缺少执行分支或开始时间，拒绝生成修复")
     rows_by_status: dict[str, list[str]] = {section: [] for section in SECTIONS}
     for task_id, record in sorted(
         records.items(), key=lambda item: (item[1][3], item[0])
@@ -1006,20 +1253,43 @@ def _compute_rule_fingerprint() -> str:
     """对影响冲突判断的规则和实现取指纹，提交变化即使旧证据失效。"""
 
     names = (
+        "_git",
+        "_read_at_ref",
+        "_list_task_paths",
+        "_task_records",
         "_check_board",
         "_check_dependencies",
         "_check_scope",
         "_check_historical_immutability",
+        "_immutable_task_contract",
+        "_check_task_contract_drift",
         "_check_metadata",
+        "_check_task_execution_metadata",
         "_check_resource_policy",
         "_check_review_evidence",
+        "resource_policy_is_safe",
+        "review_evidence_is_current",
         "check_refs",
         "repair_board_text",
     )
     sources: list[str] = [
         PROTOCOL_VERSION,
+        repr(CONFLICT_CODES),
         repr(STANDARD_STATUSES),
         repr(SECTIONS),
+        repr(TASK_PATTERN.pattern),
+        repr(TITLE_PATTERN.pattern),
+        repr(STATUS_PATTERN.pattern),
+        repr(PRIORITY_PATTERN.pattern),
+        repr(BRANCH_PATTERN.pattern),
+        repr(START_PATTERN.pattern),
+        repr(PR_PATTERN.pattern),
+        repr(MERGE_PATTERN.pattern),
+        repr(PR_NUMBER_PATTERN.pattern),
+        TASK_DIR,
+        BOARD_PATH,
+        BOARD_SCHEMA_PATH,
+        DEPENDENCY_PATTERN.pattern,
         repr(CURRENT_SCOPE_CONFIGS),
         repr(FORWARD_SCOPE_DOCS),
         repr(SCALE_SCOPE_DOCS),
@@ -1028,6 +1298,7 @@ def _compute_rule_fingerprint() -> str:
         str(MAX_GIT_SECONDS),
         str(MAX_TASK_FILES),
         str(MAX_TREE_BYTES),
+        repr(MUTABLE_TASK_PREFIXES),
     ]
     for name in names:
         try:
@@ -1050,6 +1321,41 @@ def _arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _repair_plan_summary(repo_root: Path, ref: str) -> dict[str, object]:
+    """调用看板修复函数并只输出脱敏摘要；默认不写入文件。"""
+
+    conflicts: list[Conflict] = []
+    records = _task_records(repo_root, ref, conflicts)
+    schema = _schema_at_ref(repo_root, ref)
+    board = _read_at_ref(repo_root, ref, BOARD_PATH)
+    if conflicts or schema is None or board is None:
+        return {
+            "mode": "演练",
+            "status": "拒绝",
+            "reason": "任务合同、看板模式或看板正文不可验证",
+        }
+    try:
+        repaired = repair_board_text(board, records, schema)
+    except (TypeError, ValueError):
+        return {
+            "mode": "演练",
+            "status": "拒绝",
+            "reason": "历史证据或执行元数据不完整，禁止生成有损修复",
+        }
+    changed_lines = sum(
+        left != right
+        for left, right in zip(board.splitlines(), repaired.splitlines())
+    ) + abs(len(board.splitlines()) - len(repaired.splitlines()))
+    return {
+        "mode": "演练",
+        "status": "可生成",
+        "source_sha256": hashlib.sha256(board.encode("utf-8")).hexdigest(),
+        "plan_sha256": hashlib.sha256(repaired.encode("utf-8")).hexdigest(),
+        "changed_lines": changed_lines,
+        "writes": False,
+    }
+
+
 def main() -> int:
     arguments = _arguments()
     report = check_refs(
@@ -1064,8 +1370,10 @@ def main() -> int:
         if any(item.code == "BOARD_DERIVED_DRIFT" for item in report.conflicts)
         else "无可执行修复计划"
     )
-    if arguments.repair_board and not report.ok:
-        payload["repair_mode"] = "演练：不写入文件"
+    if arguments.repair_board:
+        payload["repair_plan"] = _repair_plan_summary(
+            arguments.repo_root.resolve(), arguments.head_ref
+        )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if report.ok else 1
 

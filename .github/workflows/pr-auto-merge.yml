@@ -93,6 +93,9 @@ jobs:
           with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
               output.write(f"base_sha={pull_request['base']['sha']}\n")
               output.write(f"head_sha={pull_request['head']['sha']}\n")
+              task_ids = re.findall(r"(?m)^\s*-\s*任务-(\d{6})\s*$", pull_request.get("body") or "")
+              if len(task_ids) == 1:
+                  output.write(f"task_id={task_ids[0]}\n")
           PY
 
       - name: 检出main上的可信检查器
@@ -127,6 +130,7 @@ jobs:
         env:
           BASE_SHA: ${{ steps.pr.outputs.base_sha }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          TASK_ID: ${{ steps.pr.outputs.task_id }}
           EVIDENCE_PATH: ${{ runner.temp }}/agent-review-evidence.json
         run: |
           python3 scripts/研发中心/验证自动评审证据.py \
@@ -134,7 +138,9 @@ jobs:
             --repository "$REPOSITORY" \
             --pr-number "$PR_NUMBER" \
             --base-sha "$BASE_SHA" \
-            --head-sha "$HEAD_SHA"
+            --head-sha "$HEAD_SHA" \
+            --repo-root . \
+            --task-id "$TASK_ID"
 
       - name: 检查未解决评审和当前提交检查
         env:
