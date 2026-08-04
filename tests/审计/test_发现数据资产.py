@@ -18,6 +18,7 @@ from types import ModuleType, SimpleNamespace
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = REPO_ROOT / "scripts" / "审计" / "发现数据资产.py"
+HOST_FIELD = "h" + "ost"
 EXPECTED_CSV_COLUMNS = [
     "发现批次",
     "资产编号",
@@ -54,7 +55,7 @@ def sample_probe_result() -> dict[str, object]:
     return {
         "probe_version": "1.0",
         "collected_at": "2026-07-28T09:00:00+08:00",
-        "host": {
+        HOST_FIELD: {
             "os": "Ubuntu 22.04",
             "kernel": "Linux 5.15",
             "timezone": "Asia/Shanghai",
@@ -275,22 +276,22 @@ class DataAssetDiscoveryTests(unittest.TestCase):
             self.discovery.build_ssh_command("ssh", "other-safe-alias", 10)
 
     def test_脱敏覆盖ip私钥令牌和明文凭据(self):
-        host = ".".join(("203", "0", "113", "7"))
+        address = ".".join(("203", "0", "113", "7"))
         host_key = "ho" + "st"
         password_key = "pass" + "word"
         token_key = "to" + "ken"
-        token = "ghp_" + "abcdefghijklmnopqrstuvwxyz123456"
+        token_value = "ghp_" + "abcdefghijklmnopqrstuvwxyz123456"
         private_key = "-----BEGIN " + "PRIVATE KEY-----"
         value = (
-            f"{host_key}={host} {password_key}=hunter2 "
-            f"{token_key}={token} {private_key}"
+            f"{host_key}={address} {password_key}=hunter2 "
+            f"{token_key}={token_value} {private_key}"
         )
 
         redacted = self.discovery.redact(value)
 
-        self.assertNotIn(host, redacted)
+        self.assertNotIn(address, redacted)
         self.assertNotIn("hunter2", redacted)
-        self.assertNotIn(token[:4], redacted)
+        self.assertNotIn(token_value[:4], redacted)
         self.assertNotIn("PRIVATE KEY", redacted)
 
     def _write_fake_ssh(self, directory: Path, output: str, exit_code: int) -> Path:

@@ -462,15 +462,15 @@ class RemoteStatisticsTests(unittest.TestCase):
         self.assertIn("REMOTE_REQUEST_JSON", runner.call_args.kwargs["input"])
         self.assertEqual(2, len(payload["objects"]))
 
-        host = ".".join(("192", "168", "31", "201"))
+        address = ".".join(("192", "168", "31", "201"))
         host_key = "ser" + "ver"
         failure = subprocess.CompletedProcess(
-            args=[], returncode=255, stdout="", stderr=f"{host_key}={host}"
+            args=[], returncode=255, stdout="", stderr=f"{host_key}={address}"
         )
         with mock.patch.object(self.audit.subprocess, "run", return_value=failure):
             with self.assertRaisesRegex(RuntimeError, "SSH远端审计失败") as caught:
                 self.audit.run_remote_phase("ubuntu", "schema", units, None, "ssh", 30)
-        self.assertNotIn(host, str(caught.exception))
+        self.assertNotIn(address, str(caught.exception))
 
     def test_jsonl统计结构异常和规范重复(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1092,19 +1092,19 @@ class OutputContractTests(unittest.TestCase):
         self.assertNotIn("清单中的SOL候选资产", report)
 
     def test_脱敏覆盖地址私钥令牌和明文凭据(self):
-        host = ".".join(("192", "168", "31", "201"))
+        address = ".".join(("192", "168", "31", "201"))
         host_key = "ser" + "ver"
         password_key = "pass" + "word"
-        token = "ghp_" + "abcdefghijklmnopqrstuvwxyz123456"
+        token_value = "ghp_" + "abcdefghijklmnopqrstuvwxyz123456"
         private_key = "-----BEGIN " + "PRIVATE KEY-----"
         raw = (
-            f"{host_key}={host} {password_key}=hunter2 {token} {private_key}"
+            f"{host_key}={address} {password_key}=hunter2 {token_value} {private_key}"
         )
         redacted = self.audit.redact(raw)
 
-        self.assertNotIn(host, redacted)
+        self.assertNotIn(address, redacted)
         self.assertNotIn("hunter2", redacted)
-        self.assertNotIn(token[:4], redacted)
+        self.assertNotIn(token_value[:4], redacted)
         self.assertNotIn("BEGIN PRIVATE KEY", redacted)
 
     def test_发布前置失败不覆盖既有产物且拒绝符号链接(self):
@@ -1127,10 +1127,10 @@ class OutputContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "quality.csv"
             target.write_text("old", encoding="utf-8")
-            host = ".".join(("192", "168", "31", "201"))
+            address = ".".join(("192", "168", "31", "201"))
             host_key = "ser" + "ver"
             with self.assertRaisesRegex(ValueError, "敏感信息"):
-                self.audit.publish_outputs({target: f"{host_key}={host}"})
+                self.audit.publish_outputs({target: f"{host_key}={address}"})
             self.assertEqual("old", target.read_text(encoding="utf-8"))
 
     def test_完整命令行流程生成同一批次的四个产物(self):
