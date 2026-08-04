@@ -55,6 +55,7 @@ class 双标数据闭环测试(unittest.TestCase):
             self.assertEqual({记录["市场类型"] for 记录 in 行}, {"未知"})
             self.assertEqual({记录["精确合约"] for 记录 in 行}, {"未知"})
             self.assertEqual({记录["数据对象"] for 记录 in 行}, {"未知"})
+            self.assertEqual({记录["尺度证据状态"] for 记录 in 行}, {"重放=无法判定;成本=无法判定"})
             self.assertTrue(all(记录["门6血缘"] == "通过" for 记录 in 行))
             self.assertTrue(all(记录["最终状态"] in {"可用", "有限可用", "不可用", "无法判定"} for 记录 in 行))
 
