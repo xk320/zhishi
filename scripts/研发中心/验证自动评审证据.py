@@ -83,6 +83,7 @@ def _cross_carrier_reasons(
     base_sha: str,
     head_sha: str,
     task_id: str,
+    change_type: str,
 ) -> tuple[str, ...]:
     """在可信评审证据入口复用跨载体检查器的资源与SHA门。"""
 
@@ -109,6 +110,7 @@ def _cross_carrier_reasons(
             review_evidence=evidence,
             resource_policy=evidence.get("resource_policy"),
             task_id=task_id,
+            change_type=change_type,
         )
         return tuple(report.reasons)
     except (OSError, ImportError, TypeError, ValueError, AttributeError):
@@ -413,6 +415,7 @@ def validate_file(
     head_sha: str,
     repo_root: Path | None = None,
     task_id: str = "",
+    change_type: str = "",
 ) -> EvidenceResult:
     """从文件读取证据；错误信息不回显原始不可信正文。"""
 
@@ -436,6 +439,7 @@ def validate_file(
         base_sha=base_sha,
         head_sha=head_sha,
         task_id=task_id,
+        change_type=change_type,
     ):
         _append_reason(reasons, reason)
     return EvidenceResult(valid=not reasons, reasons=tuple(reasons))
@@ -450,6 +454,7 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--head-sha", required=True)
     parser.add_argument("--repo-root", type=Path)
     parser.add_argument("--task-id", default="")
+    parser.add_argument("--change-type", default="")
     return parser.parse_args()
 
 
@@ -463,6 +468,7 @@ def main() -> int:
         head_sha=arguments.head_sha,
         repo_root=arguments.repo_root.resolve() if arguments.repo_root else None,
         task_id=arguments.task_id,
+        change_type=arguments.change_type,
     )
     print(
         json.dumps(

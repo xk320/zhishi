@@ -113,6 +113,9 @@ def _cross_carrier_conflict_reasons(
             head_ref,
             metadata=metadata,
             task_id=task_id,
+            change_type=module._change_type_from_body(
+                str((metadata or {}).get("body", ""))
+            ),
         )
         return tuple(report.reasons)
     except (OSError, ImportError, TypeError, ValueError, AttributeError):

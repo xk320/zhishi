@@ -96,6 +96,12 @@ jobs:
               task_ids = re.findall(r"(?m)^\s*-\s*任务-(\d{6})\s*$", pull_request.get("body") or "")
               if len(task_ids) == 1:
                   output.write(f"task_id={task_ids[0]}\n")
+              change_match = re.search(
+                  r"(?ms)^## 变更类型\s*\n+\s*-\s*(任务登记|任务交付|合并后状态闭环)\s*$",
+                  pull_request.get("body") or "",
+              )
+              if change_match:
+                  output.write(f"change_type={change_match.group(1)}\n")
           PY
 
       - name: 检出main上的可信检查器
@@ -131,6 +137,7 @@ jobs:
           BASE_SHA: ${{ steps.pr.outputs.base_sha }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           TASK_ID: ${{ steps.pr.outputs.task_id }}
+          CHANGE_TYPE: ${{ steps.pr.outputs.change_type }}
           EVIDENCE_PATH: ${{ runner.temp }}/agent-review-evidence.json
         run: |
           python3 scripts/研发中心/验证自动评审证据.py \
@@ -140,7 +147,8 @@ jobs:
             --base-sha "$BASE_SHA" \
             --head-sha "$HEAD_SHA" \
             --repo-root . \
-            --task-id "$TASK_ID"
+            --task-id "$TASK_ID" \
+            --change-type "$CHANGE_TYPE"
 
       - name: 检查未解决评审和当前提交检查
         env:

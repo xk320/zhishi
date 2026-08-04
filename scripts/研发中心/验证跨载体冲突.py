@@ -28,6 +28,9 @@ BLOCKER_PATTERN = re.compile(r"^- 当前阻塞原因：(.+)$", re.MULTILINE)
 PR_PATTERN = re.compile(r"^- Pull Request：(.+)$", re.MULTILINE)
 MERGE_PATTERN = re.compile(r"^- 合并提交SHA：`([0-9a-f]{40})`$", re.MULTILINE)
 PR_NUMBER_PATTERN = re.compile(r"#(\d+)")
+CHANGE_TYPE_PATTERN = re.compile(
+    r"(?ms)^## 变更类型\s*\n+\s*-\s*(任务登记|任务交付|合并后状态闭环)\s*$"
+)
 DEPENDENCY_PATTERN = re.compile(r"任务-(\d{6})")
 STANDARD_STATUSES = frozenset(
     {"待执行", "执行中", "阻塞", "待评审", "需修复", "已完成", "已取消"}
@@ -921,6 +924,11 @@ def _check_metadata(
             )
 
 
+def _change_type_from_body(body: str) -> str:
+    match = CHANGE_TYPE_PATTERN.search(body)
+    return match.group(1) if match else ""
+
+
 def _check_task_execution_metadata(
     repo_root: Path,
     head_ref: str,
@@ -933,7 +941,8 @@ def _check_task_execution_metadata(
     if metadata is None or not task_id:
         return
     body = str(metadata.get("body", ""))
-    if "- 合并后状态闭环" in body or "- 任务登记" in body:
+    change_type = _change_type_from_body(body)
+    if change_type in {"合并后状态闭环", "任务登记"}:
         # 状态闭环使用独立PR，必须保留任务文件中的原交付分支/PR；任务登记
         # 尚未开始执行，不能要求不存在的执行元数据。
         return
@@ -1165,6 +1174,7 @@ def check_refs(
     review_evidence: Mapping[str, object] | None = None,
     resource_policy: Mapping[str, object] | None = None,
     task_id: str = "",
+    change_type: str = "",
 ) -> ConflictReport:
     """检查base/head身份与两棵树，供可信资格校验器复用。"""
 
@@ -1206,8 +1216,10 @@ def check_refs(
             conflicts,
             allow_dependency_mutation=(
                 metadata is not None
-                and "- 合并后状态闭环" in str(metadata.get("body", ""))
-            ),
+                and _change_type_from_body(str(metadata.get("body", "")))
+                == "合并后状态闭环"
+            )
+            or change_type == "合并后状态闭环",
         )
         _check_historical_immutability(repo_root, base_sha, head_sha, conflicts)
     _check_metadata(
@@ -1337,6 +1349,7 @@ def _compute_rule_fingerprint() -> str:
         repr(PR_PATTERN.pattern),
         repr(MERGE_PATTERN.pattern),
         repr(PR_NUMBER_PATTERN.pattern),
+        repr(CHANGE_TYPE_PATTERN.pattern),
         TASK_DIR,
         BOARD_PATH,
         BOARD_SCHEMA_PATH,
