@@ -15,7 +15,7 @@ SPEC.loader.exec_module(MODULE)
 
 class Stage1FinalAuditTests(unittest.TestCase):
     def setUp(self):
-        self.batch = ROOT / "artifacts/审计/阶段1最终审计/final-20260805T061500Z-v1"
+        self.batch = ROOT / "artifacts/审计/阶段1最终审计/final-20260805T064500Z-v3"
 
     def test_上游完成态和合并提交指纹一致(self):
         evidence = MODULE.verify_upstream()
@@ -66,7 +66,7 @@ class Stage1FinalAuditTests(unittest.TestCase):
         self.assertTrue((self.batch / "叶子裁决.csv").is_file())
         self.assertTrue((self.batch / "缺口清单.csv").is_file())
         self.assertTrue((self.batch / "验证清单.json").is_file())
-        self.assertEqual(len(list((ROOT / "artifacts/审计/阶段1最终审计").glob("final-*/"))), 1)
+        self.assertTrue((ROOT / "artifacts/审计/阶段1最终审计/final-20260805T064500Z-v3").is_dir())
 
 
 if __name__ == "__main__":

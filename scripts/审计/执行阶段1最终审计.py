@@ -60,6 +60,24 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def sha256_with_crlf_normalization(path: Path) -> str:
+    """复算旧批次以CRLF生成、被Git规范化为LF后的内容指纹。"""
+
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        pending = b""
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            data = pending + block
+            pending = b""
+            if data.endswith(b"\r"):
+                pending = b"\r"
+                data = data[:-1]
+            digest.update(data.replace(b"\n", b"\r\n"))
+        if pending:
+            digest.update(pending)
+    return digest.hexdigest()
+
+
 def load_json(path: Path) -> dict:
     if path.stat().st_size > MAX_INPUT_BYTES:
         raise ValueError(f"输入文件超过32MiB上限：{path}")
@@ -116,21 +134,40 @@ def verify_upstream() -> dict:
         commits[task_id] = expected
 
     loop_path = ROOT / LOOP_CSV
-    loop_manifest = load_json(ROOT / MANIFESTS["任务-000034"])
-    if sha256(loop_path) != loop_manifest["输入"]["来源身份"]["SHA-256"] and sha256(loop_path) != "82bf0780f74c0c1405e68ca5b6e8f8cb187158581770477144866afea95c7b5a":
-        raise ValueError("双标的数据闭环成员内容指纹不一致")
     pilot_manifest = load_json(ROOT / MANIFESTS["任务-000035"])
     pilot_members = ROOT / PILOT_MEMBERS
+    loop_hash = sha256(loop_path)
+    if loop_hash != pilot_manifest["来源成员SHA256"]:
+        raise ValueError("双标的数据闭环成员内容指纹不一致")
     if sha256(pilot_members) != pilot_manifest["成员SHA256"]:
         raise ValueError("最小闭环试点成员指纹不一致")
     capacity_manifest = load_json(ROOT / MANIFESTS["任务-000036"])
     if capacity_manifest.get("输入试点批次") != pilot_manifest.get("批次"):
         raise ValueError("容量恢复与最小闭环试点批次不一致")
+    capacity_fingerprints = {}
     for name, expected_hash in capacity_manifest.get("输出文件", {}).items():
         output = ROOT / CAPACITY_ROOT / name
-        if not output.is_file() or sha256(output) != expected_hash:
+        if not output.is_file():
             raise ValueError(f"容量恢复输出指纹不一致：{output}")
-    return {"合并提交": commits, "批次": manifests}
+        actual_hash = sha256(output)
+        normalized_hash = sha256_with_crlf_normalization(output)
+        if actual_hash != expected_hash and normalized_hash != expected_hash:
+            raise ValueError(f"容量恢复输出指纹不一致：{output}")
+        capacity_fingerprints[name] = {
+            "期望SHA256": expected_hash,
+            "Git检出字节SHA256": actual_hash,
+            "CRLF规范化SHA256": normalized_hash,
+            "匹配方式": "原始字节" if actual_hash == expected_hash else "CRLF规范化复算",
+        }
+    return {
+        "合并提交": commits,
+        "批次": manifests,
+        "输入文件": {
+            LOOP_CSV: loop_hash,
+            PILOT_MEMBERS: sha256(pilot_members),
+        },
+        "容量输出指纹复算": capacity_fingerprints,
+    }
 
 
 def gate_value(rows: list[dict[str, str]], column: str) -> str:
