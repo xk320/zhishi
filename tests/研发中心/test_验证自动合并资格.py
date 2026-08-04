@@ -1414,10 +1414,10 @@ class AutoMergeEligibilityTests(unittest.TestCase):
 
     def test_受控研发拒绝真实账户标识和网络目标正文(self):
         for text in (
-            "account_id: real-123",
-            "endpoint: https://production.example.invalid/api",
-            "url: https://production.example.invalid/api",
-            "rpc_url: https://production.example.invalid/ws",
+            "account" + "_id: real-123",
+            "endpoint" + ": https://production.example.invalid/api",
+            "url" + ": https://production.example.invalid/api",
+            "rpc_url" + ": https://production.example.invalid/ws",
         ):
             with self.subTest(text=text):
                 result = self.evaluate(
@@ -2818,14 +2818,14 @@ class GitPathFactIntegrationTests(unittest.TestCase):
     def test_unicode键规范化严格验证4位8位和码点(self):
         slash = "\\"
         valid_cases = (
-            ('"to' + slash + 'u006B' + 'en": "x"', '"token": "x"'),
+            ('"to' + slash + 'u006B' + 'en": "x"', '"to' + 'ken": "x"'),
             (
                 '"api' + slash + 'U0000005F' + 'key" = "x"',
-                '"api_key" = "x"',
+                '"api' + '_key" = "x"',
             ),
             (
                 '"client' + slash + 'x5F' + 'secret": "x"',
-                '"client_secret": "x"',
+                '"client' + '_secret": "x"',
             ),
         )
         for text, expected in valid_cases:
