@@ -502,7 +502,10 @@ def parse_change_type(pr_body: str) -> str | None:
 
 
 def _task_reference_limit(change_type: str | None) -> int:
-    return 2 if change_type == "合并后状态闭环" else 1
+    return 2 if change_type in {
+        "合并后状态闭环",
+        BLOCKED_CONTRACT_REPAIR_TYPE,
+    } else 1
 
 
 def _task_reference_limit_reason(change_type: str | None) -> str:
@@ -2536,6 +2539,8 @@ def evaluate_eligibility(
                     BLOCKED_CONTRACT_REPAIR_TARGET,
                 }
                 is_allowed_test = (
+                    len(PurePosixPath(path).parts) == 3
+                    and
                     PurePosixPath(path).parts[:2] == ("tests", "研发中心")
                     and PurePosixPath(path).suffix == ".py"
                 )

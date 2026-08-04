@@ -3262,6 +3262,68 @@ class GitPathFactIntegrationTests(unittest.TestCase):
             payload["reasons"],
         )
 
+    def test_cli阻塞合同修复允许正文单任务加目标任务文件(self):
+        metadata_path = self.repo / "blocked-repair.json"
+        metadata_path.write_text(
+            json.dumps(
+                {
+                    "body": (
+                        "## 关联任务\n\n- 任务-000056\n\n"
+                        "## 变更类型\n\n- 阻塞任务合同修复\n"
+                    ),
+                    "base_ref": "main",
+                    "repository": "xk320/zhishi",
+                    "head_repository": "xk320/zhishi",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        arguments = SimpleNamespace(
+            repo_root=self.repo,
+            base_ref="base",
+            head_ref="head",
+            metadata=metadata_path,
+        )
+        facts = tuple(
+            self.policy.PathFact(
+                path=path,
+                status="M",
+                mode="100644",
+                object_type="blob",
+                size=4,
+                text="safe",
+            )
+            for path in (
+                "docs/研发中心/任务/任务-000056.md",
+                "docs/研发中心/任务/任务-000055.md",
+                "docs/研发中心/看板.md",
+            )
+        )
+        output = io.StringIO()
+        with (
+            mock.patch.object(self.policy, "_parse_arguments", return_value=arguments),
+            mock.patch.object(self.policy, "_load_path_facts", return_value=facts),
+            mock.patch.object(
+                self.policy,
+                "_load_ref_task_ids",
+                return_value=("000055", "000056"),
+            ),
+            mock.patch.object(
+                self.policy,
+                "_load_ref_tasks",
+                side_effect=({}, {}),
+            ) as load_tasks,
+            mock.patch.object(self.policy, "_read_path_at_ref", return_value=None),
+            redirect_stdout(output),
+        ):
+            return_code = self.policy.main()
+
+        self.assertEqual(1, return_code)
+        self.assertEqual(2, load_tasks.call_count)
+        payload = json.loads(output.getvalue())
+        self.assertNotIn("阻塞任务合同修复最多关联1个任务", payload["reasons"])
+
     def test_普通中文路径新增修改能生成事实并通过cli(self):
         self._prepare_task_delivery()
         self._write("docs/治理/既有.md", "修改后内容\n")
