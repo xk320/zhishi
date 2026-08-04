@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import math
 import re
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -72,6 +74,47 @@ class EvidenceResult:
 
     valid: bool
     reasons: tuple[str, ...]
+
+
+def _cross_carrier_reasons(
+    repo_root: Path | None,
+    evidence: Mapping[str, Any],
+    *,
+    base_sha: str,
+    head_sha: str,
+    task_id: str,
+    change_type: str,
+) -> tuple[str, ...]:
+    """在可信评审证据入口复用跨载体检查器的资源与SHA门。"""
+
+    if repo_root is None:
+        return ()
+    checker = repo_root / "scripts/研发中心/验证跨载体冲突.py"
+    if not checker.exists():
+        if task_id == "000049":
+            return ()
+        return ("UNCLASSIFIED_CONFLICT:冲突检查器缺失:失败关闭",)
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "zhishi_cross_carrier_conflict_evidence", checker
+        )
+        if spec is None or spec.loader is None:
+            return ("UNCLASSIFIED_CONFLICT:冲突检查器:失败关闭",)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        report = module.check_refs(
+            repo_root,
+            base_sha,
+            head_sha,
+            review_evidence=evidence,
+            resource_policy=evidence.get("resource_policy"),
+            task_id=task_id,
+            change_type=change_type,
+        )
+        return tuple(report.reasons)
+    except (OSError, ImportError, TypeError, ValueError, AttributeError):
+        return ("UNCLASSIFIED_CONFLICT:冲突检查器:失败关闭",)
 
 
 def _append_reason(reasons: list[str], reason: str) -> None:
@@ -370,6 +413,9 @@ def validate_file(
     pr_number: int,
     base_sha: str,
     head_sha: str,
+    repo_root: Path | None = None,
+    task_id: str = "",
+    change_type: str = "",
 ) -> EvidenceResult:
     """从文件读取证据；错误信息不回显原始不可信正文。"""
 
@@ -379,13 +425,24 @@ def validate_file(
         return EvidenceResult(False, ("无法读取结构化评审证据",))
     if not isinstance(payload, Mapping):
         return EvidenceResult(False, ("评审证据根对象无效",))
-    return validate_evidence(
+    result = validate_evidence(
         payload,
         repository=repository,
         pr_number=pr_number,
         base_sha=base_sha,
         head_sha=head_sha,
     )
+    reasons = list(result.reasons)
+    for reason in _cross_carrier_reasons(
+        repo_root,
+        payload,
+        base_sha=base_sha,
+        head_sha=head_sha,
+        task_id=task_id,
+        change_type=change_type,
+    ):
+        _append_reason(reasons, reason)
+    return EvidenceResult(valid=not reasons, reasons=tuple(reasons))
 
 
 def _arguments() -> argparse.Namespace:
@@ -395,6 +452,9 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--pr-number", type=int, required=True)
     parser.add_argument("--base-sha", required=True)
     parser.add_argument("--head-sha", required=True)
+    parser.add_argument("--repo-root", type=Path)
+    parser.add_argument("--task-id", default="")
+    parser.add_argument("--change-type", default="")
     return parser.parse_args()
 
 
@@ -406,6 +466,9 @@ def main() -> int:
         pr_number=arguments.pr_number,
         base_sha=arguments.base_sha,
         head_sha=arguments.head_sha,
+        repo_root=arguments.repo_root.resolve() if arguments.repo_root else None,
+        task_id=arguments.task_id,
+        change_type=arguments.change_type,
     )
     print(
         json.dumps(

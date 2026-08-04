@@ -77,6 +77,10 @@ jobs:
           metadata = {
               "body": pull_request.get("body") or "",
               "base_ref": pull_request["base"]["ref"],
+              "base_sha": pull_request["base"]["sha"],
+              "head_ref": pull_request["head"]["ref"],
+              "head_sha": pull_request["head"]["sha"],
+              "pr_number": pull_request["number"],
               "repository": pull_request["base"]["repo"]["full_name"],
               "head_repository": pull_request["head"]["repo"]["full_name"],
           }
@@ -89,6 +93,15 @@ jobs:
           with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
               output.write(f"base_sha={pull_request['base']['sha']}\n")
               output.write(f"head_sha={pull_request['head']['sha']}\n")
+              task_ids = re.findall(r"(?m)^\s*-\s*任务-(\d{6})\s*$", pull_request.get("body") or "")
+              if len(task_ids) == 1:
+                  output.write(f"task_id={task_ids[0]}\n")
+              change_match = re.search(
+                  r"(?ms)^## 变更类型\s*\n+\s*-\s*(任务登记|任务交付|合并后状态闭环)\s*$",
+                  pull_request.get("body") or "",
+              )
+              if change_match:
+                  output.write(f"change_type={change_match.group(1)}\n")
           PY
 
       - name: 检出main上的可信检查器
@@ -123,6 +136,8 @@ jobs:
         env:
           BASE_SHA: ${{ steps.pr.outputs.base_sha }}
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          TASK_ID: ${{ steps.pr.outputs.task_id }}
+          CHANGE_TYPE: ${{ steps.pr.outputs.change_type }}
           EVIDENCE_PATH: ${{ runner.temp }}/agent-review-evidence.json
         run: |
           python3 scripts/研发中心/验证自动评审证据.py \
@@ -130,7 +145,10 @@ jobs:
             --repository "$REPOSITORY" \
             --pr-number "$PR_NUMBER" \
             --base-sha "$BASE_SHA" \
-            --head-sha "$HEAD_SHA"
+            --head-sha "$HEAD_SHA" \
+            --repo-root . \
+            --task-id "$TASK_ID" \
+            --change-type "$CHANGE_TYPE"
 
       - name: 检查未解决评审和当前提交检查
         env:
