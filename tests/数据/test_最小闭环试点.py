@@ -70,6 +70,8 @@ class 最小闭环试点测试(unittest.TestCase):
             "最大成员数": 1,
             "最大评估行数": 10,
             "最大输出字节数": 1024 * 1024,
+            "最大运行秒数": 30,
+            "最大内存MiB": 256,
             "限制": "test",
         }
         配置路径.write_text(json.dumps(配置, ensure_ascii=False), encoding="utf-8")
@@ -125,6 +127,22 @@ class 最小闭环试点测试(unittest.TestCase):
             构建.构建批次(配置, 根 / "artifacts/数据/最小闭环试点", "pilot-zero")
             with self.assertRaises(ValueError):
                 查询模块.查询(根 / "artifacts/数据/最小闭环试点/pilot-zero", 主尺度="1小时")
+
+    def test_路径穿越和成员指纹漂移被拒绝(self) -> None:
+        with tempfile.TemporaryDirectory() as 临时:
+            根 = Path(临时)
+            配置, 来源 = self.写入输入(根, 最终状态="可用")
+            输出根 = 根 / "artifacts/数据/最小闭环试点"
+            with self.assertRaises(构建.合同错误):
+                构建.构建批次(配置, 输出根, "../越界")
+            构建.构建批次(配置, 输出根, "pilot-one")
+            成员 = 输出根 / "pilot-one/成员.csv"
+            成员.write_text(成员.read_text(encoding="utf-8") + "", encoding="utf-8")
+            # 即使内容未变，清单仍必须存在并能被查询；随后改动一字段验证指纹门。
+            内容 = 成员.read_text(encoding="utf-8").replace("BTC", "ETH", 1)
+            成员.write_text(内容, encoding="utf-8")
+            with self.assertRaises(ValueError):
+                查询模块.查询(输出根 / "pilot-one")
 
 
 if __name__ == "__main__":

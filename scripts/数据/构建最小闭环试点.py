@@ -11,8 +11,11 @@ import csv
 import hashlib
 import json
 import os
+import re
+import resource
 import shutil
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -130,13 +133,15 @@ def 读取配置(路径: Path) -> dict[str, Any]:
         "最大成员数",
         "最大评估行数",
         "最大输出字节数",
+        "最大运行秒数",
+        "最大内存MiB",
         "限制",
     }
     if set(配置) != 必需:
         raise 合同错误("配置字段漂移")
     if not isinstance(配置["来源批次"], str) or not 配置["来源批次"]:
         raise 合同错误("来源批次无效")
-    for 字段 in ("最大成员数", "最大评估行数", "最大输出字节数"):
+    for 字段 in ("最大成员数", "最大评估行数", "最大输出字节数", "最大运行秒数", "最大内存MiB"):
         if type(配置[字段]) is not int or 配置[字段] <= 0:
             raise 合同错误(f"{字段}必须为正整数")
     return 配置
@@ -263,19 +268,49 @@ def 原子写入文本(路径: Path, 内容: str) -> None:
         raise 合同错误(f"输出发布失败：{路径}") from 异常
 
 
+def 当前内存MiB() -> float:
+    使用 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    # macOS以字节返回，Linux以KiB返回。
+    if os.uname().sysname == "Darwin":
+        return 使用 / (1024 * 1024)
+    return 使用 / 1024
+
+
+def 检查资源(开始时间: float, 配置: dict[str, Any]) -> None:
+    if time.monotonic() - 开始时间 > 配置["最大运行秒数"]:
+        raise 合同错误("运行时间超过硬上限")
+    if 当前内存MiB() > 配置["最大内存MiB"]:
+        raise 合同错误("进程内存超过硬上限")
+
+
 def 构建批次(配置路径: Path, 批次根: Path, 批次号: str) -> dict[str, Any]:
+    开始时间 = time.monotonic()
     配置 = 读取配置(配置路径)
+    if (
+        not isinstance(批次号, str)
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+:-]{0,127}", 批次号) is None
+        or Path(批次号).is_absolute()
+        or Path(批次号).name != 批次号
+    ):
+        raise 合同错误("批次号必须是批次根下的单一安全名称")
+    if 批次根.exists() and 批次根.is_symlink():
+        raise 合同错误("批次根不得为符号链接")
+    批次根.mkdir(parents=True, exist_ok=True)
+    批次根 = 批次根.resolve()
     来源路径 = (配置路径.parent.parent.parent / 配置["来源成员路径"]).resolve()
     来源摘要 = 文件指纹(来源路径)
     if 来源摘要 != 配置["来源成员SHA256"]:
         raise 合同错误("来源成员指纹漂移")
     行 = 读取成员(来源路径, 配置["来源批次"], 配置["最大评估行数"])
+    检查资源(开始时间, 配置)
     评估结果, 合格 = 评估(行, 配置["来源批次"])
     if len(评估结果) > 配置["最大评估行数"]:
         raise 合同错误("评估结果超过硬上限")
     if len(合格) > 配置["最大成员数"]:
         合格 = 合格[: 配置["最大成员数"]]
     目标 = (批次根 / 批次号).resolve()
+    if 目标.parent != 批次根:
+        raise 合同错误("批次目标越出批准批次根")
     if 目标.exists():
         raise 合同错误("批次已存在，拒绝覆盖")
     目标.mkdir(parents=True)
@@ -285,6 +320,7 @@ def 构建批次(配置路径: Path, 批次根: Path, 批次号: str) -> dict[st
         血缘路径 = 目标 / "血缘.csv"
         报告路径 = 目标 / "验证报告.json"
         原子写入CSV(评估路径, 评估列, 评估结果)
+        检查资源(开始时间, 配置)
         成员行 = [
             {
                 "标的": 记录["标的"], "资产编号": 记录["资产编号"],
@@ -346,6 +382,7 @@ def 构建批次(配置路径: Path, 批次根: Path, 批次号: str) -> dict[st
             "血缘SHA256": 文件指纹(血缘路径),
         }
         原子写入文本(目标 / "清单.json", 稳定JSON(清单) + "\n")
+        检查资源(开始时间, 配置)
         总大小 = sum(路径.stat().st_size for 路径 in 目标.iterdir() if 路径.is_file())
         if 总大小 > 配置["最大输出字节数"]:
             raise 合同错误("输出超过字节上限")
