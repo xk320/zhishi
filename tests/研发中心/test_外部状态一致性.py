@@ -41,13 +41,13 @@ class ExternalStateConsistencyTests(unittest.TestCase):
             board,
         )
 
-    def test_任务043执行元数据与看板一致(self):
+    def test_任务043待评审元数据与看板一致(self):
         task = (ROOT / "docs/研发中心/任务/任务-000043.md").read_text(encoding="utf-8")
         board = (ROOT / "docs/研发中心/看板.md").read_text(encoding="utf-8")
-        self.assertIn("- 状态：执行中", task)
+        self.assertIn("- 状态：待评审", task)
         self.assertIn("- 执行分支：`codex/000043-external-state-consistency-v1`", task)
         self.assertIn(
-            "| P0 | 任务-000043 | 统一外部环境事实与阶段状态声明 | `codex/000043-external-state-consistency-v1`",
+            "| P0 | 任务-000043 | 统一外部环境事实与阶段状态声明 | `codex/000043-external-state-consistency-v1` | [#62](https://github.com/xk320/zhishi/pull/62) |",
             board,
         )
 
