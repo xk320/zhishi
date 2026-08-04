@@ -362,7 +362,7 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
             result.update(status="无法判定", error_code="schema_read_failed")
         return result
 
-    def mysql_metadata(units):
+    def mysql_metadata(units, object_timeout):
         results = {unit["asset_id"]: base_object(unit) for unit in units}
         locations = []
         by_location = {}
@@ -396,7 +396,7 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
             check=False,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=object_timeout,
             env=SAFE_ENV,
         )
         if completed.returncode != 0:
@@ -757,7 +757,7 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
                         results.append(inspect_file_schema(unit))
                     finally:
                         signal.alarm(0)
-                results.extend(mysql_metadata(databases))
+                results.extend(mysql_metadata(databases, object_timeout))
             else:
                 rules = {
                     item["asset_id"]: item for item in request.get("rules", {}).get("objects", [])
@@ -773,7 +773,7 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
                         )
                     finally:
                         signal.alarm(0)
-                results.extend(quality_mysql(mysql_metadata(databases), rules))
+                results.extend(quality_mysql(mysql_metadata(databases, object_timeout), rules))
             payload = {
                 "audit_version": AUDIT_VERSION,
                 "phase": phase,
