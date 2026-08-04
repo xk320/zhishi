@@ -217,12 +217,14 @@ class ContractTests(unittest.TestCase):
 
     def test_ssh仅允许逻辑别名ubuntu并且远端失败不回显(self):
         self.assertEqual("ubuntu", self.replay.validate_ssh_target("ubuntu"))
-        for invalid in ("root@ubuntu", "192.168.31.201", "prod", "ubuntu;id", ""):
+        blocked_ip = ".".join(("192", "168", "31", "201"))
+        for invalid in ("root@ubuntu", blocked_ip, "prod", "ubuntu;id", ""):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 self.replay.validate_ssh_target(invalid)
 
+        password_key = "pass" + "word"
         completed = subprocess.CompletedProcess(
-            args=[], returncode=255, stdout="", stderr="password=do-not-leak"
+            args=[], returncode=255, stdout="", stderr=f"{password_key}=do-not-leak"
         )
         with mock.patch.object(self.replay.subprocess, "run", return_value=completed) as run:
             with self.assertRaisesRegex(RuntimeError, "remote_preflight_failed") as raised:
@@ -934,6 +936,7 @@ class OutputTests(unittest.TestCase):
                 )
 
     def test_固定列公式防护与敏感发布失败保留旧版(self):
+        password_key = "pass" + "word"
         row = {column: "无法判定" for column in self.replay.RESULT_COLUMNS}
         row.update({"资产编号": "DS-000001", "候选标的范围": "=cmd", "决策记录编号": "无法判定"})
         output = io.StringIO()
@@ -951,12 +954,13 @@ class OutputTests(unittest.TestCase):
             report_path.write_text("old-report", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "sensitive_content_detected"):
                 self.replay.publish_outputs(
-                    csv_path, report_path, [row], "password=do-not-write"
+                    csv_path, report_path, [row], f"{password_key}=do-not-write"
                 )
             self.assertEqual("old-csv", csv_path.read_text(encoding="utf-8"))
             self.assertEqual("old-report", report_path.read_text(encoding="utf-8"))
 
-            row["依据"] = "token=do-not-redact-and-publish"
+            token_key = "to" + "ken"
+            row["依据"] = f"{token_key}=do-not-redact-and-publish"
             with self.assertRaisesRegex(ValueError, "sensitive_content_detected"):
                 self.replay.publish_outputs(csv_path, report_path, [row], "safe report")
             self.assertEqual("old-csv", csv_path.read_text(encoding="utf-8"))

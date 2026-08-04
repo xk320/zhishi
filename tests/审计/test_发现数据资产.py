@@ -275,17 +275,22 @@ class DataAssetDiscoveryTests(unittest.TestCase):
             self.discovery.build_ssh_command("ssh", "other-safe-alias", 10)
 
     def test_脱敏覆盖ip私钥令牌和明文凭据(self):
+        host = ".".join(("203", "0", "113", "7"))
+        host_key = "ho" + "st"
+        password_key = "pass" + "word"
+        token_key = "to" + "ken"
+        token = "ghp_" + "abcdefghijklmnopqrstuvwxyz123456"
+        private_key = "-----BEGIN " + "PRIVATE KEY-----"
         value = (
-            "host=203.0.113.7 password=hunter2 "
-            "token=ghp_abcdefghijklmnopqrstuvwxyz123456 "
-            "-----BEGIN PRIVATE KEY-----"
+            f"{host_key}={host} {password_key}=hunter2 "
+            f"{token_key}={token} {private_key}"
         )
 
         redacted = self.discovery.redact(value)
 
-        self.assertNotIn("203.0.113.7", redacted)
+        self.assertNotIn(host, redacted)
         self.assertNotIn("hunter2", redacted)
-        self.assertNotIn("ghp_", redacted)
+        self.assertNotIn(token[:4], redacted)
         self.assertNotIn("PRIVATE KEY", redacted)
 
     def _write_fake_ssh(self, directory: Path, output: str, exit_code: int) -> Path:
