@@ -2,6 +2,7 @@ from pathlib import Path
 import unittest
 from datetime import datetime, timedelta, timezone
 import importlib.util
+import re
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -48,15 +49,61 @@ class ExternalStateConsistencyTests(unittest.TestCase):
             board,
         )
 
-    def test_任务043待评审元数据与看板一致(self):
+    def _assert_task043_state_mapping(self, task: str, board: str) -> None:
+        status_lines = [
+            line[len("- 状态：") :].strip()
+            for line in task.splitlines()
+            if line.startswith("- 状态：")
+        ]
+        self.assertEqual(len(status_lines), 1)
+        status = status_lines[0]
+        self.assertIn(status, {"待评审", "已完成"})
+
+        task_rows = [
+            line
+            for line in board.splitlines()
+            if re.match(r"^\|\s*(?:P[0-3]\s*\|\s*)?任务-000043\s*\|", line)
+        ]
+        self.assertEqual(len(task_rows), 1)
+        if status == "待评审":
+            self.assertEqual(
+                task_rows[0],
+                "| P0 | 任务-000043 | 统一外部环境事实与阶段状态声明 | "
+                "`codex/000043-external-state-consistency-v1` | "
+                "[#62](https://github.com/xk320/zhishi/pull/62) |",
+            )
+        else:
+            self.assertEqual(
+                task_rows[0],
+                "| 任务-000043 | 统一外部环境事实与阶段状态声明 | "
+                "PR #62；合并提交 `abe66037161332d350b9782492beedd8898a4f8a` |",
+            )
+            self.assertIn("[#62](https://github.com/xk320/zhishi/pull/62)", task)
+            self.assertIn("abe66037161332d350b9782492beedd8898a4f8a", task)
+
+    def test_任务043交付态与完成态元数据和看板一致(self):
         task = (ROOT / "docs/研发中心/任务/任务-000043.md").read_text(encoding="utf-8")
         board = (ROOT / "docs/研发中心/看板.md").read_text(encoding="utf-8")
-        self.assertIn("- 状态：待评审", task)
-        self.assertIn("- 执行分支：`codex/000043-external-state-consistency-v1`", task)
-        self.assertIn(
+        self._assert_task043_state_mapping(task, board)
+
+        completed_task = task.replace("- 状态：待评审", "- 状态：已完成")
+        completed_task += "\n- 合并提交SHA：`abe66037161332d350b9782492beedd8898a4f8a`\n"
+        completed_board = board.replace(
             "| P0 | 任务-000043 | 统一外部环境事实与阶段状态声明 | `codex/000043-external-state-consistency-v1` | [#62](https://github.com/xk320/zhishi/pull/62) |",
-            board,
+            "| 任务-000043 | 统一外部环境事实与阶段状态声明 | PR #62；合并提交 `abe66037161332d350b9782492beedd8898a4f8a` |",
         )
+        self._assert_task043_state_mapping(completed_task, completed_board)
+
+    def test_任务043拒绝未知缺失和重复状态(self):
+        task = (ROOT / "docs/研发中心/任务/任务-000043.md").read_text(encoding="utf-8")
+        board = (ROOT / "docs/研发中心/看板.md").read_text(encoding="utf-8")
+        for malformed in (
+            task.replace("- 状态：待评审", "- 状态：执行中"),
+            task.replace("- 状态：待评审", "- 状态：待评审\n- 状态：已完成"),
+            task.replace("- 状态：待评审\n", ""),
+        ):
+            with self.assertRaises(AssertionError):
+                self._assert_task043_state_mapping(malformed, board)
 
     def test_历史任务记录仍保留(self):
         historical = (ROOT / "docs/研发中心/任务/任务-000028.md").read_text(encoding="utf-8")
