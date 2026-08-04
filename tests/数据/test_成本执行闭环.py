@@ -16,4 +16,6 @@ class CostExecutionTest(unittest.TestCase):
   bad=json.loads(json.dumps(self.config)); bad["输入"]["可信重放清单"]["SHA-256"]="0"*64
   with self.assertRaises(ValueError): self.m.config_ok(bad)
  def test_只允许四个主尺度(self): self.assertEqual(tuple(self.config["主研究尺度"]),("4小时","8小时","24小时","48小时"))
+ def test_敏感输出失败关闭(self):
+  with self.assertRaises(RuntimeError): self.m.assert_output_safe("token=forbidden")
 if __name__=="__main__": unittest.main()

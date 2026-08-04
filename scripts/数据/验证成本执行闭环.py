@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """绑定可信历史现场的成本、流动性与执行输入缺口登记器。"""
 from __future__ import annotations
-import argparse, csv, datetime as dt, hashlib, json, os, re, shutil, subprocess, tempfile, time
+import argparse, csv, datetime as dt, hashlib, io, json, os, re, shutil, subprocess, tempfile, time
 from pathlib import Path
 try:
     import resource
@@ -18,6 +18,18 @@ SENSITIVE = re.compile(r"(?i)(?:password|passwd|secret|token|authorization|priva
 def canonical(value): return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",",":"), allow_nan=False)
 def sha256_bytes(data): return hashlib.sha256(data).hexdigest()
 def sha256_path(path): return sha256_bytes(path.read_bytes())
+def rss_bytes():
+    if resource is None: return None
+    value=int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    return value if os.uname().sysname=="Darwin" else value*1024
+def check_limits(deadline=None, member_started=None, member_timeout=None, max_memory=None):
+    if deadline is not None and time.monotonic()>deadline: raise RuntimeError("batch_timeout")
+    if member_started is not None and member_timeout is not None and time.monotonic()-member_started>member_timeout: raise RuntimeError("member_timeout")
+    rss=rss_bytes()
+    if max_memory is not None and rss is not None and rss>max_memory: raise RuntimeError("memory_limit_exceeded")
+    return rss
+def assert_output_safe(text):
+    if SENSITIVE.search(text): raise RuntimeError("sensitive_output_rejected")
 def read_json(path, expected):
     if path.is_symlink() or not path.is_file() or sha256_path(path) != expected: raise ValueError("input_fingerprint_mismatch")
     value=json.loads(path.read_text(encoding="utf-8"));
@@ -41,38 +53,43 @@ def preflight(timeout=30, max_log=4096):
     except (TypeError,ValueError) as e: raise RuntimeError("remote_preflight_invalid_response") from e
     if set(value)!={"status","python","runtime"} or value.get("status")!="ok" or value.get("runtime")!="cost-execution-read-only-preflight": raise RuntimeError("remote_preflight_invalid_response")
     return {"python":str(value["python"]),"runtime":str(value["runtime"]),"status":"ok","日志字节数":log}
-def load_members(root, config):
-    config_ok(config); spec=config["输入"]["可信重放清单"]; manifest=read_json(root/spec["路径"],spec["SHA-256"]); result_path=root/spec["结果路径"]
+def load_members(root, config, deadline=None, max_memory=None):
+    check_limits(deadline=deadline,max_memory=max_memory); config_ok(config); spec=config["输入"]["可信重放清单"]; manifest=read_json(root/spec["路径"],spec["SHA-256"]); result_path=root/spec["结果路径"]
     if result_path.is_symlink() or not result_path.is_file() or sha256_path(result_path)!=spec["结果SHA-256"]: raise ValueError("replay_result_fingerprint_mismatch")
     members=manifest.get("候选成员总数"); counts=manifest.get("标的计数"); status=manifest.get("状态计数")
     if members!=630 or counts!={"BTC":315,"ETH":315} or status!={"拒绝":14,"无法判定":616,"通过":0}: raise ValueError("replay_manifest_mismatch")
     with result_path.open(encoding="utf-8") as handle:
         rows=list(csv.DictReader(handle))
+    check_limits(deadline=deadline,max_memory=max_memory)
     if len(rows)!=630 or {row.get("标的") for row in rows} != set(TARGETS): raise ValueError("replay_members_mismatch")
     return rows, manifest
-def build_rows(batch, members, code_sha):
+def build_rows(batch, members, code_sha, deadline=None, member_timeout=None, max_memory=None):
     rows=[]
     for member in sorted(members,key=lambda r:(r["资产编号"],r["标的"],r["来源成员编号"])):
+        member_started=time.monotonic(); check_limits(deadline=deadline,member_started=member_started,member_timeout=member_timeout,max_memory=max_memory)
         drift=member["重放结论"]=="拒绝"; conclusion="拒绝" if drift else "无法判定"; reason="input_identity_drift" if drift else "cost_source_missing"
         row={key:"未判定" for key in RESULT_COLUMNS}; row.update({"验证批次":batch,"资产编号":member["资产编号"],"标的":member["标的"],"来源成员编号":member["来源成员编号"],"交易场所":"未判定","市场类型":"未判定","精确合约":"未判定","方向":"未判定","阶段":"未判定","主研究尺度":"未判定（仅允许4小时/8小时/24小时/48小时）","历史时点":"未判定","可信重放结论":member["重放结论"],"成本来源状态":"拒绝（输入身份漂移）" if drift else "无法判定（成本来源未登记）","手续费状态":"拒绝" if drift else "无法判定","价差状态":"拒绝" if drift else "无法判定","深度状态":"拒绝" if drift else "无法判定","冲击状态":"拒绝" if drift else "无法判定","资金费率状态":"拒绝" if drift else "无法判定","执行延迟状态":"拒绝" if drift else "无法判定","可成交量状态":"拒绝" if drift else "无法判定","规则版本":"cost-execution-1.0","代码版本":code_sha,"输入指纹":member["质量证据指纹"],"结论":conclusion,"原因代码":reason,"依据":"任务-000032输入身份漂移，或尚无获批成本来源登记；未读取当前费率/盘口/账户信息","解除条件":"登记带来源、时间、版本、数据截止和可见性证据的手续费、价差、深度、冲击、资金费率、延迟和可成交量；重新发布批次"})
-        row["输出指纹"]=sha256_bytes(canonical({k:row[k] for k in RESULT_COLUMNS if k!="输出指纹"}).encode()); rows.append(row)
+        row["输出指纹"]=sha256_bytes(canonical({k:row[k] for k in RESULT_COLUMNS if k!="输出指纹"}).encode()); rows.append(row); check_limits(deadline=deadline,member_started=member_started,member_timeout=member_timeout,max_memory=max_memory)
     return rows
-def publish(root,batch,rows,report,checklist,index,max_bytes):
+def publish(root,batch,rows,report,checklist,index,max_bytes,deadline=None,max_memory=None):
     root.mkdir(parents=True,exist_ok=True); dest=root/batch
     if dest.exists() or dest.is_symlink(): raise ValueError("batch_exists")
     tmp=Path(tempfile.mkdtemp(prefix=f".{batch}.",dir=root))
     try:
-        csvp=tmp/"成员结果.csv"; csvp.write_text("",encoding="utf-8")
-        with csvp.open("w",encoding="utf-8",newline="") as h:
-            w=csv.DictWriter(h,fieldnames=RESULT_COLUMNS,lineterminator="\n"); w.writeheader(); w.writerows(rows)
+        check_limits(deadline=deadline,max_memory=max_memory)
+        buffer=io.StringIO(); w=csv.DictWriter(buffer,fieldnames=RESULT_COLUMNS,lineterminator="\n"); w.writeheader(); w.writerows(rows); csv_text=buffer.getvalue()
+        assert_output_safe(csv_text); assert_output_safe(report); assert_output_safe(canonical(index))
+        csvp=tmp/"成员结果.csv"; csvp.write_text(csv_text,encoding="utf-8")
         rp=tmp/"验证报告.md"; rp.write_text(report,encoding="utf-8")
         checklist=dict(checklist); checklist["成员结果SHA-256"]=sha256_path(csvp); checklist["验证报告SHA-256"]=sha256_path(rp)
-        cp=tmp/"验证清单.json"; cp.write_text(canonical(checklist)+"\n",encoding="utf-8")
+        checklist_text=canonical(checklist)+"\n"; assert_output_safe(checklist_text); cp=tmp/"验证清单.json"; cp.write_text(checklist_text,encoding="utf-8")
+        check_limits(deadline=deadline,max_memory=max_memory)
         if sum(p.stat().st_size for p in (csvp,rp,cp))>max_bytes: raise RuntimeError("output_limit_exceeded")
         os.mkdir(dest)
         for p in tmp.iterdir(): os.replace(p,dest/p.name)
         shutil.rmtree(tmp)
         ip=root/"批次索引.csv"; new=not ip.exists()
+        check_limits(deadline=deadline,max_memory=max_memory)
         with ip.open("a",encoding="utf-8",newline="") as h:
             w=csv.DictWriter(h,fieldnames=tuple(index),lineterminator="\n");
             if new:w.writeheader()
@@ -82,20 +99,15 @@ def publish(root,batch,rows,report,checklist,index,max_bytes):
         shutil.rmtree(tmp,ignore_errors=True); raise
 def execute(root,config_path,batch_root,batch):
     if config_path.resolve()!=(root/CONFIG_PATH).resolve() or CONFIG_SHA256=="__CONFIG_SHA256__" or sha256_path(config_path)!=CONFIG_SHA256: raise ValueError("config_path_or_fingerprint_mismatch")
-    config=json.loads(config_path.read_text(encoding="utf-8")); start=time.monotonic(); resources=config["资源上限"]; members,manifest=load_members(root,config)
+    config=json.loads(config_path.read_text(encoding="utf-8")); start=time.monotonic(); resources=config["资源上限"]; deadline=start+resources["批次总超时秒"]; members,manifest=load_members(root,config,deadline,resources["最大内存字节数"])
     if len(members)>resources["最大成员数"]: raise ValueError("member_limit_exceeded")
-    remote=preflight(resources["远端预检超时秒"],resources["最大日志字节数"]); deadline=start+resources["批次总超时秒"]
-    if time.monotonic()>deadline: raise RuntimeError("batch_timeout")
-    code_sha=sha256_path(Path(__file__).resolve()); rows=build_rows(batch,members,code_sha)
-    rss=None
-    if resource is not None:
-        rss=int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss); rss=rss if os.uname().sysname=="Darwin" else rss*1024
-        if rss>resources["最大内存字节数"]: raise RuntimeError("memory_limit_exceeded")
+    remote=preflight(resources["远端预检超时秒"],resources["最大日志字节数"]); check_limits(deadline=deadline,max_memory=resources["最大内存字节数"])
+    code_sha=sha256_path(Path(__file__).resolve()); rows=build_rows(batch,members,code_sha,deadline,resources["单成员超时秒"],resources["最大内存字节数"]); rss=check_limits(deadline=deadline,max_memory=resources["最大内存字节数"])
     counts={s:sum(row["结论"]==s for row in rows) for s in ("拒绝","无法判定","失败","未成熟","失效","通过")}
-    report=f"# 成本、流动性与执行数据验证\n\n<!-- markdownlint-disable MD013 -->\n\n- 验证器：`{SCRIPT_VERSION}`\n- 验证批次：`{batch}`\n- 可信重放输入：`replay-20260805T013610+0800-4492706a9320`\n- 远端只读预检：通过（Python {remote['python']}；日志{remote['日志字节数']}字节；未读取业务正文）\n- 资源上限：总超时300秒、单成员30秒、成员1000、输出16MiB、日志4096字节、内存512MiB；RSS实测{rss}字节\n\n## 结论\n\n- 候选成员630；BTC315；ETH315；拒绝{counts['拒绝']}；无法判定{counts['无法判定']}；通过0。\n- 手续费、价差、深度、冲击、资金费率、执行延迟和可成交量均无获批历史来源登记；没有读取当前费率、盘口或账户信息。\n- 本批次不计算净成本、胜率、收益、方向、仓位或交易许可。\n\n## 独立标的\n\n| 标的 | 候选 | 拒绝 | 无法判定 | 通过 |\n| --- | ---: | ---: | ---: | ---: |\n| BTC | 315 | {sum(r['结论']=='拒绝' and r['标的']=='BTC' for r in rows)} | {sum(r['结论']=='无法判定' and r['标的']=='BTC' for r in rows)} | 0 |\n| ETH | 315 | {sum(r['结论']=='拒绝' and r['标的']=='ETH' for r in rows)} | {sum(r['结论']=='无法判定' and r['标的']=='ETH' for r in rows)} | 0 |\n\n## 解除条件\n\n登记各成本字段的来源、版本、数据截止、三类时间和可见性合同后，按相同标的、场所、市场、合约、方向、阶段和主研究尺度创建新批次。\n"
+    check_limits(deadline=deadline,max_memory=resources["最大内存字节数"]); report=f"# 成本、流动性与执行数据验证\n\n<!-- markdownlint-disable MD013 -->\n\n- 验证器：`{SCRIPT_VERSION}`\n- 验证批次：`{batch}`\n- 可信重放输入：`replay-20260805T013610+0800-4492706a9320`\n- 远端只读预检：通过（Python {remote['python']}；日志{remote['日志字节数']}字节；未读取业务正文）\n- 资源上限：总超时300秒、单成员30秒、成员1000、输出16MiB、日志4096字节、内存512MiB；RSS实测{rss}字节\n\n## 结论\n\n- 候选成员630；BTC315；ETH315；拒绝{counts['拒绝']}；无法判定{counts['无法判定']}；通过0。\n- 手续费、价差、深度、冲击、资金费率、执行延迟和可成交量均无获批历史来源登记；没有读取当前费率、盘口或账户信息。\n- 本批次不计算净成本、胜率、收益、方向、仓位或交易许可。\n\n## 独立标的\n\n| 标的 | 候选 | 拒绝 | 无法判定 | 通过 |\n| --- | ---: | ---: | ---: | ---: |\n| BTC | 315 | {sum(r['结论']=='拒绝' and r['标的']=='BTC' for r in rows)} | {sum(r['结论']=='无法判定' and r['标的']=='BTC' for r in rows)} | 0 |\n| ETH | 315 | {sum(r['结论']=='拒绝' and r['标的']=='ETH' for r in rows)} | {sum(r['结论']=='无法判定' and r['标的']=='ETH' for r in rows)} | 0 |\n\n## 解除条件\n\n登记各成本字段的来源、版本、数据截止、三类时间和可见性合同后，按相同标的、场所、市场、合约、方向、阶段和主研究尺度创建新批次。\n"
     checklist={"合同版本":"cost-execution-1.0","验证器版本":SCRIPT_VERSION,"验证批次":batch,"候选成员总数":630,"标的计数":{"BTC":315,"ETH":315},"状态计数":counts,"可信重放清单SHA-256":sha256_path(root/config["输入"]["可信重放清单"]["路径"]),"代码SHA-256":code_sha,"资源上限":resources,"资源实测":{"本地峰值RSS字节":rss,"批次耗时秒":round(time.monotonic()-start,6),"远端预检日志字节":remote["日志字节数"]},"远端预检":remote,"成本来源登记":"未登记；未创建样例文件","安全声明":{"远端读取业务正文":False,"远端落盘":False,"读取账户费率":False,"原始数据修改":False,"交易结论":False}}
     index={"验证批次":batch,"合同版本":"cost-execution-1.0","候选成员总数":"630","拒绝数":str(counts["拒绝"]),"无法判定数":str(counts["无法判定"]),"通过数":"0","远端预检":"通过","状态":"已发布"}
-    artifacts=publish(batch_root,batch,rows,report,checklist,index,resources["最大输出字节数"]); return {"status":"ok","batch":batch,"counts":counts,"remote":remote,"artifacts":artifacts}
+    artifacts=publish(batch_root,batch,rows,report,checklist,index,resources["最大输出字节数"],deadline,resources["最大内存字节数"]); return {"status":"ok","batch":batch,"counts":counts,"remote":remote,"artifacts":artifacts}
 def main():
     p=argparse.ArgumentParser(); p.add_argument("--config",type=Path,required=True); p.add_argument("--batch-root",type=Path,required=True); p.add_argument("--ssh-target",required=True); p.add_argument("--batch",required=True); a=p.parse_args()
     if a.ssh_target!="ubuntu" or not re.fullmatch(r"cost-[0-9]{8}T[0-9]{6}[+-][0-9]{4}-[0-9a-f]{12}",a.batch): raise ValueError("argument_contract_invalid")
