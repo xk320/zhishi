@@ -951,8 +951,6 @@ def _check_task_execution_metadata(
     if text is None:
         return
     status = _field(STATUS_PATTERN, text) or ""
-    if status == "已完成":
-        return
     task_branch = _field(BRANCH_PATTERN, text)
     task_started = _field(START_PATTERN, text)
     head_branch = metadata.get("head_ref")
