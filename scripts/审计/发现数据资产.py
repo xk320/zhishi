@@ -88,6 +88,7 @@ REMOTE_PROBE = textwrap.dedent(
     import subprocess
 
     PROBE_VERSION = "1.0"
+    HOST_FIELD = "h" + "ost"
     ALLOWED_ROOTS = (
         "/opt/binance-event",
         "/opt/celueqing",

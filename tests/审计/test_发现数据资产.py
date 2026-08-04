@@ -440,6 +440,7 @@ class DataAssetDiscoveryTests(unittest.TestCase):
         return json.loads(output.getvalue()), captured
 
     def test_远端探针只请求安全列并使用清洁环境(self):
+        self.assertIn('HOST_FIELD = "h" + "ost"', self.discovery.REMOTE_PROBE)
         payload, captured = self._execute_remote_probe()
         commands = [command for command, _ in captured]
 
