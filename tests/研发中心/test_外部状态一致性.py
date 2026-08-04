@@ -74,12 +74,28 @@ class ExternalStateConsistencyTests(unittest.TestCase):
     def test_任务031阻塞事实与看板一致(self):
         task = (ROOT / "docs/研发中心/任务/任务-000031.md").read_text(encoding="utf-8")
         board = (ROOT / "docs/研发中心/看板.md").read_text(encoding="utf-8")
-        self.assertIn("- 状态：阻塞", task)
-        self.assertIn("获批只读目标`ubuntu`当前不可达", task)
-        self.assertIn(
-            "| 任务-000031 | 完成不可变输入与全量只读质量审计 | 000030 | 获批只读目标`ubuntu`当前不可达",
-            board,
+        status = next(
+            (line[len("- 状态：") :].strip() for line in task.splitlines() if line.startswith("- 状态：")),
+            None,
         )
+        if status == "阻塞":
+            self.assertIn("获批只读目标`ubuntu`当前不可达", task)
+            self.assertIn(
+                "| 任务-000031 | 完成不可变输入与全量只读质量审计 | 000030 | 获批只读目标`ubuntu`当前不可达",
+                board,
+            )
+            return
+        if status == "待执行":
+            self.assertIn("当前阻塞原因：无；", task)
+            self.assertIn("probe_category=reachable", task)
+            self.assertIn("preflight=python3_entry_reachable", task)
+            self.assertIn("解除条件：已满足", task)
+            self.assertIn(
+                "| P0 | 任务-000031 | 完成不可变输入与全量只读质量审计 | 000030 |",
+                board,
+            )
+            return
+        self.fail(f"任务-000031状态不在合法外部状态夹具范围：{status}")
 
     def _assert_task043_state_mapping(self, task: str, board: str) -> None:
         status_lines = [
