@@ -20,7 +20,7 @@ from types import ModuleType
 from typing import Callable, Mapping, Sequence
 
 
-SCRIPT_VERSION = "dq-continuous-1.0"
+SCRIPT_VERSION = "dq-continuous-1.1"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_AUDITOR = REPO_ROOT / "scripts" / "审计" / "审计数据质量.py"
 PLAN_KEYS = {
@@ -34,7 +34,14 @@ PLAN_KEYS = {
     "资源上限",
     "安全边界",
 }
-RESOURCE_KEYS = {"批次总超时秒", "最大成员数", "最大输出字节数", "最大日志字节数"}
+RESOURCE_KEYS = {
+    "批次总超时秒",
+    "单成员超时秒",
+    "最大成员数",
+    "最大内存字节数",
+    "最大输出字节数",
+    "最大日志字节数",
+}
 SCOPE_KEYS = {"标的", "主研究尺度", "结果观察窗口", "分组维度"}
 SAFETY_KEYS = {
     "远端写入",
@@ -183,7 +190,7 @@ def load_plan(plan_path: Path, inventory_path: Path, auditor_path: Path) -> dict
         raise ValueError("持续验证方案必须是对象")
     _require_exact_keys(plan, PLAN_KEYS, "持续验证方案")
 
-    if plan["方案版本"] != "dq-continuous-plan-1.1":
+    if plan["方案版本"] != "dq-continuous-plan-1.2":
         raise ValueError("持续验证方案版本不受支持")
     auditor = load_auditor_module(auditor_path)
     if plan["底层审计规则版本"] != auditor.RULE_VERSION:
@@ -222,7 +229,9 @@ def load_plan(plan_path: Path, inventory_path: Path, auditor_path: Path) -> dict
     _require_exact_keys(resources, RESOURCE_KEYS, "资源上限")
     limits = {
         "批次总超时秒": (10, 7200),
+        "单成员超时秒": (10, 300),
         "最大成员数": (1, 10_000),
+        "最大内存字节数": (64 * 1024 * 1024, 2 * 1024 * 1024 * 1024),
         "最大输出字节数": (1024, 100 * 1024 * 1024),
         "最大日志字节数": (256, 64 * 1024),
     }
@@ -295,6 +304,8 @@ def build_auditor_command(
     output_dir: Path,
     report_path: Path,
     timeout: int,
+    member_timeout: int,
+    memory_limit_bytes: int,
     auditor: ModuleType,
 ) -> list[str]:
     auditor.validate_ssh_target(ssh_target)
@@ -307,6 +318,10 @@ def build_auditor_command(
         ssh_target,
         "--timeout",
         str(timeout),
+        "--member-timeout",
+        str(member_timeout),
+        "--memory-limit-bytes",
+        str(memory_limit_bytes),
         "--output-dir",
         str(output_dir),
         "--report",
@@ -319,6 +334,20 @@ def _nonnegative_integer(value: object) -> int | None:
     if not re.fullmatch(r"0|[1-9]\d*", text):
         return None
     return int(text)
+
+
+def _child_max_rss_bytes() -> int | None:
+    """读取本地审计子进程峰值RSS，统一macOS/Linux单位。"""
+
+    try:
+        import resource
+
+        value = int(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)
+    except (ImportError, OSError, ValueError):
+        return None
+    if value <= 0:
+        return 0
+    return value if sys.platform == "darwin" else value * 1024
 
 
 def _aggregate(rows: list[dict[str, str]], field: str) -> dict[str, int]:
@@ -669,6 +698,8 @@ def execute_batch(
     if timeout < 10 or timeout > int(plan["资源上限"]["批次总超时秒"]):
         raise ValueError("批次超时超出冻结资源上限")
     members = build_member_manifest(inventory_path, plan, auditor)
+    member_timeout = int(plan["资源上限"]["单成员超时秒"])
+    memory_limit_bytes = int(plan["资源上限"]["最大内存字节数"])
 
     frozen_time = now or dt.datetime.now().astimezone()
     if frozen_time.tzinfo is None or frozen_time.utcoffset() is None:
@@ -688,6 +719,7 @@ def execute_batch(
         report_path = temporary / "audit-report.md"
         stdout_path = temporary / "auditor.stdout"
         stderr_path = temporary / "auditor.stderr"
+        rss_before = _child_max_rss_bytes()
         command = build_auditor_command(
             auditor_path,
             inventory_path,
@@ -695,6 +727,8 @@ def execute_batch(
             audit_output,
             report_path,
             timeout,
+            member_timeout,
+            memory_limit_bytes,
             auditor,
         )
         try:
@@ -711,6 +745,16 @@ def execute_batch(
                 )
         except (OSError, subprocess.TimeoutExpired) as error:
             raise RuntimeError("底层只读审计失败：命令不可用或批次超时") from error
+        rss_after = _child_max_rss_bytes()
+        measured_rss = (
+            max(0, rss_after - rss_before)
+            if rss_before is not None and rss_after is not None
+            else None
+        )
+        if measured_rss is None:
+            raise RuntimeError("底层只读审计失败：无法测量子进程内存")
+        if measured_rss > memory_limit_bytes:
+            raise RuntimeError("底层只读审计失败：子进程内存超过冻结上限")
         maximum_log = int(plan["资源上限"]["最大日志字节数"])
         if stdout_path.stat().st_size > maximum_log or stderr_path.stat().st_size > maximum_log:
             raise RuntimeError("底层只读审计失败：日志超过冻结资源上限")
@@ -743,6 +787,19 @@ def execute_batch(
             "作用域指纹": object_fingerprint(plan["作用域"]),
             "SSH逻辑目标": "ubuntu",
             "远端写入": False,
+            "资源上限": {
+                "批次总超时秒": int(plan["资源上限"]["批次总超时秒"]),
+                "单成员超时秒": member_timeout,
+                "最大成员数": int(plan["资源上限"]["最大成员数"]),
+                "最大内存字节数": memory_limit_bytes,
+                "最大输出字节数": int(plan["资源上限"]["最大输出字节数"]),
+                "最大日志字节数": int(plan["资源上限"]["最大日志字节数"]),
+            },
+            "资源实测": {
+                "本地审计子进程最大RSS字节数": measured_rss,
+                "远端内存限制字节数": memory_limit_bytes,
+                "内存测量方式": "本地RUSAGE_CHILDREN峰值差值；远端通过RLIMIT_AS限制",
+            },
             "成员顺序": members,
             "结果摘要": validated["结果摘要"],
             "输出文件指纹": output_fingerprints,

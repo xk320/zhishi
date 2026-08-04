@@ -181,6 +181,7 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
     import math
     import os
     import platform
+    import resource
     import re
     import signal
     import sqlite3
@@ -733,6 +734,12 @@ REMOTE_AUDIT_PROGRAM = textwrap.dedent(
                 raise ValueError("objects")
             duplicate_limit = int(request.get("duplicate_limit", 500000))
             object_timeout = int(request.get("object_timeout", 90))
+            memory_limit_bytes = int(request.get("memory_limit_bytes") or 0)
+            if memory_limit_bytes:
+                resource.setrlimit(
+                    resource.RLIMIT_AS,
+                    (memory_limit_bytes, memory_limit_bytes),
+                )
             signal.signal(signal.SIGALRM, timeout_handler)
             excluded = [unit for unit in units if unit.get("excluded_reason")]
             files = [
@@ -989,19 +996,28 @@ def run_remote_phase(
     rules: Mapping[str, object] | None,
     ssh_bin: str,
     timeout: int,
+    member_timeout: int | None = None,
+    memory_limit_bytes: int | None = None,
 ) -> dict[str, object]:
     validate_ssh_target(target)
     if phase not in {"schema", "quality"}:
         raise ValueError("远端审计阶段非法")
     if timeout < 10 or timeout > 7200:
         raise ValueError("远端审计超时必须在10至7200秒之间")
+    if member_timeout is None:
+        member_timeout = min(300, max(30, timeout // max(1, len(units))))
+    if member_timeout < 10 or member_timeout > 300:
+        raise ValueError("单成员超时必须在10至300秒之间")
+    if memory_limit_bytes is not None and not 64 * 1024 * 1024 <= memory_limit_bytes <= 2 * 1024 * 1024 * 1024:
+        raise ValueError("内存上限必须在64MiB至2GiB之间")
     request = {
         "audit_version": AUDIT_VERSION,
         "phase": phase,
         "objects": _remote_units(units),
         "rules": rules,
         "duplicate_limit": 500_000,
-        "object_timeout": min(300, max(30, timeout // max(1, len(units)))),
+        "object_timeout": member_timeout,
+        "memory_limit_bytes": memory_limit_bytes,
     }
     command = [
         ssh_bin,
@@ -1483,6 +1499,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=3600,
         help="每个远端阶段总体超时秒数，范围10至7200",
     )
+    parser.add_argument(
+        "--member-timeout",
+        type=int,
+        default=None,
+        help="每个成员的远端只读超时秒数，范围10至300",
+    )
+    parser.add_argument(
+        "--memory-limit-bytes",
+        type=int,
+        default=None,
+        help="远端只读审计地址空间上限，范围64MiB至2GiB",
+    )
     parser.add_argument("--output-dir", type=Path, required=True, help="三份CSV输出目录")
     parser.add_argument("--report", type=Path, required=True, help="Markdown报告路径")
     return parser
@@ -1495,6 +1523,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         validate_ssh_target(arguments.ssh_target)
         if arguments.timeout < 10 or arguments.timeout > 7200:
             raise ValueError("超时必须在10至7200秒之间")
+        if arguments.member_timeout is not None and not 10 <= arguments.member_timeout <= 300:
+            raise ValueError("单成员超时必须在10至300秒之间")
+        if arguments.memory_limit_bytes is not None and not 64 * 1024 * 1024 <= arguments.memory_limit_bytes <= 2 * 1024 * 1024 * 1024:
+            raise ValueError("内存上限必须在64MiB至2GiB之间")
         rows = load_inventory(arguments.inventory)
         units = build_validation_units(rows)
         if not units:
@@ -1511,6 +1543,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             None,
             arguments.ssh_bin,
             arguments.timeout,
+            arguments.member_timeout,
+            arguments.memory_limit_bytes,
         )
         rules, rules_sha256 = freeze_rules(schema_payload)
         schema_sha256 = _fingerprint(schema_payload)
@@ -1524,6 +1558,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             rules,
             arguments.ssh_bin,
             arguments.timeout,
+            arguments.member_timeout,
+            arguments.memory_limit_bytes,
         )
         metadata = {
             "audit_batch": audit_batch,

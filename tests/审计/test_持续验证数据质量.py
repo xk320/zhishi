@@ -108,7 +108,7 @@ def write_inventory(path: Path) -> None:
 
 def valid_plan(inventory: Path) -> dict[str, object]:
     return {
-        "方案版本": "dq-continuous-plan-1.1",
+        "方案版本": "dq-continuous-plan-1.2",
         "底层审计规则版本": "dq-rules-1.0",
         "资产清单指纹": sha256(inventory),
         "允许SSH目标": ["ubuntu"],
@@ -140,7 +140,9 @@ def valid_plan(inventory: Path) -> dict[str, object]:
         },
         "资源上限": {
             "批次总超时秒": 3600,
+            "单成员超时秒": 30,
             "最大成员数": 500,
+            "最大内存字节数": 512 * 1024 * 1024,
             "最大输出字节数": 10 * 1024 * 1024,
             "最大日志字节数": 4096,
         },
