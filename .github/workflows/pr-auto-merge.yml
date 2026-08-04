@@ -77,6 +77,10 @@ jobs:
           metadata = {
               "body": pull_request.get("body") or "",
               "base_ref": pull_request["base"]["ref"],
+              "base_sha": pull_request["base"]["sha"],
+              "head_ref": pull_request["head"]["ref"],
+              "head_sha": pull_request["head"]["sha"],
+              "pr_number": pull_request["number"],
               "repository": pull_request["base"]["repo"]["full_name"],
               "head_repository": pull_request["head"]["repo"]["full_name"],
           }

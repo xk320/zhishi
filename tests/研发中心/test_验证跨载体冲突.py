@@ -2,6 +2,7 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -95,7 +96,87 @@ class CrossCarrierConflictTests(unittest.TestCase):
         self.assertIn("任务-000049", repaired)
         self.assertIn("## 待执行", repaired)
         self.assertIn("## 状态维护要求", repaired)
-        self.assertEqual(board.count("任务-000049"), 1)
+        self.assertIn("000049", repaired)
+        self.assertNotIn("任务文件记录", repaired)
+
+    def test元数据资源与评审证据均绑定当前提交(self):
+        base_sha = CONFLICT._resolve_ref(ROOT, "main")
+        self.assertIsNotNone(base_sha)
+        metadata = {
+            "base_ref": "main",
+            "base_sha": base_sha,
+            "head_ref": "codex/000049-conflict-resolution-v1",
+            "head_sha": base_sha,
+            "pr_number": 83,
+            "repository": "xk320/zhishi",
+            "head_repository": "xk320/zhishi",
+        }
+        evidence = {
+            "base_sha": base_sha,
+            "head_sha": base_sha,
+            "reviews": [
+                {"reviewed_base_sha": base_sha, "reviewed_head_sha": base_sha},
+                {"reviewed_base_sha": base_sha, "reviewed_head_sha": base_sha},
+            ],
+        }
+        report = CONFLICT.check_refs(
+            ROOT,
+            "main",
+            "main",
+            metadata=metadata,
+            review_evidence=evidence,
+            resource_policy={
+                "memory_pressure": "normal",
+                "memory_available_percent": 66,
+                "disk_available_gib": 134,
+            },
+        )
+        self.assertTrue(report.ok, report.reasons)
+
+    def test元数据漂移失败关闭(self):
+        report = CONFLICT.check_refs(
+            ROOT,
+            "main",
+            "main",
+            metadata={"base_ref": "develop", "repository": "xk320/zhishi"},
+        )
+        self.assertFalse(report.ok)
+        self.assertTrue(any("PR_BASELINE_DRIFT" in reason for reason in report.reasons))
+
+    def test研究尺度越界失败关闭(self):
+        original = CONFLICT._read_at_ref
+
+        def altered(repo_root, ref, path):
+            text = original(repo_root, ref, path)
+            if path == CONFLICT.SCALE_SCOPE_DOCS[0] and text is not None:
+                return text.replace("15分钟", "")
+            return text
+
+        with mock.patch.object(CONFLICT, "_read_at_ref", side_effect=altered):
+            conflicts = []
+            CONFLICT._check_scope(ROOT, "main", conflicts)
+        self.assertTrue(any(item.code == "SCOPE_BOUNDARY_DRIFT" for item in conflicts))
+
+    def test历史证据变更失败关闭(self):
+        original = CONFLICT._read_at_ref
+        main_sha = CONFLICT._resolve_ref(ROOT, "main")
+        head_sha = CONFLICT._resolve_ref(ROOT, "HEAD")
+        path = next(
+            path
+            for path in CONFLICT.HISTORICAL_IMMUTABLE_PATHS
+            if original(ROOT, "main", path) is not None
+        )
+
+        def altered(repo_root, ref, requested):
+            value = original(repo_root, ref, requested)
+            if requested == path and ref == head_sha:
+                return (value or "") + "\n未经授权变更"
+            return value
+
+        conflicts = []
+        with mock.patch.object(CONFLICT, "_read_at_ref", side_effect=altered):
+            CONFLICT._check_historical_immutability(ROOT, main_sha, head_sha, conflicts)
+        self.assertTrue(any(item.code == "SCOPE_BOUNDARY_DRIFT" for item in conflicts))
 
 
 if __name__ == "__main__":

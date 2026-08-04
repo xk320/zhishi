@@ -73,13 +73,31 @@ GOVERNANCE_CONTROL_PATHS = frozenset({"docs/研发中心/任务看板模式.md"}
 
 
 def _cross_carrier_conflict_reasons(
-    repo_root: Path, base_ref: str, head_ref: str
+    repo_root: Path,
+    base_ref: str,
+    head_ref: str,
+    *,
+    metadata: Mapping[str, object] | None = None,
+    changed_paths: Sequence[str] = (),
+    task_id: str = "",
 ) -> tuple[str, ...]:
-    """从main可信树加载冲突检查器；缺少新入口时保持旧基线兼容。"""
+    """从main可信树加载冲突检查器；仅允许一次可审计的治理入口引导。"""
 
     conflict_checker_path = repo_root / "scripts/研发中心/验证跨载体冲突.py"
     if not conflict_checker_path.exists():
-        return ()
+        # 任务-000049首次引入可信检查器。base仍是旧可信树，不能执行head代码；
+        # 该一次性引导由任务合同和本函数共同限定，其他任务一律失败关闭。
+        if (
+            task_id == "000049"
+            and "scripts/研发中心/验证跨载体冲突.py" in changed_paths
+            and "docs/治理/研发中心跨载体冲突处理协议.md" in changed_paths
+        ):
+            return ()
+        # 早于任务-000049登记的最小策略测试仓库没有这项治理合同；真实仓库
+        # 一旦任务-000049进入基线，入口缺失即不再兼容，必须失败关闭。
+        if not (repo_root / "docs/研发中心/任务/任务-000049.md").exists():
+            return ()
+        return ("UNCLASSIFIED_CONFLICT:冲突检查器缺失:失败关闭",)
     try:
         spec = importlib.util.spec_from_file_location(
             "zhishi_cross_carrier_conflict", conflict_checker_path
@@ -89,7 +107,13 @@ def _cross_carrier_conflict_reasons(
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
-        report = module.check_refs(repo_root, base_ref, head_ref)
+        report = module.check_refs(
+            repo_root,
+            base_ref,
+            head_ref,
+            metadata=metadata,
+            task_id=task_id,
+        )
         return tuple(report.reasons)
     except (OSError, ImportError, TypeError, ValueError, AttributeError):
         return ("UNCLASSIFIED_CONFLICT:冲突检查器:失败关闭",)
@@ -2359,7 +2383,16 @@ def main() -> int:
         enforce_board_sync=True,
     )
     conflict_reasons = _cross_carrier_conflict_reasons(
-        repo_root, arguments.base_ref, arguments.head_ref
+        repo_root,
+        arguments.base_ref,
+        arguments.head_ref,
+        metadata={
+            **metadata,
+            "base_sha": arguments.base_ref,
+            "head_sha": arguments.head_ref,
+        },
+        changed_paths=changed_paths,
+        task_id=next(iter(ordered_ids), ""),
     )
     if conflict_reasons:
         result = EligibilityResult(

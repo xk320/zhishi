@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import inspect
 import json
 import re
 import subprocess
@@ -40,6 +41,21 @@ CURRENT_SCOPE_CONFIGS = (
     "config/审计/最小数据闭环容量.json",
 )
 FORWARD_SCOPE_DOCS = ("AGENTS.md", "README.md")
+SCALE_SCOPE_DOCS = (
+    "docs/研究/市场状态—事件关联分析合同.md",
+    "docs/研究/数据质量持续验证合同.md",
+    "docs/架构/历史事件回放与结果统计体系.md",
+)
+HISTORICAL_IMMUTABLE_PATHS = (
+    "docs/治理/整体评估-2026-07-22.md",
+    "docs/审计/数据资产审计报告.md",
+    "docs/审计/数据源清单.md",
+    "artifacts/审计/数据源清单.csv",
+    "docs/审计/数据质量审计报告.md",
+    "artifacts/审计/数据质量结果.csv",
+    "docs/审计/历史现场重放验证.md",
+    "artifacts/审计/历史重放结果.csv",
+)
 CONFLICT_CODES = (
     "BOARD_DERIVED_DRIFT",
     "TASK_DUPLICATE",
@@ -52,20 +68,10 @@ CONFLICT_CODES = (
     "UNCLASSIFIED_CONFLICT",
 )
 MAX_TEXT_BYTES = 5 * 1024 * 1024
-RULE_FINGERPRINT = hashlib.sha256(
-    json.dumps(
-        {
-            "protocol_version": PROTOCOL_VERSION,
-            "codes": CONFLICT_CODES,
-            "statuses": sorted(STANDARD_STATUSES),
-            "sections": SECTIONS,
-            "scope_configs": CURRENT_SCOPE_CONFIGS,
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-).hexdigest()
+RULE_FINGERPRINT = ""
+MAX_GIT_SECONDS = 15
+MAX_TASK_FILES = 500
+MAX_TREE_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -162,18 +168,26 @@ def review_evidence_is_current(
 
 
 def _git(repo_root: Path, *arguments: str) -> tuple[int, bytes, bytes]:
-    result = subprocess.run(
-        ["git", *arguments],
-        cwd=repo_root,
-        check=False,
-        capture_output=True,
-    )
+    try:
+        result = subprocess.run(
+            ["git", *arguments],
+            cwd=repo_root,
+            check=False,
+            capture_output=True,
+            timeout=MAX_GIT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return 124, b"", b"timeout"
+    except OSError:
+        return 126, b"", b"os-error"
     return result.returncode, result.stdout, result.stderr
 
 
 def _resolve_ref(repo_root: Path, ref: str) -> str | None:
     code, stdout, _ = _git(repo_root, "rev-parse", "--verify", f"{ref}^{{commit}}")
     if code != 0:
+        return None
+    if len(stdout) > MAX_TREE_BYTES:
         return None
     value = stdout.decode("ascii", errors="ignore").strip()
     return value if re.fullmatch(r"[0-9a-f]{40}", value) else None
@@ -222,6 +236,18 @@ def _task_records(
                 decision="失败关闭",
                 repair_mode="禁止写入",
                 release_condition="恢复可读Git树并重新检查",
+            )
+        )
+        return {}
+    if len(paths) > MAX_TASK_FILES:
+        conflicts.append(
+            _conflict(
+                "RESOURCE_OR_API_FAILURE",
+                TASK_DIR,
+                authority="资源策略",
+                decision="失败关闭",
+                repair_mode="禁止扩容或重试为成功",
+                release_condition="降低任务文件数量并重新检查",
             )
         )
         return {}
@@ -583,6 +609,247 @@ def _check_scope(repo_root: Path, ref: str, conflicts: list[Conflict]) -> None:
                     release_condition="补齐BTC/ETH现行范围声明",
                 )
             )
+    for path in SCALE_SCOPE_DOCS:
+        text = _read_at_ref(repo_root, ref, path)
+        if text is None:
+            conflicts.append(
+                _conflict(
+                    "SCOPE_BOUNDARY_DRIFT",
+                    path,
+                    authority="当前研究尺度合同",
+                    decision="失败关闭",
+                    repair_mode="禁止猜测尺度",
+                    release_condition="恢复主研究尺度和观察窗口合同",
+                )
+            )
+            continue
+        if any(scale not in text for scale in ("4小时", "8小时", "24小时", "48小时")):
+            conflicts.append(
+                _conflict(
+                    "SCOPE_BOUNDARY_DRIFT",
+                    path,
+                    authority="当前研究尺度合同",
+                    decision="失败关闭",
+                    repair_mode="禁止猜测尺度",
+                    release_condition="恢复4/8/24/48小时主研究尺度",
+                )
+            )
+        if "15分钟" not in text or "1小时" not in text or not any(
+            phrase in text for phrase in ("事后结果观察", "事后观察", "结果观察窗口")
+        ):
+            conflicts.append(
+                _conflict(
+                    "SCOPE_BOUNDARY_DRIFT",
+                    path,
+                    authority="当前研究尺度合同",
+                    decision="失败关闭",
+                    repair_mode="禁止短窗口越权",
+                    release_condition="明确15分钟/1小时仅为事后观察窗口",
+                )
+            )
+        current_text = text.split("## 十、初始真实批次", 1)[0]
+        for line in current_text.splitlines():
+            if "SOL" in line and not any(
+                marker in line for marker in ("历史", "不可变", "仅历史", "不属于当前", "未纳入")
+            ):
+                conflicts.append(
+                    _conflict(
+                        "SCOPE_BOUNDARY_DRIFT",
+                        path,
+                        authority="当前前向研究范围",
+                        decision="失败关闭",
+                        repair_mode="禁止删除或改写历史",
+                        release_condition="将SOL限制为明确历史上下文或移出当前入口",
+                    )
+                )
+
+
+def _check_historical_immutability(
+    repo_root: Path, base_ref: str, head_ref: str, conflicts: list[Conflict]
+) -> None:
+    for path in HISTORICAL_IMMUTABLE_PATHS:
+        base = _read_at_ref(repo_root, base_ref, path)
+        head = _read_at_ref(repo_root, head_ref, path)
+        if base is not None and head is not None and base != head:
+            conflicts.append(
+                _conflict(
+                    "SCOPE_BOUNDARY_DRIFT",
+                    path,
+                    authority="不可变历史证据",
+                    decision="失败关闭",
+                    repair_mode="禁止改写历史证据",
+                    release_condition="回滚历史文件变更并重新检查",
+                )
+            )
+        elif (base is None) != (head is None):
+            conflicts.append(
+                _conflict(
+                    "SCOPE_BOUNDARY_DRIFT",
+                    path,
+                    authority="不可变历史证据",
+                    decision="失败关闭",
+                    repair_mode="禁止删除或新增历史替代物",
+                    release_condition="恢复历史路径并重新检查",
+                )
+            )
+
+
+def _check_metadata(
+    metadata: Mapping[str, object] | None,
+    *,
+    base_sha: str,
+    head_sha: str,
+    task_id: str,
+    conflicts: list[Conflict],
+) -> None:
+    """校验来自GitHub事件的不可变身份，不信任PR正文替代提交身份。"""
+
+    if metadata is None:
+        return
+    expected = {
+        "base_ref": "main",
+        "repository": "xk320/zhishi",
+        "head_repository": "xk320/zhishi",
+    }
+    for key, value in expected.items():
+        if metadata.get(key) != value:
+            conflicts.append(
+                _conflict(
+                    "PR_BASELINE_DRIFT",
+                    "github-metadata",
+                    authority="GitHub Pull Request元数据",
+                    decision="失败关闭",
+                    repair_mode="禁止猜测元数据",
+                    release_condition=f"恢复{key}为受信任值并重新检查",
+                )
+            )
+    for key, value in (("base_sha", base_sha), ("head_sha", head_sha)):
+        supplied = metadata.get(key)
+        if supplied is not None and supplied != value:
+            conflicts.append(
+                _conflict(
+                    "PR_BASELINE_DRIFT",
+                    "github-metadata",
+                    authority="GitHub提交身份",
+                    decision="失败关闭",
+                    repair_mode="禁止沿用旧证据",
+                    release_condition=f"将元数据{key}绑定到当前提交SHA",
+                )
+            )
+    head_ref = metadata.get("head_ref")
+    if head_ref is not None and (
+        not isinstance(head_ref, str) or not head_ref.startswith("codex/")
+    ):
+        conflicts.append(
+            _conflict(
+                "PR_BASELINE_DRIFT",
+                "github-metadata",
+                authority="GitHub执行分支身份",
+                decision="失败关闭",
+                repair_mode="禁止执行未知来源分支",
+                release_condition="使用codex/前缀的仓库内执行分支",
+            )
+        )
+    if task_id and metadata.get("pr_number") is not None:
+        try:
+            if int(metadata["pr_number"]) <= 0:  # type: ignore[arg-type]
+                raise ValueError
+        except (TypeError, ValueError):
+            conflicts.append(
+                _conflict(
+                    "PR_BASELINE_DRIFT",
+                    "github-metadata",
+                    authority="GitHub Pull Request元数据",
+                    decision="失败关闭",
+                    repair_mode="禁止猜测PR编号",
+                    release_condition="提供正整数PR编号并重新检查",
+                )
+            )
+
+
+def _check_resource_policy(
+    resource_policy: Mapping[str, object] | None, conflicts: list[Conflict]
+) -> None:
+    if resource_policy is None:
+        return
+    try:
+        memory_pressure = str(resource_policy["memory_pressure"])
+        memory_available = float(resource_policy["memory_available_percent"])
+        disk_available = float(resource_policy["disk_available_gib"])
+    except (KeyError, TypeError, ValueError):
+        conflicts.append(
+            _conflict(
+                "RESOURCE_OR_API_FAILURE",
+                "resource_policy",
+                authority="资源策略",
+                decision="失败关闭",
+                repair_mode="禁止猜测资源状态",
+                release_condition="补齐可验证资源测量并重新检查",
+            )
+        )
+        return
+    if not resource_policy_is_safe(
+        memory_pressure=memory_pressure,
+        memory_available_percent=memory_available,
+        disk_available_gib=disk_available,
+    ):
+        conflicts.append(
+            _conflict(
+                "RESOURCE_OR_API_FAILURE",
+                "resource_policy",
+                authority="资源策略",
+                decision="失败关闭",
+                repair_mode="停止任务，不通过重试规避资源门",
+                release_condition="资源恢复到任务合同上限后重新测量",
+            )
+        )
+
+
+def _check_review_evidence(
+    review_evidence: Mapping[str, object] | None,
+    *,
+    base_sha: str,
+    head_sha: str,
+    conflicts: list[Conflict],
+) -> None:
+    if review_evidence is None:
+        return
+    if not review_evidence_is_current(
+        base_sha=base_sha,
+        head_sha=head_sha,
+        reviewed_base_sha=str(review_evidence.get("base_sha", "")),
+        reviewed_head_sha=str(review_evidence.get("head_sha", "")),
+    ):
+        conflicts.append(
+            _conflict(
+                "REVIEW_EVIDENCE_STALE",
+                "review_evidence",
+                authority="双子智能体评审证据",
+                decision="失败关闭",
+                repair_mode="提交变化后必须重新评审",
+                release_condition="重新生成并绑定当前base/head SHA的证据",
+            )
+        )
+    reviews = review_evidence.get("reviews")
+    if not isinstance(reviews, list) or len(reviews) != 2:
+        return
+    for review in reviews:
+        if not isinstance(review, Mapping) or not review_evidence_is_current(
+            base_sha=base_sha,
+            head_sha=head_sha,
+            reviewed_base_sha=str(review.get("reviewed_base_sha", "")),
+            reviewed_head_sha=str(review.get("reviewed_head_sha", "")),
+        ):
+            conflicts.append(
+                _conflict(
+                    "REVIEW_EVIDENCE_STALE",
+                    "review_evidence.reviews",
+                    authority="双子智能体评审证据",
+                    decision="失败关闭",
+                    repair_mode="提交变化后必须重新评审",
+                    release_condition="两个独立评审均绑定当前base/head SHA",
+                )
+            )
 
 
 def check_tree(repo_root: Path, ref: str) -> tuple[str, tuple[Conflict, ...]]:
@@ -613,7 +880,16 @@ def check_tree(repo_root: Path, ref: str) -> tuple[str, tuple[Conflict, ...]]:
     return resolved, tuple(unique[key] for key in sorted(unique))
 
 
-def check_refs(repo_root: Path, base_ref: str, head_ref: str) -> ConflictReport:
+def check_refs(
+    repo_root: Path,
+    base_ref: str,
+    head_ref: str,
+    *,
+    metadata: Mapping[str, object] | None = None,
+    review_evidence: Mapping[str, object] | None = None,
+    resource_policy: Mapping[str, object] | None = None,
+    task_id: str = "",
+) -> ConflictReport:
     """检查base/head身份与两棵树，供可信资格校验器复用。"""
 
     base_sha = _resolve_ref(repo_root, base_ref) or ""
@@ -646,6 +922,22 @@ def check_refs(repo_root: Path, base_ref: str, head_ref: str) -> ConflictReport:
     _, base_conflicts = check_tree(repo_root, base_ref)
     _, head_conflicts = check_tree(repo_root, head_ref)
     conflicts.extend((*base_conflicts, *head_conflicts))
+    if base_sha and head_sha:
+        _check_historical_immutability(repo_root, base_sha, head_sha, conflicts)
+    _check_metadata(
+        metadata,
+        base_sha=base_sha,
+        head_sha=head_sha,
+        task_id=task_id,
+        conflicts=conflicts,
+    )
+    _check_resource_policy(resource_policy, conflicts)
+    _check_review_evidence(
+        review_evidence,
+        base_sha=base_sha,
+        head_sha=head_sha,
+        conflicts=conflicts,
+    )
     unique = {
         (item.code, item.path, item.decision, item.release_condition): item
         for item in conflicts
@@ -706,19 +998,63 @@ def repair_board_text(
     return "\n".join(output).rstrip() + "\n"
 
 
+def _compute_rule_fingerprint() -> str:
+    """对影响冲突判断的规则和实现取指纹，提交变化即使旧证据失效。"""
+
+    names = (
+        "_check_board",
+        "_check_dependencies",
+        "_check_scope",
+        "_check_historical_immutability",
+        "_check_metadata",
+        "_check_resource_policy",
+        "_check_review_evidence",
+        "check_refs",
+        "repair_board_text",
+    )
+    sources: list[str] = [
+        PROTOCOL_VERSION,
+        repr(STANDARD_STATUSES),
+        repr(SECTIONS),
+        repr(CURRENT_SCOPE_CONFIGS),
+        repr(FORWARD_SCOPE_DOCS),
+        repr(SCALE_SCOPE_DOCS),
+        repr(HISTORICAL_IMMUTABLE_PATHS),
+        str(MAX_TEXT_BYTES),
+        str(MAX_GIT_SECONDS),
+        str(MAX_TASK_FILES),
+        str(MAX_TREE_BYTES),
+    ]
+    for name in names:
+        try:
+            sources.append(inspect.getsource(globals()[name]))
+        except (KeyError, OSError, TypeError):
+            sources.append(name)
+    return hashlib.sha256("\n".join(sources).encode("utf-8")).hexdigest()
+
+
+RULE_FINGERPRINT = _compute_rule_fingerprint()
+
+
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="验证研发中心跨载体冲突")
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--base-ref", required=True)
     parser.add_argument("--head-ref", required=True)
+    parser.add_argument("--task-id", default="")
     parser.add_argument("--repair-board", action="store_true")
     return parser.parse_args()
 
 
 def main() -> int:
     arguments = _arguments()
-    report = check_refs(arguments.repo_root.resolve(), arguments.base_ref, arguments.head_ref)
-    payload = report.as_dict()
+    report = check_refs(
+        arguments.repo_root.resolve(),
+        arguments.base_ref,
+        arguments.head_ref,
+        task_id=arguments.task_id,
+    )
+    payload = report.as_dict(task_id=arguments.task_id)
     payload["repair_plan"] = (
         "仅可从任务文件重建派生看板；同级合同冲突必须阻塞"
         if any(item.code == "BOARD_DERIVED_DRIFT" for item in report.conflicts)
