@@ -2,6 +2,7 @@ from pathlib import Path
 import unittest
 from datetime import datetime, timedelta, timezone
 import importlib.util
+import json
 import re
 
 
@@ -22,6 +23,37 @@ FORBIDDEN_CURRENT_CLAIMS = {
     "docs/研发中心/Codex自动执行提示词.md": ("服务器连接已经恢复",),
     "docs/研究/数据验证阶段执行规范.md": ("服务器连接已恢复", "数据服务器连接已经恢复"),
 }
+BOARD_SCHEMA_PATH = ROOT / "docs/研发中心/任务看板模式.md"
+
+
+def _insert_board_row(board: str, section: str, row: str) -> str:
+    """按唯一机器看板模式在内存夹具中插入任务行，兼容空分区。"""
+
+    schema = json.loads(BOARD_SCHEMA_PATH.read_text(encoding="utf-8"))
+    header, separator = schema["sections"][section]
+    table = f"## {section}\n\n{header}\n{separator}"
+    if table in board:
+        return board.replace(table, f"{table}\n{row}", 1)
+    empty = f"## {section}\n\n无。"
+    if empty in board:
+        return board.replace(empty, f"{table}\n{row}", 1)
+    raise AssertionError(f"看板缺少可插入的{section}分区")
+
+
+def _replace_board_section_with_empty(board: str, section: str) -> str:
+    """按章节边界清空内存看板夹具中的一个状态分区。"""
+
+    lines = board.splitlines()
+    heading = f"## {section}"
+    try:
+        start = lines.index(heading)
+    except ValueError as error:
+        raise AssertionError(f"看板缺少{section}分区") from error
+    end = next(
+        (index for index in range(start + 1, len(lines)) if lines[index].startswith("## ")),
+        len(lines),
+    )
+    return "\n".join(lines[:start] + [heading, "", "无。"] + lines[end:]) + "\n"
 
 
 class ExternalStateConsistencyTests(unittest.TestCase):
@@ -104,33 +136,21 @@ class ExternalStateConsistencyTests(unittest.TestCase):
             completed_task = task.replace("- 状态：待评审", "- 状态：已完成")
             completed_task += "\n- 合并提交SHA：`abe66037161332d350b9782492beedd8898a4f8a`\n"
             completed_board = board.replace(pending_row, "")
-            completed_board = completed_board.replace(
-                "## 已完成\n\n| 任务 | 名称 | 完成证据 |\n| --- | --- | --- |",
-                "## 已完成\n\n| 任务 | 名称 | 完成证据 |\n| --- | --- | --- |\n" + completed_row,
-            )
+            completed_board = _insert_board_row(completed_board, "已完成", completed_row)
             self._assert_task043_state_mapping(completed_task, completed_board)
         else:
             pending_task = task.replace("- 状态：已完成", "- 状态：待评审")
             pending_board = board.replace(completed_row, "")
-            pending_board = pending_board.replace(
-                "## 待评审\n\n| 优先级 | 任务 | 名称 | 分支 | PR |\n| --- | --- | --- | --- | --- |",
-                "## 待评审\n\n| 优先级 | 任务 | 名称 | 分支 | PR |\n| --- | --- | --- | --- | --- |\n" + pending_row,
-            )
+            pending_board = _insert_board_row(pending_board, "待评审", pending_row)
             self._assert_task043_state_mapping(pending_task, pending_board)
 
         current_row = pending_row if "- 状态：待评审" in task else completed_row
         wrong_section_row = pending_row if "- 状态：待评审" in task else completed_row
         wrong_section_board = board.replace(current_row, "")
         if "- 状态：待评审" in task:
-            wrong_section_board = wrong_section_board.replace(
-                "## 已完成\n\n| 任务 | 名称 | 完成证据 |\n| --- | --- | --- |",
-                "## 已完成\n\n| 任务 | 名称 | 完成证据 |\n| --- | --- | --- |\n" + wrong_section_row,
-            )
+            wrong_section_board = _insert_board_row(wrong_section_board, "已完成", wrong_section_row)
         else:
-            wrong_section_board = wrong_section_board.replace(
-                "## 待评审\n\n| 优先级 | 任务 | 名称 | 分支 | PR |\n| --- | --- | --- | --- | --- |",
-                "## 待评审\n\n| 优先级 | 任务 | 名称 | 分支 | PR |\n| --- | --- | --- | --- | --- |\n" + wrong_section_row,
-            )
+            wrong_section_board = _insert_board_row(wrong_section_board, "待评审", wrong_section_row)
         with self.assertRaises(AssertionError):
             self._assert_task043_state_mapping(task, wrong_section_board)
 
@@ -149,6 +169,27 @@ class ExternalStateConsistencyTests(unittest.TestCase):
         ):
             with self.assertRaises(AssertionError):
                 self._assert_task043_state_mapping(malformed, board)
+
+    def test_任务043完成态且待评审为空时可构造反向夹具(self):
+        task = (ROOT / "docs/研发中心/任务/任务-000043.md").read_text(encoding="utf-8")
+        board = (ROOT / "docs/研发中心/看板.md").read_text(encoding="utf-8")
+        completed_row = (
+            "| 任务-000043 | 统一外部环境事实与阶段状态声明 | "
+            "PR #62；合并提交 `abe66037161332d350b9782492beedd8898a4f8a` |"
+        )
+        empty_board = _replace_board_section_with_empty(
+            board.replace(completed_row, ""), "待评审"
+        )
+        pending_section = empty_board.split("## 待评审", 1)[1].split("## 需修复", 1)[0]
+        self.assertEqual(pending_section.strip(), "无。")
+        pending_task = task.replace("- 状态：已完成", "- 状态：待评审")
+        pending_row = (
+            "| P0 | 任务-000043 | 统一外部环境事实与阶段状态声明 | "
+            "`codex/000043-external-state-consistency-v1` | "
+            "[#62](https://github.com/xk320/zhishi/pull/62) |"
+        )
+        pending_board = _insert_board_row(empty_board, "待评审", pending_row)
+        self._assert_task043_state_mapping(pending_task, pending_board)
 
     def test_历史任务记录仍保留(self):
         historical = (ROOT / "docs/研发中心/任务/任务-000028.md").read_text(encoding="utf-8")
