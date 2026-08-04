@@ -60,13 +60,19 @@ class TrustedReplayTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.mod.load_inputs(ROOT, broken)
 
+    def test_批准输入路径和身份不可替换(self):
+        broken = json.loads(json.dumps(self.config))
+        broken["输入"]["质量验证清单"]["质量结果"] = "artifacts/伪造.csv"
+        with self.assertRaises(ValueError):
+            self.mod.load_inputs(ROOT, broken)
+
     def test_批次目录不可覆盖(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             destination = root / "replay-20260805T012500+0800-000000000000"
             destination.mkdir()
             with self.assertRaises(ValueError):
-                self.mod.publish_batch(root, destination.name, [], "", {}, {"验证批次": destination.name})
+                self.mod.publish_batch(root, destination.name, [], "", {}, {"验证批次": destination.name}, max_output_bytes=1024)
 
 
 if __name__ == "__main__":

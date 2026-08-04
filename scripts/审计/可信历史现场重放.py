@@ -13,12 +13,20 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
+import sys
+try:
+    import resource
+except ImportError:  # pragma: no cover - Windows开发环境不作为正式目标
+    resource = None
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
 
 SCRIPT_VERSION = "trusted-replay-source-1.0"
 CONTRACT_VERSION = "trusted-replay-source-1.0"
+CONFIG_RELATIVE_PATH = Path("config/审计/可信重放来源.json")
+CONFIG_SHA256 = "4492706a93207fb6eb0ddaec4ab6993b57b0cb68fa41f15719fa4755a16a1ff8"
 TARGETS = ("BTC", "ETH")
 SCALES = ("4小时", "8小时", "24小时", "48小时")
 QUALITY_COLUMNS = (
@@ -99,8 +107,8 @@ def validate_config(config: Mapping[str, object]) -> None:
         raise ValueError("config_scale_mismatch")
     resources = config["资源上限"]
     if not isinstance(resources, dict) or resources != {
-        "远端预检超时秒": 30, "批次总超时秒": 300, "最大成员数": 1000,
-        "最大输出字节数": 16777216, "最大日志字节数": 4096,
+        "远端预检超时秒": 30, "单成员超时秒": 30, "批次总超时秒": 300, "最大成员数": 1000,
+        "最大输出字节数": 16777216, "最大日志字节数": 4096, "最大内存字节数": 536870912,
     }:
         raise ValueError("config_resource_mismatch")
     security = config["安全边界"]
@@ -120,6 +128,22 @@ def load_inputs(repo_root: Path, config: Mapping[str, object]) -> tuple[dict[str
     quality_spec = inputs["质量验证清单"]
     if not isinstance(source_spec, dict) or not isinstance(quality_spec, dict):
         raise ValueError("config_input_spec_invalid")
+    expected_source_spec = {
+        "路径": "artifacts/数据/来源身份/source-identity-20260803T131620+0800-e7bc65038f21/身份清单.json",
+        "SHA-256": "d1aaa54761d5af4af4f9ace7ee768fc766153699f3ebbfba2c07c89a9f4eb636",
+        "合同版本": "source-identity-1.0", "任务编号": "任务-000029",
+    }
+    expected_quality_spec = {
+        "路径": "artifacts/审计/数据质量/dqv-20260805T005824+0800-95d2dd93a03d/验证清单.json",
+        "SHA-256": "10d2cf2a91f97066c28a6331cffcc33582381fa49b17368b5e3eaa9ff735c11c",
+        "质量结果": "artifacts/审计/数据质量/dqv-20260805T005824+0800-95d2dd93a03d/数据质量结果.csv",
+        "质量结果SHA-256": "166e5bded1ef76413be43698d0e88e8030af986004b0e4b9b65078bfb78077bb",
+    }
+    if source_spec != expected_source_spec or quality_spec != expected_quality_spec or inputs.get("任务-000031合并提交") != "bf8a00f95cdf5be9d56b963e6fa8f29807dbb918":
+        raise ValueError("approved_input_identity_mismatch")
+    history_spec = inputs.get("历史决策登记")
+    if history_spec != {"路径": "artifacts/审计/历史现场重放/决策记录登记.csv", "状态": "未登记"}:
+        raise ValueError("history_registry_contract_mismatch")
     source_path = repo_root / str(source_spec["路径"])
     quality_manifest_path = repo_root / str(quality_spec["路径"])
     quality_path = repo_root / str(quality_spec["质量结果"])
@@ -155,7 +179,7 @@ REMOTE_PREFLIGHT = (
 )
 
 
-def run_remote_preflight(target: str, timeout: int = 30) -> dict[str, str]:
+def run_remote_preflight(target: str, timeout: int = 30, max_log_bytes: int = 4096) -> dict[str, str]:
     if target != "ubuntu":
         raise ValueError("ssh_target_not_allowlisted")
     command = [
@@ -166,6 +190,8 @@ def run_remote_preflight(target: str, timeout: int = 30) -> dict[str, str]:
         result = subprocess.run(command, input=REMOTE_PREFLIGHT, text=True, capture_output=True, timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise RuntimeError("remote_preflight_failed") from error
+    if len(result.stderr.encode("utf-8", errors="replace")) > max_log_bytes:
+        raise RuntimeError("remote_log_limit_exceeded")
     if result.returncode != 0:
         raise RuntimeError("remote_preflight_failed")
     try:
@@ -191,11 +217,14 @@ def visible_records(records: Iterable[Mapping[str, object]], decision_time: dt.d
     return visible
 
 
-def build_rows(batch: str, source: Mapping[str, object], quality: Mapping[str, Mapping[str, str]], members: Sequence[Mapping[str, object]], code_sha: str) -> list[dict[str, str]]:
+def build_rows(batch: str, source: Mapping[str, object], quality: Mapping[str, Mapping[str, str]], members: Sequence[Mapping[str, object]], code_sha: str, *, deadline: float | None = None, member_timeout: int = 30) -> list[dict[str, str]]:
     source_sha = str(source.get("成员SHA-256", ""))
     source_version = str(source.get("合同版本", ""))
     rows: list[dict[str, str]] = []
     for member in members:
+        started = time.monotonic()
+        if deadline is not None and started > deadline:
+            raise RuntimeError("batch_timeout")
         asset_id = str(member["资产编号"])
         target = str(member["标的"])
         quality_row = quality[asset_id]
@@ -230,10 +259,12 @@ def build_rows(batch: str, source: Mapping[str, object], quality: Mapping[str, M
         if len(canonical(row).encode()) > 16384:
             raise ValueError("member_output_too_large")
         rows.append(row)
+        if time.monotonic() - started > member_timeout:
+            raise RuntimeError("member_timeout")
     return rows
 
 
-def write_csv(path: Path, rows: Sequence[Mapping[str, str]]) -> str:
+def write_csv(path: Path, rows: Sequence[Mapping[str, str]], max_output_bytes: int) -> str:
     temp = path.with_name(f".{path.name}.tmp")
     with temp.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=RESULT_COLUMNS, lineterminator="\n")
@@ -241,6 +272,9 @@ def write_csv(path: Path, rows: Sequence[Mapping[str, str]]) -> str:
         for row in rows:
             writer.writerow({key: safe_text(row[key]) for key in RESULT_COLUMNS})
     data = temp.read_bytes()
+    if len(data) > max_output_bytes:
+        temp.unlink(missing_ok=True)
+        raise RuntimeError("output_limit_exceeded")
     os.replace(temp, path)
     return sha256_bytes(data)
 
@@ -259,6 +293,7 @@ def render_report(batch: str, rows: Sequence[Mapping[str, str]], remote: Mapping
         f"- 合同版本：`{CONTRACT_VERSION}`",
         f"- 验证批次：`{batch}`",
         f"- 远端只读预检：通过（Python {remote['python']}，未读取业务正文）",
+        "- 资源合同：批次总超时300秒、单成员30秒、最大输出16MiB、最大日志4096字节、最大内存512MiB；实测资源写入验证清单。",
         f"- 来源身份清单指纹：`{input_fingerprints['source']}`",
         f"- 质量验证清单指纹：`{input_fingerprints['quality_manifest']}`",
         f"- 任务-000031合并提交：`bf8a00f95cdf5be9d56b963e6fa8f29807dbb918`",
@@ -301,7 +336,7 @@ def render_report(batch: str, rows: Sequence[Mapping[str, str]], remote: Mapping
     return "\n".join(lines)
 
 
-def publish_batch(root: Path, batch: str, rows: Sequence[Mapping[str, str]], report: str, checklist: Mapping[str, object], index_row: Mapping[str, str]) -> dict[str, str]:
+def publish_batch(root: Path, batch: str, rows: Sequence[Mapping[str, str]], report: str, checklist: Mapping[str, object], index_row: Mapping[str, str], *, max_output_bytes: int) -> dict[str, str]:
     root.mkdir(parents=True, exist_ok=True)
     destination = root / batch
     if destination.exists() or destination.is_symlink():
@@ -309,13 +344,18 @@ def publish_batch(root: Path, batch: str, rows: Sequence[Mapping[str, str]], rep
     temporary = Path(tempfile.mkdtemp(prefix=f".{batch}.", dir=root))
     try:
         csv_path = temporary / "逐成员结果.csv"
-        csv_sha = write_csv(csv_path, rows)
+        csv_sha = write_csv(csv_path, rows, max_output_bytes)
         report_path = temporary / "验证报告.md"
         report_path.write_text(report, encoding="utf-8")
+        if report_path.stat().st_size > max_output_bytes:
+            raise RuntimeError("output_limit_exceeded")
         checklist_value = dict(checklist)
         checklist_value["逐成员结果SHA-256"] = csv_sha
         checklist_value["验证报告SHA-256"] = sha256_path(report_path)
-        (temporary / "验证清单.json").write_text(canonical(checklist_value) + "\n", encoding="utf-8")
+        checklist_path = temporary / "验证清单.json"
+        checklist_path.write_text(canonical(checklist_value) + "\n", encoding="utf-8")
+        if sum(path.stat().st_size for path in (csv_path, report_path, checklist_path)) > max_output_bytes:
+            raise RuntimeError("output_limit_exceeded")
         os.mkdir(destination)
         for child in temporary.iterdir():
             os.replace(child, destination / child.name)
@@ -337,18 +377,34 @@ def publish_batch(root: Path, batch: str, rows: Sequence[Mapping[str, str]], rep
 
 
 def execute(repo_root: Path, config_path: Path, batch_root: Path, batch: str, target: str) -> dict[str, object]:
+    expected_config_path = (repo_root / CONFIG_RELATIVE_PATH).resolve()
+    if config_path.resolve() != expected_config_path or CONFIG_SHA256 == "__CONFIG_SHA256__" or sha256_path(config_path) != CONFIG_SHA256:
+        raise ValueError("config_path_or_fingerprint_mismatch")
     config = read_json(config_path)
     source, quality, members = load_inputs(repo_root, config)
-    if len(members) > 1000:
+    resources = config["资源上限"]
+    assert isinstance(resources, dict)
+    if len(members) > int(resources["最大成员数"]):
         raise ValueError("member_limit_exceeded")
-    remote = run_remote_preflight(target, 30)
+    started = time.monotonic()
+    deadline = started + int(resources["批次总超时秒"])
+    remote = run_remote_preflight(target, int(resources["远端预检超时秒"]), int(resources["最大日志字节数"]))
+    if time.monotonic() > deadline:
+        raise RuntimeError("batch_timeout")
     code_sha = sha256_path(Path(__file__).resolve())
-    rows = build_rows(batch, source, quality, members, code_sha)
+    rows = build_rows(batch, source, quality, members, code_sha, deadline=deadline, member_timeout=int(resources["单成员超时秒"]))
     fingerprints = {
         "source": sha256_path(repo_root / str(config["输入"]["来源身份清单"]["路径"])),
         "quality_manifest": sha256_path(repo_root / str(config["输入"]["质量验证清单"]["路径"])),
     }
     report = render_report(batch, rows, remote, fingerprints)
+    peak_rss = None
+    if resource is not None:
+        peak_rss = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        if sys.platform != "darwin":
+            peak_rss *= 1024
+        if peak_rss > int(resources["最大内存字节数"]):
+            raise RuntimeError("memory_limit_exceeded")
     checklist = {
         "合同版本": CONTRACT_VERSION, "验证器版本": SCRIPT_VERSION, "验证批次": batch,
         "冻结时间": dt.datetime.now(dt.timezone.utc).astimezone().isoformat(timespec="seconds"),
@@ -357,6 +413,8 @@ def execute(repo_root: Path, config_path: Path, batch_root: Path, batch: str, ta
         "状态计数": {status: sum(row["重放结论"] == status for row in rows) for status in ("拒绝", "无法判定", "通过")},
         "来源身份清单SHA-256": fingerprints["source"], "质量验证清单SHA-256": fingerprints["quality_manifest"],
         "代码SHA-256": code_sha, "远端预检": remote, "历史决策登记": "未登记；未创建样例文件",
+        "资源上限": resources,
+        "资源实测": {"本地峰值RSS字节": peak_rss, "远端预检日志字节": 0, "批次耗时秒": round(time.monotonic() - started, 6)},
         "安全声明": {"远端读取业务正文": False, "远端落盘": False, "原始数据修改": False, "交易结论": False},
     }
     index_row = {
@@ -366,7 +424,7 @@ def execute(repo_root: Path, config_path: Path, batch_root: Path, batch: str, ta
         "无法判定数": str(sum(row["重放结论"] == "无法判定" for row in rows)), "通过数": "0",
         "远端预检": "通过", "状态": "已发布",
     }
-    artifacts = publish_batch(batch_root, batch, rows, report, checklist, index_row)
+    artifacts = publish_batch(batch_root, batch, rows, report, checklist, index_row, max_output_bytes=int(resources["最大输出字节数"]))
     return {"status": "ok", "batch": batch, "members": len(rows), "remote": remote, "artifacts": artifacts, "counts": checklist["状态计数"]}
 
 
