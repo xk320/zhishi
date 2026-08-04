@@ -2256,6 +2256,62 @@ class AutoMergeEligibilityTests(unittest.TestCase):
 
         self.assertTrue(result.eligible, result.reasons)
 
+    def test_合并后状态闭环允许阻塞任务直接恢复为待执行(self):
+        body = (
+            "## 关联任务\n\n- 任务-000013\n\n"
+            "## 变更类型\n\n- 合并后状态闭环\n"
+        )
+        base_task = task_text(
+            status="阻塞", task_type="数据审计", dependency="000012"
+        )
+        head_task = task_text(
+            status="待执行", task_type="数据审计", dependency="000012"
+        )
+        result = self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/看板.md",
+            ],
+            pr_body=body,
+            base_tasks={"000013": base_task},
+            head_tasks={"000013": head_task},
+            base_board=blocked_transition_board(blocked=True),
+            head_board=blocked_transition_board(blocked=False),
+        )
+
+        self.assertTrue(result.eligible, result.reasons)
+
+    def test_合并后状态闭环拒绝直接恢复夹带完成任务(self):
+        body = (
+            "## 关联任务\n\n- 任务-000013\n- 任务-000014\n\n"
+            "## 变更类型\n\n- 合并后状态闭环\n"
+        )
+        result = self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/任务/任务-000014.md",
+            ],
+            pr_body=body,
+            base_tasks={
+                "000013": task_text(status="阻塞", dependency="000012"),
+                "000014": task_text(status="待评审"),
+            },
+            head_tasks={
+                "000013": task_text(status="待执行", dependency="000012"),
+                "000014": task_text(status="已完成"),
+            },
+            merge_facts={
+                "000014": self.policy.MergeFact(
+                    sha="0123456789abcdef0123456789abcdef01234567",
+                    merged_at="2026-08-03 08:00:00 +0800",
+                    pr_number=41,
+                )
+            },
+        )
+
+        self.assertFalse(result.eligible)
+        self.assertIn("合并后状态闭环必须同步看板", result.reasons)
+
     def test_合并后状态闭环拒绝阻塞恢复夹带合同改写(self):
         body = (
             "## 关联任务\n\n- 任务-000013\n\n"
