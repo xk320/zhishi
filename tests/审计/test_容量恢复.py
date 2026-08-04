@@ -30,7 +30,7 @@ class 容量恢复合同测试(unittest.TestCase):
 
     def test_隔离演练生成恢复指纹(self):
         with tempfile.TemporaryDirectory(prefix="zhishi-capacity-test-") as 临时:
-            输出 = 模块.执行(self.试点, self.配置, Path(临时), 最小可用字节数=1)
+            输出 = 模块.执行(self.试点, self.配置, Path(临时), 最小可用字节数=1, 测试模式=True)
             报告 = json.loads((输出 / "验证报告.json").read_text(encoding="utf-8"))
             self.assertEqual(报告["隔离元数据恢复"], "通过")
             self.assertFalse(报告["恢复指纹全部匹配"] is False)
@@ -39,7 +39,12 @@ class 容量恢复合同测试(unittest.TestCase):
     def test_低磁盘安全门(self):
         with tempfile.TemporaryDirectory(prefix="zhishi-capacity-test-") as 临时:
             with self.assertRaises(模块.合同错误):
-                模块.执行(self.试点, self.配置, Path(临时), 最小可用字节数=10**30)
+                模块.执行(self.试点, self.配置, Path(临时), 最小可用字节数=10**30, 测试模式=True)
+
+    def test_输入路径越界被拒绝(self):
+        with tempfile.TemporaryDirectory(prefix="zhishi-capacity-test-") as 临时:
+            with self.assertRaises(模块.合同错误):
+                模块.执行(Path(临时), self.配置, Path(临时), 测试模式=True)
 
     def test_中断安全门(self):
         with tempfile.TemporaryDirectory(prefix="zhishi-capacity-test-") as 临时:

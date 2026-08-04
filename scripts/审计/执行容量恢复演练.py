@@ -20,6 +20,14 @@ from typing import Any
 
 批次目录名 = "pilot-20260805T045300+0800-zero-v2"
 必需文件 = ("候选评估.csv", "成员.csv", "血缘.csv", "清单.json", "验证报告.json")
+根目录 = Path(__file__).resolve().parents[2]
+批准试点根 = 根目录 / "artifacts/数据/最小闭环试点"
+批准配置根 = 根目录 / "config/审计"
+批准输出根 = 根目录 / "artifacts/审计/容量恢复"
+最大输入字节数 = 8 * 1024 * 1024
+最大临时副本字节数 = 16 * 1024 * 1024
+最大输出字节数 = 2 * 1024 * 1024
+最大内存字节数 = 256 * 1024 * 1024
 容量列 = [
     "标的", "期限月数", "期限天数", "数据族", "估算类型", "基础字节数",
     "质量血缘字节数", "副本后字节数", "安全余量后字节数", "状态", "公式版本",
@@ -28,6 +36,17 @@ from typing import Any
 
 class 合同错误(ValueError):
     """输入或资源边界违反合同。"""
+
+
+def 限制路径(路径: Path, 根: Path, 名称: str, 允许缺失: bool = False) -> Path:
+    """把输入、配置和输出限制在合同目录，并解析所有符号链接。"""
+    try:
+        根解析 = 根.resolve(strict=True)
+        目标 = 路径.expanduser().resolve(strict=not 允许缺失)
+        目标.relative_to(根解析)
+    except (OSError, RuntimeError, ValueError) as 异常:
+        raise 合同错误(f"{名称}不在批准目录内：{路径}") from 异常
+    return 目标
 
 
 def sha256(路径: Path) -> str:
@@ -60,7 +79,10 @@ def 文件清单(目录: Path) -> list[dict[str, Any]]:
         路径 = 目录 / 名称
         if not 路径.is_file() or 路径.is_symlink():
             raise 合同错误(f"试点文件缺失或为符号链接：{路径}")
-        结果.append({"文件": 名称, "字节数": 路径.stat().st_size, "SHA256": sha256(路径)})
+        大小 = 路径.stat().st_size
+        结果.append({"文件": 名称, "字节数": 大小, "SHA256": sha256(路径)})
+    if sum(项["字节数"] for 项 in 结果) > 最大输入字节数:
+        raise 合同错误(f"试点输入超过字节上限：{最大输入字节数}")
     return 结果
 
 
@@ -69,7 +91,15 @@ def 校验试点(目录: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     报告 = 读取json(目录 / "验证报告.json")
     if 清单.get("批次") != 批次目录名 or 报告.get("批次") != 批次目录名:
         raise 合同错误("试点批次身份不匹配")
-    if 报告.get("状态") != "零成员拒绝" or 报告.get("统计", {}).get("合格成员数") != 0:
+    统计 = 报告.get("统计", {})
+    if (
+        报告.get("状态") != "零成员拒绝"
+        or 统计.get("候选行数") != 2520
+        or 统计.get("合格成员数") != 0
+        or 统计.get("拒绝行数") != 2520
+        or 统计.get("按标的候选") != {"BTC": 1260, "ETH": 1260}
+        or 统计.get("按标的合格") != {"BTC": 0, "ETH": 0}
+    ):
         raise 合同错误("本演练只接受任务035零成员试点")
     实际 = 文件清单(目录)
     # 任务035清单记录了三个CSV及报告，逐一核对可验证的指纹。
@@ -83,10 +113,30 @@ def 校验试点(目录: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         预期 = 对照.get(项["文件"])
         if 预期 and 预期 != 项["SHA256"]:
             raise 合同错误(f"试点文件指纹不一致：{项['文件']}")
+    实际映射 = {项["文件"]: 项["SHA256"] for 项 in 实际}
+    报告文件 = 报告.get("输入与输出文件")
+    if not isinstance(报告文件, dict):
+        raise 合同错误("试点报告缺少输入与输出文件清单")
+    for 名称 in ("候选评估.csv", "成员.csv", "血缘.csv"):
+        if 报告文件.get(名称) != 实际映射[名称]:
+            raise 合同错误(f"试点报告文件指纹不一致：{名称}")
+    if 清单.get("来源成员SHA256") != 报告.get("来源成员SHA256"):
+        raise 合同错误("试点来源成员指纹不一致")
+    if 清单.get("查询脚本SHA256") != 报告.get("查询脚本SHA256"):
+        raise 合同错误("试点查询脚本指纹不一致")
+    if 清单.get("实现脚本SHA256") != 报告.get("实现脚本SHA256"):
+        raise 合同错误("试点实现脚本指纹不一致")
+    if 清单.get("环境指纹") != 报告.get("环境指纹") or 清单.get("批次") != 报告.get("批次"):
+        raise 合同错误("试点清单与报告元数据不一致")
     return {"清单": 清单, "报告": 报告}, 实际
 
 
-def 检查资源(目录: Path, 最小可用字节数: int, 截止时间: float | None = None) -> dict[str, Any]:
+def 检查资源(
+    目录: Path,
+    最小可用字节数: int,
+    截止时间: float | None = None,
+    内存上限字节数: int = 最大内存字节数,
+) -> dict[str, Any]:
     可用 = shutil.disk_usage(目录).free
     if 可用 < 最小可用字节数:
         raise 合同错误(f"可用磁盘低于安全余量：{可用} < {最小可用字节数}")
@@ -95,6 +145,8 @@ def 检查资源(目录: Path, 最小可用字节数: int, 截止时间: float |
     使用量 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     # macOS单位为字节，Linux单位为KiB；结果只用于本次环境指纹，不用于容量承诺。
     峰值内存字节 = 使用量 if os.uname().sysname == "Darwin" else 使用量 * 1024
+    if 峰值内存字节 > 内存上限字节数:
+        raise 合同错误(f"进程峰值内存超过上限：{峰值内存字节} > {内存上限字节数}")
     return {"可用磁盘字节数": 可用, "进程峰值内存字节数": 峰值内存字节}
 
 
@@ -104,12 +156,17 @@ def 复制并恢复(来源: Path, 临时根: Path) -> tuple[list[dict[str, Any]]
     备份.mkdir()
     恢复.mkdir()
     结果 = []
+    总字节数 = sum((来源 / 名称).stat().st_size for 名称 in 必需文件)
+    if 总字节数 * 2 > 最大临时副本字节数:
+        raise 合同错误(f"隔离备份和恢复副本超过字节上限：{最大临时副本字节数}")
     for 名称 in 必需文件:
         原文件 = 来源 / 名称
         备份文件 = 备份 / 名称
         恢复文件 = 恢复 / 名称
-        shutil.copyfile(原文件, 备份文件)
-        shutil.copyfile(备份文件, 恢复文件)
+        with 原文件.open("rb") as 输入, 备份文件.open("wb") as 输出:
+            shutil.copyfileobj(输入, 输出, length=1024 * 1024)
+        with 备份文件.open("rb") as 输入, 恢复文件.open("wb") as 输出:
+            shutil.copyfileobj(输入, 输出, length=1024 * 1024)
         原SHA = sha256(原文件)
         备份SHA = sha256(备份文件)
         恢复SHA = sha256(恢复文件)
@@ -146,7 +203,22 @@ def 写JSON(路径: Path, 值: Any) -> None:
     路径.write_text(json.dumps(值, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def 执行(试点: Path, 配置路径: Path, 输出根: Path, 最小可用字节数: int = 10 * 1024 * 1024, 总时长秒数: int = 30) -> Path:
+def 执行(
+    试点: Path,
+    配置路径: Path,
+    输出根: Path,
+    最小可用字节数: int = 10 * 1024 * 1024,
+    总时长秒数: int = 30,
+    测试模式: bool = False,
+) -> Path:
+    试点 = 限制路径(试点, 批准试点根, "试点")
+    配置路径 = 限制路径(配置路径, 批准配置根, "配置")
+    if 测试模式:
+        输出根 = 输出根.resolve(strict=True)
+        if not 输出根.name.startswith("zhishi-capacity-test-"):
+            raise 合同错误("测试输出目录名称不符合隔离约定")
+    else:
+        输出根 = 限制路径(输出根, 批准输出根, "输出根", 允许缺失=True)
     输出根.mkdir(parents=True, exist_ok=True)
     配置 = 读取json(配置路径)
     if 配置.get("标的") != ["BTC", "ETH"] or [项.get("月数") for 项 in 配置.get("期限", [])] != [3, 6, 12]:
@@ -166,7 +238,11 @@ def 执行(试点: Path, 配置路径: Path, 输出根: Path, 最小可用字节
         原始字节数 = sum(项["字节数"] for 项 in 输入文件)
         with gzip.open(临时父 / "压缩.gz", "wb", compresslevel=6) as 压缩:
             for 项 in 输入文件:
-                压缩.write((试点 / 项["文件"]).read_bytes())
+                with (试点 / 项["文件"]).open("rb") as 输入:
+                    while 块 := 输入.read(1024 * 1024):
+                        压缩.write(块)
+                        if (临时父 / "压缩.gz").stat().st_size > 最大临时副本字节数:
+                            raise 合同错误(f"临时压缩副本超过字节上限：{最大临时副本字节数}")
         压缩字节数 = (临时父 / "压缩.gz").stat().st_size
         成员行数 = 0
         with (试点 / "成员.csv").open(encoding="utf-8-sig", newline="") as 文件:
@@ -218,6 +294,8 @@ def 执行(试点: Path, 配置路径: Path, 输出根: Path, 最小可用字节
             "成员顺序": "成员.csv文件顺序；本批次为空",
             "完成时间": datetime.now(timezone.utc).isoformat(),
         })
+        if sum(项.stat().st_size for 项 in 目标.iterdir()) > 最大输出字节数:
+            raise 合同错误(f"输出产物超过字节上限：{最大输出字节数}")
         return 目标
     finally:
         shutil.rmtree(临时父, ignore_errors=False)
@@ -225,10 +303,9 @@ def 执行(试点: Path, 配置路径: Path, 输出根: Path, 最小可用字节
 
 def main() -> int:
     解析器 = argparse.ArgumentParser(description=__doc__)
-    根 = Path(__file__).resolve().parents[2]
-    解析器.add_argument("--试点", type=Path, default=根 / "artifacts/数据/最小闭环试点" / 批次目录名)
-    解析器.add_argument("--配置", type=Path, default=根 / "config/审计/双标的容量恢复.json")
-    解析器.add_argument("--输出根", type=Path, default=根 / "artifacts/审计/容量恢复")
+    解析器.add_argument("--试点", type=Path, default=批准试点根 / 批次目录名)
+    解析器.add_argument("--配置", type=Path, default=批准配置根 / "双标的容量恢复.json")
+    解析器.add_argument("--输出根", type=Path, default=批准输出根)
     解析器.add_argument("--最小可用字节数", type=int, default=10 * 1024 * 1024)
     参数 = 解析器.parse_args()
     try:
