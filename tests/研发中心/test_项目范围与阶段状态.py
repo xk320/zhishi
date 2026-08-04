@@ -396,7 +396,7 @@ class TaskContractTests(unittest.TestCase):
 
     def test_看板当前阶段反映阶段1证据修复(self):
         board = BOARD_PATH.read_text(encoding="utf-8")
-        self.assertIn("阶段1数据闭环证据修复", board)
+        self.assertIn("阶段1最终审计进行中", board)
         self.assertNotIn("进入研究数据闭环真实化阶段", board)
 
 
@@ -438,7 +438,7 @@ class ProjectScopeAndStageTests(unittest.TestCase):
         expected = (
             "阶段0：已完成",
             "阶段0.5：核心理论合同已完成",
-            "阶段1：数据闭环证据修复中",
+            "阶段1：数据闭环证据修复已完成，最终审计中",
             "阶段2：被阶段1证据门阻塞",
             "阶段3至阶段7：仅完成部分理论合同，运行能力未解锁",
         )
