@@ -2023,6 +2023,7 @@ def _validate_state_closure(
     unlocked = 0
     blocking = 0
     recovered = 0
+    direct_recovered = 0
     canceled = 0
     completed_task_id: str | None = None
     canceled_task_id: str | None = None
@@ -2158,15 +2159,25 @@ def _validate_state_closure(
                 head_task=head_task,
                 reasons=reasons,
             )
+    if completed == 0 and unlocked:
+        direct_recovered = unlocked
+        for task_id, transition in transitions.items():
+            if transition != ("阻塞", "待执行"):
+                continue
+            _validate_recovery_transition(
+                base_task=base_tasks[task_id],
+                head_task=head_tasks[task_id],
+                reasons=reasons,
+            )
     if blocking:
         if blocking != 1:
             _append_reason(reasons, "阻塞状态闭环必须且只能迁移一个任务")
         if completed or unlocked or recovered or canceled:
             _append_reason(reasons, "阻塞状态闭环不得夹带完成、解锁、恢复或取消迁移")
-    elif recovered:
-        if recovered != 1:
+    elif direct_recovered or recovered:
+        if direct_recovered + recovered != 1:
             _append_reason(reasons, "阻塞恢复状态闭环必须且只能迁移一个任务")
-        if completed or unlocked or canceled:
+        if completed or canceled or (direct_recovered and recovered):
             _append_reason(reasons, "阻塞恢复状态闭环不得夹带完成、解锁或取消迁移")
     elif canceled:
         if canceled != 1:
@@ -2179,6 +2190,8 @@ def _validate_state_closure(
         _append_reason(reasons, "合并后状态闭环最多解除一个唯一后继")
     for task_id, transition in transitions.items():
         if transition != ("阻塞", "待执行"):
+            continue
+        if completed_task_id is None:
             continue
         base_task = base_tasks[task_id]
         head_task = head_tasks[task_id]
