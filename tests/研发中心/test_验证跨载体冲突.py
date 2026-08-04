@@ -272,6 +272,31 @@ class CrossCarrierConflictTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             CONFLICT.repair_board_text(board, records, schema)
 
+    def test已取消看板修复使用替代任务证据(self):
+        schema = CONFLICT._schema_at_ref(ROOT, "main")
+        board = CONFLICT._read_at_ref(ROOT, "main", CONFLICT.BOARD_PATH)
+        self.assertIsNotNone(schema)
+        self.assertIsNotNone(board)
+        records = {
+            "000050": (
+                "docs/研发中心/任务/任务-000050.md",
+                "重复任务裁决",
+                "已取消",
+                "P1",
+                (),
+                "",
+                "",
+                "",
+                "[#89](https://github.com/xk320/zhishi/pull/89)",
+                "998294a823ccbd526c1a33fb4764bc1f968fa4df",
+                "000051",
+                "原路径已被替代任务取代。",
+            )
+        }
+        repaired = CONFLICT.repair_board_text(board, records, schema)
+        self.assertIn("替代任务-000051", repaired)
+        self.assertIn("取消原因：原路径已被替代任务取代。", repaired)
+
     def test研究尺度越界失败关闭(self):
         original = CONFLICT._read_at_ref
 

@@ -570,8 +570,6 @@ def _check_board(
         merge = record[9] if len(record) > 9 else ""
         cancellation_support_task = record[10] if len(record) > 10 else ""
         cancellation_reason = record[11] if len(record) > 11 else ""
-        cancellation_support_task = record[10] if len(record) > 10 else ""
-        cancellation_reason = record[11] if len(record) > 11 else ""
         metadata_mismatch = False
         if status == "执行中" and branch and f"`{branch}`" not in row:
             metadata_mismatch = True
@@ -1392,6 +1390,8 @@ def repair_board_text(
         blocker = record[7] if len(record) > 7 else ""
         pr = record[8] if len(record) > 8 else ""
         merge = record[9] if len(record) > 9 else ""
+        cancellation_support_task = record[10] if len(record) > 10 else ""
+        cancellation_reason = record[11] if len(record) > 11 else ""
         dependency = dependencies[0] if dependencies else "无"
         if status == "待执行":
             rows_by_status[status].append(f"| {priority} | 任务-{task_id} | {title} | {dependency} |")
