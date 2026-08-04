@@ -25,6 +25,10 @@ sys.modules[查询规范.name] = 查询模块
 
 class 最小闭环试点测试(unittest.TestCase):
     def 写入输入(self, 根: Path, *, 最终状态: str = "不可用") -> tuple[Path, Path]:
+        代码目录 = 根 / "scripts/数据"
+        代码目录.mkdir(parents=True)
+        (代码目录 / "构建最小闭环试点.py").write_text(脚本路径.read_text(encoding="utf-8"), encoding="utf-8")
+        (代码目录 / "查询最小闭环试点.py").write_text(查询路径.read_text(encoding="utf-8"), encoding="utf-8")
         来源 = 根 / "artifacts/审计/双标的数据闭环/loop-v4/闭环成员.csv"
         来源.parent.mkdir(parents=True)
         列 = sorted(构建.必需列)
@@ -70,6 +74,7 @@ class 最小闭环试点测试(unittest.TestCase):
             "最大成员数": 1,
             "最大评估行数": 10,
             "最大输出字节数": 1024 * 1024,
+            "最大输入字节数": 1024 * 1024,
             "最大运行秒数": 30,
             "最大内存MiB": 256,
             "限制": "test",

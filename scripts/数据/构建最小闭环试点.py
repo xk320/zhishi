@@ -11,6 +11,7 @@ import csv
 import hashlib
 import json
 import os
+import platform
 import re
 import resource
 import shutil
@@ -133,6 +134,7 @@ def 读取配置(路径: Path) -> dict[str, Any]:
         "最大成员数",
         "最大评估行数",
         "最大输出字节数",
+        "最大输入字节数",
         "最大运行秒数",
         "最大内存MiB",
         "限制",
@@ -141,7 +143,7 @@ def 读取配置(路径: Path) -> dict[str, Any]:
         raise 合同错误("配置字段漂移")
     if not isinstance(配置["来源批次"], str) or not 配置["来源批次"]:
         raise 合同错误("来源批次无效")
-    for 字段 in ("最大成员数", "最大评估行数", "最大输出字节数", "最大运行秒数", "最大内存MiB"):
+    for 字段 in ("最大成员数", "最大评估行数", "最大输出字节数", "最大输入字节数", "最大运行秒数", "最大内存MiB"):
         if type(配置[字段]) is not int or 配置[字段] <= 0:
             raise 合同错误(f"{字段}必须为正整数")
     return 配置
@@ -276,6 +278,21 @@ def 当前内存MiB() -> float:
     return 使用 / 1024
 
 
+def 代码环境指纹(仓库根: Path) -> tuple[str, str, str]:
+    实现路径 = 仓库根 / "scripts/数据/构建最小闭环试点.py"
+    查询路径 = 仓库根 / "scripts/数据/查询最小闭环试点.py"
+    实现摘要 = 文件指纹(实现路径)
+    查询摘要 = 文件指纹(查询路径)
+    环境 = {
+        "python": platform.python_version(),
+        "implementation": platform.python_implementation(),
+        "system": platform.system(),
+        "release": platform.release(),
+    }
+    环境摘要 = hashlib.sha256(稳定JSON(环境).encode("utf-8")).hexdigest()
+    return 实现摘要, 查询摘要, 环境摘要
+
+
 def 检查资源(开始时间: float, 配置: dict[str, Any]) -> None:
     if time.monotonic() - 开始时间 > 配置["最大运行秒数"]:
         raise 合同错误("运行时间超过硬上限")
@@ -286,6 +303,20 @@ def 检查资源(开始时间: float, 配置: dict[str, Any]) -> None:
 def 构建批次(配置路径: Path, 批次根: Path, 批次号: str) -> dict[str, Any]:
     开始时间 = time.monotonic()
     配置 = 读取配置(配置路径)
+    仓库根 = 配置路径.parent.parent.parent.resolve()
+    批准来源根 = (仓库根 / "artifacts/审计/双标的数据闭环").resolve()
+    来源相对路径 = Path(配置["来源成员路径"])
+    if 来源相对路径.is_absolute() or ".." in 来源相对路径.parts:
+        raise 合同错误("来源路径不得为绝对路径或路径穿越")
+    来源路径 = (仓库根 / 来源相对路径).resolve()
+    try:
+        来源路径.relative_to(批准来源根)
+    except ValueError as 异常:
+        raise 合同错误("来源路径不在批准聚合证据目录") from 异常
+    批准输出根 = (仓库根 / "artifacts/数据/最小闭环试点").resolve()
+    批次根 = 批次根.resolve()
+    if 批次根 != 批准输出根:
+        raise 合同错误("批次根不是批准的隔离产物目录")
     if (
         not isinstance(批次号, str)
         or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+:-]{0,127}", 批次号) is None
@@ -296,13 +327,16 @@ def 构建批次(配置路径: Path, 批次根: Path, 批次号: str) -> dict[st
     if 批次根.exists() and 批次根.is_symlink():
         raise 合同错误("批次根不得为符号链接")
     批次根.mkdir(parents=True, exist_ok=True)
-    批次根 = 批次根.resolve()
-    来源路径 = (配置路径.parent.parent.parent / 配置["来源成员路径"]).resolve()
+    检查资源(开始时间, 配置)
+    if 来源路径.stat().st_size > 配置["最大输入字节数"]:
+        raise 合同错误("来源输入超过字节上限")
     来源摘要 = 文件指纹(来源路径)
     if 来源摘要 != 配置["来源成员SHA256"]:
         raise 合同错误("来源成员指纹漂移")
     行 = 读取成员(来源路径, 配置["来源批次"], 配置["最大评估行数"])
     检查资源(开始时间, 配置)
+    if 文件指纹(来源路径) != 来源摘要:
+        raise 合同错误("来源成员读取前后指纹不一致")
     评估结果, 合格 = 评估(行, 配置["来源批次"])
     if len(评估结果) > 配置["最大评估行数"]:
         raise 合同错误("评估结果超过硬上限")
@@ -315,6 +349,7 @@ def 构建批次(配置路径: Path, 批次根: Path, 批次号: str) -> dict[st
         raise 合同错误("批次已存在，拒绝覆盖")
     目标.mkdir(parents=True)
     try:
+        实现摘要, 查询摘要, 环境摘要 = 代码环境指纹(仓库根)
         评估路径 = 目标 / "候选评估.csv"
         成员路径 = 目标 / "成员.csv"
         血缘路径 = 目标 / "血缘.csv"
@@ -362,6 +397,9 @@ def 构建批次(配置路径: Path, 批次根: Path, 批次号: str) -> dict[st
             "原因": "没有满足全部闭环门、精确维度和尺度边界的叶子；零成员不是成功闭环。" if not 合格 else "按事前规则选择首个合格叶子。",
             "来源批次": 配置["来源批次"],
             "来源成员SHA256": 来源摘要,
+            "实现脚本SHA256": 实现摘要,
+            "查询脚本SHA256": 查询摘要,
+            "环境指纹": 环境摘要,
             "规则版本": 规则版本,
             "规则指纹": 规则指纹(),
             "主研究尺度": list(主研究尺度),
@@ -380,6 +418,10 @@ def 构建批次(配置路径: Path, 批次根: Path, 批次号: str) -> dict[st
             "成员SHA256": 文件指纹(成员路径),
             "评估SHA256": 文件指纹(评估路径),
             "血缘SHA256": 文件指纹(血缘路径),
+            "来源成员SHA256": 来源摘要,
+            "实现脚本SHA256": 实现摘要,
+            "查询脚本SHA256": 查询摘要,
+            "环境指纹": 环境摘要,
         }
         原子写入文本(目标 / "清单.json", 稳定JSON(清单) + "\n")
         检查资源(开始时间, 配置)
