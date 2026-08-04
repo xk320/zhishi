@@ -48,15 +48,22 @@ class ExternalStateConsistencyTests(unittest.TestCase):
             board,
         )
 
-    def test_任务043待评审元数据与看板一致(self):
+    def test_任务043状态元数据与看板一致(self):
         task = (ROOT / "docs/研发中心/任务/任务-000043.md").read_text(encoding="utf-8")
         board = (ROOT / "docs/研发中心/看板.md").read_text(encoding="utf-8")
-        self.assertIn("- 状态：待评审", task)
         self.assertIn("- 执行分支：`codex/000043-external-state-consistency-v1`", task)
-        self.assertIn(
-            "| P0 | 任务-000043 | 统一外部环境事实与阶段状态声明 | `codex/000043-external-state-consistency-v1` | [#62](https://github.com/xk320/zhishi/pull/62) |",
-            board,
-        )
+        status = "已完成" if "- 状态：已完成" in task else "待评审"
+        self.assertIn(f"- 状态：{status}", task)
+        if status == "已完成":
+            self.assertIn(
+                "| 任务-000043 | 统一外部环境事实与阶段状态声明 | PR #62；合并提交 `abe66037161332d350b9782492beedd8898a4f8a` |",
+                board,
+            )
+        else:
+            self.assertIn(
+                "| P0 | 任务-000043 | 统一外部环境事实与阶段状态声明 | `codex/000043-external-state-consistency-v1` | [#62](https://github.com/xk320/zhishi/pull/62) |",
+                board,
+            )
 
     def test_历史任务记录仍保留(self):
         historical = (ROOT / "docs/研发中心/任务/任务-000028.md").read_text(encoding="utf-8")
