@@ -92,8 +92,6 @@ class ExternalStateConsistencyTests(unittest.TestCase):
         board = (ROOT / "docs/研发中心/看板.md").read_text(encoding="utf-8")
         self._assert_task043_state_mapping(task, board)
 
-        completed_task = task.replace("- 状态：待评审", "- 状态：已完成")
-        completed_task += "\n- 合并提交SHA：`abe66037161332d350b9782492beedd8898a4f8a`\n"
         pending_row = (
             "| P0 | 任务-000043 | 统一外部环境事实与阶段状态声明 | `codex/000043-external-state-consistency-v1` | "
             "[#62](https://github.com/xk320/zhishi/pull/62) |"
@@ -102,34 +100,52 @@ class ExternalStateConsistencyTests(unittest.TestCase):
             "| 任务-000043 | 统一外部环境事实与阶段状态声明 | "
             "PR #62；合并提交 `abe66037161332d350b9782492beedd8898a4f8a` |"
         )
-        completed_board = board.replace(
-            "| P0 | 任务-000043 | 统一外部环境事实与阶段状态声明 | `codex/000043-external-state-consistency-v1` | [#62](https://github.com/xk320/zhishi/pull/62) |",
-            "",
-        )
-        completed_board = completed_board.replace(
-            "## 已完成\n\n| 任务 | 名称 | 完成证据 |\n| --- | --- | --- |",
-            "## 已完成\n\n| 任务 | 名称 | 完成证据 |\n| --- | --- | --- |\n" + completed_row,
-        )
-        self._assert_task043_state_mapping(completed_task, completed_board)
+        if "- 状态：待评审" in task:
+            completed_task = task.replace("- 状态：待评审", "- 状态：已完成")
+            completed_task += "\n- 合并提交SHA：`abe66037161332d350b9782492beedd8898a4f8a`\n"
+            completed_board = board.replace(pending_row, "")
+            completed_board = completed_board.replace(
+                "## 已完成\n\n| 任务 | 名称 | 完成证据 |\n| --- | --- | --- |",
+                "## 已完成\n\n| 任务 | 名称 | 完成证据 |\n| --- | --- | --- |\n" + completed_row,
+            )
+            self._assert_task043_state_mapping(completed_task, completed_board)
+        else:
+            pending_task = task.replace("- 状态：已完成", "- 状态：待评审")
+            pending_board = board.replace(completed_row, "")
+            pending_board = pending_board.replace(
+                "## 待评审\n\n| 优先级 | 任务 | 名称 | 分支 | PR |\n| --- | --- | --- | --- | --- |",
+                "## 待评审\n\n| 优先级 | 任务 | 名称 | 分支 | PR |\n| --- | --- | --- | --- | --- |\n" + pending_row,
+            )
+            self._assert_task043_state_mapping(pending_task, pending_board)
 
-        wrong_section_board = board.replace(pending_row, "")
-        wrong_section_board = wrong_section_board.replace(
-            "## 已完成\n\n| 任务 | 名称 | 完成证据 |\n| --- | --- | --- |",
-            "## 已完成\n\n| 任务 | 名称 | 完成证据 |\n| --- | --- | --- |\n" + pending_row,
-        )
+        current_row = pending_row if "- 状态：待评审" in task else completed_row
+        wrong_section_row = pending_row if "- 状态：待评审" in task else completed_row
+        wrong_section_board = board.replace(current_row, "")
+        if "- 状态：待评审" in task:
+            wrong_section_board = wrong_section_board.replace(
+                "## 已完成\n\n| 任务 | 名称 | 完成证据 |\n| --- | --- | --- |",
+                "## 已完成\n\n| 任务 | 名称 | 完成证据 |\n| --- | --- | --- |\n" + wrong_section_row,
+            )
+        else:
+            wrong_section_board = wrong_section_board.replace(
+                "## 待评审\n\n| 优先级 | 任务 | 名称 | 分支 | PR |\n| --- | --- | --- | --- | --- |",
+                "## 待评审\n\n| 优先级 | 任务 | 名称 | 分支 | PR |\n| --- | --- | --- | --- | --- |\n" + wrong_section_row,
+            )
         with self.assertRaises(AssertionError):
             self._assert_task043_state_mapping(task, wrong_section_board)
 
         with self.assertRaises(AssertionError):
-            self._assert_task043_state_mapping(task, board.replace(pending_row, ""))
+            self._assert_task043_state_mapping(task, board.replace(current_row, ""))
 
     def test_任务043拒绝未知缺失和重复状态(self):
         task = (ROOT / "docs/研发中心/任务/任务-000043.md").read_text(encoding="utf-8")
         board = (ROOT / "docs/研发中心/看板.md").read_text(encoding="utf-8")
+        current_status = "已完成" if "- 状态：已完成" in task else "待评审"
+        status_prefix = f"- 状态：{current_status}"
         for malformed in (
-            task.replace("- 状态：待评审", "- 状态：执行中"),
-            task.replace("- 状态：待评审", "- 状态：待评审\n- 状态：已完成"),
-            task.replace("- 状态：待评审\n", ""),
+            task.replace(status_prefix, "- 状态：执行中"),
+            task.replace(status_prefix, f"{status_prefix}\n- 状态：{current_status}"),
+            task.replace(status_prefix + "\n", ""),
         ):
             with self.assertRaises(AssertionError):
                 self._assert_task043_state_mapping(malformed, board)
