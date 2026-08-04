@@ -27,6 +27,27 @@ START_PATTERN = re.compile(
 BLOCKER_PATTERN = re.compile(r"^- 当前阻塞原因：(.+)$", re.MULTILINE)
 PR_PATTERN = re.compile(r"^- Pull Request：(.+)$", re.MULTILINE)
 MERGE_PATTERN = re.compile(r"^- 合并提交SHA：`([0-9a-f]{40})`$", re.MULTILINE)
+CANCELLATION_SUPPORT_TASK_PATTERN = re.compile(
+    r"^- 取消依据任务：任务-(\d{6})$", re.MULTILINE
+)
+CANCELLATION_TIME_PATTERN = re.compile(
+    r"^- 取消时间：(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4})$",
+    re.MULTILINE,
+)
+CANCELLATION_REASON_PATTERN = re.compile(
+    r"^- 取消原因：([^|\r\n]+)$", re.MULTILINE
+)
+CANCELLATION_PR_PATTERN = re.compile(
+    r"^- 取消依据PR：\[#(\d+)\]\(https://github\.com/xk320/zhishi/pull/\1\)$",
+    re.MULTILINE,
+)
+CANCELLATION_MERGE_TIME_PATTERN = re.compile(
+    r"^- 取消依据合并时间：(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4})$",
+    re.MULTILINE,
+)
+CANCELLATION_MERGE_SHA_PATTERN = re.compile(
+    r"^- 取消依据合并提交SHA：`([0-9a-f]{40})`$", re.MULTILINE
+)
 PR_NUMBER_PATTERN = re.compile(r"#(\d+)")
 CHANGE_TYPE_PATTERN = re.compile(
     r"(?ms)^## 变更类型\s*\n+\s*-\s*(任务登记|任务交付|合并后状态闭环)\s*$"
@@ -297,6 +318,13 @@ def _task_records(
         blocker = _field(BLOCKER_PATTERN, text) or ""
         pr = _field(PR_PATTERN, text) or ""
         merge = _field(MERGE_PATTERN, text) or ""
+        cancellation_support_task = _field(
+            CANCELLATION_SUPPORT_TASK_PATTERN, text
+        ) or ""
+        cancellation_reason = _field(CANCELLATION_REASON_PATTERN, text) or ""
+        if status_matches and status_matches[0] == "已取消":
+            pr = _field(CANCELLATION_PR_PATTERN, text) or ""
+            merge = _field(CANCELLATION_MERGE_SHA_PATTERN, text) or ""
         dependency_lines = [
             line for line in text.splitlines() if line.startswith("- 唯一前序依赖：")
         ]
@@ -338,6 +366,26 @@ def _task_records(
                     release_condition="保留一个唯一前序依赖字段",
                 )
             )
+        if status_matches and status_matches[0] == "已取消":
+            cancellation_fields = (
+                CANCELLATION_TIME_PATTERN,
+                CANCELLATION_REASON_PATTERN,
+                CANCELLATION_SUPPORT_TASK_PATTERN,
+                CANCELLATION_PR_PATTERN,
+                CANCELLATION_MERGE_TIME_PATTERN,
+                CANCELLATION_MERGE_SHA_PATTERN,
+            )
+            if any(len(pattern.findall(text)) != 1 for pattern in cancellation_fields):
+                conflicts.append(
+                    _conflict(
+                        "TASK_CONTRACT_CONFLICT",
+                        path,
+                        authority="取消状态证据合同",
+                        decision="失败关闭",
+                        repair_mode="禁止伪造或缺失取消证据",
+                        release_condition="补齐唯一取消时间、原因、替代任务和main合并事实",
+                    )
+                )
         records[task_id] = (
             path,
             title_matches[0][1].strip() if title_matches else "",
@@ -349,6 +397,8 @@ def _task_records(
             blocker,
             pr,
             merge,
+            cancellation_support_task,
+            cancellation_reason,
         )
         if status_matches and status_matches[0] == "执行中" and (not branch or not started):
             conflicts.append(
@@ -359,6 +409,33 @@ def _task_records(
                     decision="阻塞",
                     repair_mode="禁止静默改写",
                     release_condition="补齐执行分支和开始时间",
+                )
+            )
+    for task_id, record in records.items():
+        if record[2] != "已取消":
+            continue
+        support_task_id = record[10] if len(record) > 10 else ""
+        support = records.get(support_task_id)
+        if not support_task_id or support_task_id == task_id or support is None:
+            conflicts.append(
+                _conflict(
+                    "TASK_CONTRACT_CONFLICT",
+                    record[0],
+                    authority="取消状态证据合同",
+                    decision="失败关闭",
+                    repair_mode="禁止取消未知或自身任务",
+                    release_condition="引用已登记且已完成的替代任务",
+                )
+            )
+        elif support[2] != "已完成":
+            conflicts.append(
+                _conflict(
+                    "TASK_CONTRACT_CONFLICT",
+                    record[0],
+                    authority="取消状态证据合同",
+                    decision="失败关闭",
+                    repair_mode="禁止引用未完成替代任务",
+                    release_condition="替代任务先进入main并完成状态闭环",
                 )
             )
     return records
@@ -491,6 +568,10 @@ def _check_board(
         blocker = record[7] if len(record) > 7 else ""
         pr = record[8] if len(record) > 8 else ""
         merge = record[9] if len(record) > 9 else ""
+        cancellation_support_task = record[10] if len(record) > 10 else ""
+        cancellation_reason = record[11] if len(record) > 11 else ""
+        cancellation_support_task = record[10] if len(record) > 10 else ""
+        cancellation_reason = record[11] if len(record) > 11 else ""
         metadata_mismatch = False
         if status == "执行中" and branch and f"`{branch}`" not in row:
             metadata_mismatch = True
@@ -506,6 +587,13 @@ def _check_board(
             (PR_NUMBER_PATTERN.search(pr) is not None
              and f"#{PR_NUMBER_PATTERN.search(pr).group(1)}" not in row)
             or merge not in row
+        ):
+            metadata_mismatch = True
+        if status == "已取消" and (
+            not cancellation_support_task
+            or f"替代任务-{cancellation_support_task}" not in row
+            or not cancellation_reason
+            or f"取消原因：{cancellation_reason}" not in row
         ):
             metadata_mismatch = True
         if section != status or f"| {title} |" not in row or priority_mismatch or metadata_mismatch:
@@ -756,10 +844,21 @@ MUTABLE_TASK_PREFIXES = (
     "- 架构评审结论：",
     "- 合并完成时间：",
 )
+CANCELLATION_MUTABLE_TASK_PREFIXES = (
+    "- 取消时间：",
+    "- 取消原因：",
+    "- 取消依据任务：",
+    "- 取消依据PR：",
+    "- 取消依据合并时间：",
+    "- 取消依据合并提交SHA：",
+)
 
 
 def _immutable_task_contract(
-    text: str, *, allow_dependency_mutation: bool = False
+    text: str,
+    *,
+    allow_dependency_mutation: bool = False,
+    allow_cancellation_mutation: bool = False,
 ) -> str:
     """保留任务合同，排除状态和执行/合并证据记录。"""
 
@@ -788,13 +887,18 @@ def _immutable_task_contract(
         ),
         record_start,
     ) if dependency_start >= 0 else -1
+    mutable_prefixes = MUTABLE_TASK_PREFIXES + (
+        CANCELLATION_MUTABLE_TASK_PREFIXES
+        if allow_cancellation_mutation
+        else ()
+    )
     return "\n".join(
         line
         for index, line in enumerate(lines[:record_start])
         if not (
             (
                 index < first_section
-                and any(line.startswith(prefix) for prefix in MUTABLE_TASK_PREFIXES)
+                and any(line.startswith(prefix) for prefix in mutable_prefixes)
             )
             or (
                 allow_dependency_mutation
@@ -813,6 +917,7 @@ def _check_task_contract_drift(
     conflicts: list[Conflict],
     *,
     allow_dependency_mutation: bool = False,
+    allow_cancellation_mutation: bool = False,
 ) -> None:
     """阻止交付或状态PR静默改写目标、范围、输入输出和安全边界。"""
 
@@ -835,9 +940,13 @@ def _check_task_contract_drift(
         if base_text is None or head_text is None:
             continue
         if _immutable_task_contract(
-            base_text, allow_dependency_mutation=allow_dependency_mutation
+            base_text,
+            allow_dependency_mutation=allow_dependency_mutation,
+            allow_cancellation_mutation=allow_cancellation_mutation,
         ) != _immutable_task_contract(
-            head_text, allow_dependency_mutation=allow_dependency_mutation
+            head_text,
+            allow_dependency_mutation=allow_dependency_mutation,
+            allow_cancellation_mutation=allow_cancellation_mutation,
         ):
             conflicts.append(
                 _conflict(
@@ -1218,6 +1327,12 @@ def check_refs(
                 == "合并后状态闭环"
             )
             or change_type == "合并后状态闭环",
+            allow_cancellation_mutation=(
+                metadata is not None
+                and _change_type_from_body(str(metadata.get("body", "")))
+                == "合并后状态闭环"
+            )
+            or change_type == "合并后状态闭环",
         )
         _check_historical_immutability(repo_root, base_sha, head_sha, conflicts)
     _check_metadata(
@@ -1288,7 +1403,13 @@ def repair_board_text(
             else:
                 rows_by_status[status].append(f"| {priority} | 任务-{task_id} | {title} | `{branch or '任务文件记录'}` | {pr or '任务文件记录'} |")
         else:
-            evidence = f"{pr}；合并提交 `{merge}`" if pr and merge else "任务文件记录"
+            if status == "已取消" and pr and merge and cancellation_support_task and cancellation_reason:
+                evidence = (
+                    f"替代任务-{cancellation_support_task}；{pr}；"
+                    f"合并提交 `{merge}`；取消原因：{cancellation_reason}"
+                )
+            else:
+                evidence = f"{pr}；合并提交 `{merge}`" if pr and merge else "任务文件记录"
             rows_by_status[status].append(f"| 任务-{task_id} | {title} | {evidence} |")
     lines = board.splitlines()
     heading_indexes = [index for index, line in enumerate(lines) if line.startswith("## ") and line[3:] in SECTIONS]
@@ -1361,6 +1482,7 @@ def _compute_rule_fingerprint() -> str:
         str(MAX_TASK_FILES),
         str(MAX_TREE_BYTES),
         repr(MUTABLE_TASK_PREFIXES),
+        repr(CANCELLATION_MUTABLE_TASK_PREFIXES),
     ]
     for name in names:
         try:

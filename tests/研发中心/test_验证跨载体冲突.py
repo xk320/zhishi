@@ -232,6 +232,36 @@ class CrossCarrierConflictTests(unittest.TestCase):
             ),
         )
 
+    def test取消证据只在状态闭环允许变化(self):
+        base_text = (
+            "# 任务-000050：示例\n\n- 状态：阻塞\n"
+            "- 唯一前序依赖：任务-000049完成后执行\n\n"
+            "## 任务目标\n\n保持目标。\n"
+        )
+        cancellation_fields = (
+            "- 取消时间：2026-08-04 11:20:00 +0800\n"
+            "- 取消原因：原路径已被替代任务取代。\n"
+            "- 取消依据任务：任务-000051\n"
+            "- 取消依据PR：[#89](https://github.com/xk320/zhishi/pull/89)\n"
+            "- 取消依据合并时间：2026-08-04 03:00:00 +0000\n"
+            "- 取消依据合并提交SHA：`0123456789abcdef0123456789abcdef01234567`\n"
+        )
+        head_text = base_text.replace("- 状态：阻塞", "- 状态：已取消", 1).replace(
+            "## 任务目标", cancellation_fields + "## 任务目标", 1
+        )
+        self.assertNotEqual(
+            CONFLICT._immutable_task_contract(base_text),
+            CONFLICT._immutable_task_contract(head_text),
+        )
+        self.assertEqual(
+            CONFLICT._immutable_task_contract(
+                base_text, allow_cancellation_mutation=True
+            ),
+            CONFLICT._immutable_task_contract(
+                head_text, allow_cancellation_mutation=True
+            ),
+        )
+
     def test有损看板修复被拒绝(self):
         schema = CONFLICT._schema_at_ref(ROOT, "main")
         board = CONFLICT._read_at_ref(ROOT, "main", CONFLICT.BOARD_PATH)

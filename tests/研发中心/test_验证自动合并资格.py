@@ -83,6 +83,21 @@ def task_text(
     )
 
 
+def cancellation_task_text(*, status: str = "已取消", support_task: str = "000014", reason: str = "任务-000013的原交付路径已被任务-000014替代。") -> str:
+    base = task_text(status="待执行", dependency="000012")
+    if status != "已取消":
+        return base.replace("- 状态：待执行", f"- 状态：{status}", 1)
+    base = base.replace("- 状态：待执行", "- 状态：已取消", 1)
+    return base + (
+        "- 取消时间：2026-08-04 11:20:00 +0800\n"
+        f"- 取消原因：{reason}\n"
+        f"- 取消依据任务：任务-{support_task}\n"
+        "- 取消依据PR：[#41](https://github.com/xk320/zhishi/pull/41)\n"
+        "- 取消依据合并时间：2026-08-03 08:00:00 +0800\n"
+        "- 取消依据合并提交SHA：`0123456789abcdef0123456789abcdef01234567`\n"
+    )
+
+
 def closure_board(*, completed: bool) -> str:
     pending_schema = (
         "| 优先级 | 任务 | 名称 | 唯一前序依赖 |\n"
@@ -156,6 +171,47 @@ def blocked_transition_board(*, blocked: bool) -> str:
         "## 已完成\n\n"
         "| 任务 | 名称 | 完成证据 |\n| --- | --- | --- |\n\n"
         "## 已取消\n\n无。\n"
+    )
+
+
+def cancellation_board(*, canceled: bool) -> str:
+    pending_schema = (
+        "| 优先级 | 任务 | 名称 | 唯一前序依赖 |\n"
+        "| --- | --- | --- | --- |\n"
+    )
+    done_schema = (
+        "| 任务 | 名称 | 完成证据 |\n"
+        "| --- | --- | --- |\n"
+    )
+    canceled_schema = (
+        "| 任务 | 名称 | 取消证据 |\n"
+        "| --- | --- | --- |\n"
+    )
+    pending = (
+        "无。"
+        if canceled
+        else pending_schema
+        + "| P1 | 任务-000013 | 建立 PR 自动合并策略与审批规则 | 000012 |"
+    )
+    canceled_rows = (
+        canceled_schema
+        + "| 任务-000013 | 建立 PR 自动合并策略与审批规则 | "
+        "替代任务-000014；PR #41；合并提交 `0123456789abcdef0123456789abcdef01234567`；"
+        "取消原因：任务-000013的原交付路径已被任务-000014替代。 |"
+        if canceled
+        else "无。"
+    )
+    return (
+        "# 看板\n\n"
+        f"## 待执行\n\n{pending}\n\n"
+        "## 执行中\n\n无。\n\n"
+        "## 阻塞\n\n无。\n\n"
+        "## 待评审\n\n无。\n\n"
+        "## 需修复\n\n无。\n\n"
+        "## 已完成\n\n"
+        f"{done_schema}| 任务-000014 | 建立 PR 自动合并策略与审批规则 | "
+        "PR #41；合并提交 `0123456789abcdef0123456789abcdef01234567` |\n\n"
+        f"## 已取消\n\n{canceled_rows}\n"
     )
 
 
@@ -1917,6 +1973,95 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         )
 
         self.assertTrue(result.eligible)
+
+    def test_合并后状态闭环允许有证据取消未完成任务(self):
+        body = (
+            "## 关联任务\n\n- 任务-000013\n\n"
+            "## 变更类型\n\n- 合并后状态闭环\n"
+        )
+        result = self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/看板.md",
+            ],
+            pr_body=body,
+            base_tasks={
+                "000013": task_text(status="待执行", dependency="000012"),
+                "000014": task_text(status="已完成"),
+            },
+            head_tasks={
+                "000013": cancellation_task_text(),
+                "000014": task_text(status="已完成"),
+            },
+            merge_facts={
+                "000014": self.policy.MergeFact(
+                    sha="0123456789abcdef0123456789abcdef01234567",
+                    merged_at="2026-08-03 08:00:00 +0800",
+                    pr_number=41,
+                )
+            },
+            base_board=cancellation_board(canceled=False),
+            head_board=cancellation_board(canceled=True),
+        )
+        self.assertTrue(result.eligible, result.reasons)
+
+    def test_取消状态闭环拒绝缺失替代合并事实(self):
+        body = (
+            "## 关联任务\n\n- 任务-000013\n\n"
+            "## 变更类型\n\n- 合并后状态闭环\n"
+        )
+        result = self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/看板.md",
+            ],
+            pr_body=body,
+            base_tasks={
+                "000013": task_text(status="待执行", dependency="000012"),
+                "000014": task_text(status="已完成"),
+            },
+            head_tasks={
+                "000013": cancellation_task_text(),
+                "000014": task_text(status="已完成"),
+            },
+            merge_facts={},
+            base_board=cancellation_board(canceled=False),
+            head_board=cancellation_board(canceled=True),
+        )
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000013取消依据合并事实与main不一致", result.reasons)
+
+    def test_取消状态闭环拒绝已完成任务(self):
+        body = (
+            "## 关联任务\n\n- 任务-000013\n\n"
+            "## 变更类型\n\n- 合并后状态闭环\n"
+        )
+        result = self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/看板.md",
+            ],
+            pr_body=body,
+            base_tasks={
+                "000013": task_text(status="已完成", dependency="000012"),
+                "000014": task_text(status="已完成"),
+            },
+            head_tasks={
+                "000013": cancellation_task_text(),
+                "000014": task_text(status="已完成"),
+            },
+            merge_facts={
+                "000014": self.policy.MergeFact(
+                    sha="0123456789abcdef0123456789abcdef01234567",
+                    merged_at="2026-08-03 08:00:00 +0800",
+                    pr_number=41,
+                )
+            },
+            base_board=cancellation_board(canceled=False),
+            head_board=cancellation_board(canceled=True),
+        )
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000013存在非法状态闭环“已完成→已取消”", result.reasons)
 
     def test_合并后状态闭环允许待执行任务记录脱敏阻塞(self):
         body = (
