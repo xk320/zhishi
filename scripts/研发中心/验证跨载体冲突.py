@@ -205,12 +205,16 @@ def _read_at_ref(repo_root: Path, ref: str, path: str) -> str | None:
 
 def _list_task_paths(repo_root: Path, ref: str) -> tuple[str, ...] | None:
     code, stdout, _ = _git(repo_root, "ls-tree", "-r", "-z", "--name-only", ref, "--", TASK_DIR)
-    if code != 0:
+    if code != 0 or len(stdout) > MAX_TREE_BYTES:
+        return None
+    try:
+        decoded = stdout.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
         return None
     paths = tuple(
         sorted(
             path
-            for path in stdout.decode("utf-8", errors="strict").split("\0")
+            for path in decoded.split("\0")
             if path
             if TASK_PATTERN.fullmatch(path)
         )
