@@ -78,7 +78,7 @@
       "路径": "docs/审计/数据缺口与补采清单.md"
     },
     {
-      "SHA-256": "b6f4a4e304f8eabd264d9d585abb6e2f47e68c6b37f8574863e4fcb2e4eb40d2",
+      "SHA-256": "e91fe8b04904188ddc099811cb4b33bb11674f81c6aae3867dc7035a12af1dbf",
       "用途": "既有数据资产发现器",
       "路径": "scripts/审计/发现数据资产.py"
     }
