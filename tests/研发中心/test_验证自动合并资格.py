@@ -132,6 +132,32 @@ def closure_board(*, completed: bool) -> str:
     )
 
 
+def blocked_transition_board(*, blocked: bool) -> str:
+    pending_schema = (
+        "| 优先级 | 任务 | 名称 | 唯一前序依赖 |\n"
+        "| --- | --- | --- | --- |\n"
+    )
+    blocked_schema = (
+        "| 优先级 | 任务 | 名称 | 唯一前序依赖 | 阻塞原因 |\n"
+        "| --- | --- | --- | --- | --- |\n"
+    )
+    row = "| P1 | 任务-000013 | 建立 PR 自动合并策略与审批规则 | 000012 |"
+    blocked_row = row + " 任务-000012尚未完成。 |"
+    return (
+        "# 看板\n\n"
+        f"## 待执行\n\n{pending_schema + ('' if blocked else row)}\n\n"
+        "## 执行中\n\n无。\n\n"
+        f"## 阻塞\n\n{blocked_schema + (blocked_row if blocked else '')}\n\n"
+        "## 待评审\n\n"
+        "| 优先级 | 任务 | 名称 | 分支 | PR |\n"
+        "| --- | --- | --- | --- | --- |\n\n"
+        "## 需修复\n\n无。\n\n"
+        "## 已完成\n\n"
+        "| 任务 | 名称 | 完成证据 |\n| --- | --- | --- |\n\n"
+        "## 已取消\n\n无。\n"
+    )
+
+
 def delivery_board(
     *,
     head: bool,
@@ -1088,6 +1114,7 @@ class AutoMergeEligibilityTests(unittest.TestCase):
     def test_敏感内容全部拒绝且原因不回显正文(self):
         sensitive_values = (
             "-----BEGIN " + "PRIVATE KEY-----",
+            "ssh ubuntu 192.168.31.201",
             "g" + "hp_" + "a" * 36,
             "github_" + "pat_" + "a" * 82,
             "A" + "KIA" + "1" * 16,
@@ -1889,6 +1916,142 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         )
 
         self.assertTrue(result.eligible)
+
+    def test_合并后状态闭环允许待执行任务记录脱敏阻塞(self):
+        body = (
+            "## 关联任务\n\n- 任务-000013\n\n"
+            "## 变更类型\n\n- 合并后状态闭环\n"
+        )
+        base_task = task_text(
+            status="待执行", task_type="数据审计", dependency="000012"
+        )
+        head_task = task_text(
+            status="阻塞", task_type="数据审计", dependency="000012",
+            extra_contract=(
+                "- 开始时间：`2026-08-04T10:00:00+08:00`\n\n"
+                "## 执行记录\n\n"
+                "- 执行分支：`branch`\n"
+                "- 开始时间：`2026-08-04T10:00:00+08:00`\n"
+                "- 尝试命令：`ssh ubuntu printf ready`\n"
+                "- 结果：目标不可达，未生成批次。\n"
+                "- 外部证据：SSH返回Host is down。\n"
+                "- 阻塞原因：获批目标当前不可达。\n"
+                "- 解除条件：目标恢复后重新执行。\n"
+                "- 数据与安全：未读取或修改远端数据。\n"
+            ),
+        )
+        result = self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/看板.md",
+            ],
+            pr_body=body,
+            base_tasks={"000013": base_task},
+            head_tasks={"000013": head_task},
+            base_board=blocked_transition_board(blocked=False),
+            head_board=blocked_transition_board(blocked=True),
+        )
+
+        self.assertTrue(result.eligible, result.reasons)
+
+    def test_合并后状态闭环拒绝已完成任务进入阻塞(self):
+        body = (
+            "## 关联任务\n\n- 任务-000013\n\n"
+            "## 变更类型\n\n- 合并后状态闭环\n"
+        )
+        result = self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/看板.md",
+            ],
+            pr_body=body,
+            base_tasks={"000013": task_text(status="已完成", dependency="000012")},
+            head_tasks={"000013": task_text(status="阻塞", dependency="000012")},
+            base_board=blocked_transition_board(blocked=False),
+            head_board=blocked_transition_board(blocked=True),
+        )
+
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000013存在非法状态闭环“已完成→阻塞”", result.reasons)
+
+    def test_合并后状态闭环允许阻塞任务转为需修复(self):
+        body = (
+            "## 关联任务\n\n- 任务-000013\n\n"
+            "## 变更类型\n\n- 合并后状态闭环\n"
+        )
+        execution_record = (
+            "- 开始时间：`2026-08-04T10:00:00+08:00`\n\n"
+            "## 执行记录\n\n"
+            "- 执行分支：`branch`\n"
+            "- 开始时间：`2026-08-04T10:00:00+08:00`\n"
+            "- 尝试命令：`ssh ubuntu printf ready`\n"
+            "- 结果：目标不可达，未生成批次。\n"
+            "- 外部证据：SSH返回Host is down。\n"
+            "- 阻塞原因：获批目标当前不可达。\n"
+            "- 解除条件：目标恢复后重新执行。\n"
+            "- 数据与安全：未读取或修改远端数据。\n"
+            "\n- Pull Request：[ #40](https://github.com/xk320/zhishi/pull/40)\n"
+        ).replace("[ #40]", "[#40]")
+        base_task = task_text(
+            status="阻塞", task_type="数据审计", dependency="000012",
+            extra_contract=execution_record,
+        )
+        head_task = base_task.replace("- 状态：阻塞", "- 状态：需修复", 1)
+        repair_board = (
+            "# 看板\n\n"
+            "## 待执行\n\n无。\n\n"
+            "## 执行中\n\n无。\n\n"
+            "## 阻塞\n\n无。\n\n"
+            "## 待评审\n\n"
+            "| 优先级 | 任务 | 名称 | 分支 | PR |\n"
+            "| --- | --- | --- | --- | --- |\n\n"
+            "## 需修复\n\n"
+            "| 优先级 | 任务 | 名称 | 分支 | PR |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            "| P1 | 任务-000013 | 建立 PR 自动合并策略与审批规则 | `branch` | "
+            "[#40](https://github.com/xk320/zhishi/pull/40) |\n\n"
+            "## 已完成\n\n"
+            "| 任务 | 名称 | 完成证据 |\n"
+            "| --- | --- | --- |\n\n"
+            "## 已取消\n\n无。\n"
+        )
+        blocked_board = blocked_transition_board(blocked=True)
+        result = self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/看板.md",
+            ],
+            pr_body=body,
+            base_tasks={"000013": base_task},
+            head_tasks={"000013": head_task},
+            base_board=blocked_board,
+            head_board=repair_board,
+        )
+
+        self.assertTrue(result.eligible, result.reasons)
+
+    def test_合并后状态闭环拒绝阻塞恢复夹带合同改写(self):
+        body = (
+            "## 关联任务\n\n- 任务-000013\n\n"
+            "## 变更类型\n\n- 合并后状态闭环\n"
+        )
+        base_task = task_text(status="阻塞", dependency="000012")
+        head_task = base_task.replace("- 状态：阻塞", "- 状态：需修复", 1)
+        head_task += "\n\n额外改写。\n"
+        result = self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/看板.md",
+            ],
+            pr_body=body,
+            base_tasks={"000013": base_task},
+            head_tasks={"000013": head_task},
+            base_board=blocked_transition_board(blocked=True),
+            head_board=blocked_transition_board(blocked=True),
+        )
+
+        self.assertFalse(result.eligible)
+        self.assertIn("阻塞恢复状态闭环夹带合同改写", result.reasons)
 
     def test_状态闭环接受依赖章节中的后继解锁字段(self):
         def move_dependency_fields_to_section(text: str) -> str:
