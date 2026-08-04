@@ -195,6 +195,17 @@ class TaskCenterMappingTests(unittest.TestCase):
         board = BOARD_PATH.read_text(encoding="utf-8")
         self.assertTrue(board_policy()._board_schema_is_valid(board))
 
+    def test_现行入口绑定最新只读预检并拒绝失效不可达声明(self):
+        current_text = "\n".join(
+            (ROOT / relative_path).read_text(encoding="utf-8")
+            for relative_path in CURRENT_STATE_FILES
+        )
+        self.assertIn("ubuntu`可达", current_text)
+        self.assertIn("python3_entry_reachable", current_text)
+        self.assertIn("任务-000034为下一数据闭环任务", current_text)
+        self.assertNotIn("白名单逻辑别名`ubuntu`不可达", current_text)
+        self.assertNotIn("任务-000031至任务-000037仍按依赖保持阻塞", current_text)
+
 
 class TaskContractTests(unittest.TestCase):
     def test_待执行或需修复任务必须有已批准唯一方案(self):
