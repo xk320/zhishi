@@ -95,6 +95,32 @@ class ExternalStateConsistencyTests(unittest.TestCase):
                 board,
             )
             return
+        if status == "执行中":
+            self.assertIn("当前阻塞原因：无；", task)
+            self.assertIn("probe_category=reachable", task)
+            self.assertIn("preflight=python3_entry_reachable", task)
+            self.assertIn("- 执行分支：`codex/000031-quality-audit-v2`", task)
+            self.assertIn(
+                "| P0 | 任务-000031 | 完成不可变输入与全量只读质量审计 | "
+                "`codex/000031-quality-audit-v2` | 2026-08-05T00:27:42+08:00 |",
+                board,
+            )
+            return
+        if status == "待评审":
+            self.assertIn("当前阻塞原因：无；", task)
+            self.assertIn("dqv-20260805T002810+0800-e85f8d999b07", task)
+            self.assertIn(
+                "| P0 | 任务-000031 | 完成不可变输入与全量只读质量审计 |",
+                board,
+            )
+            return
+        if status == "已完成":
+            self.assertIn("dqv-20260805T002810+0800-e85f8d999b07", task)
+            self.assertIn(
+                "| 任务-000031 | 完成不可变输入与全量只读质量审计 |",
+                board,
+            )
+            return
         self.fail(f"任务-000031状态不在合法外部状态夹具范围：{status}")
 
     def _assert_task043_state_mapping(self, task: str, board: str) -> None:
