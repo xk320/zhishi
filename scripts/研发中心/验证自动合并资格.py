@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -50,7 +51,13 @@ BLOCKER_PATTERN = re.compile(r"^- 当前阻塞原因：(.+)$", re.MULTILINE)
 BOARD_TASK_ROW_PATTERN = re.compile(
     r"^\|\s*(?:P[0-3]\s*\|\s*)?任务-(\d{6})\s*\|"
 )
-BOARD_TABLE_SCHEMA = {
+BOARD_SCHEMA_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "config"
+    / "研发中心"
+    / "任务看板模式.json"
+)
+_BOOTSTRAP_BOARD_TABLE_SCHEMA = {
     "待执行": (
         "| 优先级 | 任务 | 名称 | 唯一前序依赖 |",
         "| --- | --- | --- | --- |",
@@ -72,6 +79,62 @@ BOARD_TABLE_SCHEMA = {
         "| --- | --- | --- |",
     ),
 }
+
+
+def _board_schema_payload(schema_version, sections):
+    return {"schema_version": schema_version, "sections": sections}
+
+
+def _board_schema_digest(schema_version, sections):
+    payload = json.dumps(
+        _board_schema_payload(schema_version, sections),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _load_board_table_schema():
+    """从机器合同加载看板模式；仅允许一次性缺文件引导回退。"""
+
+    if not BOARD_SCHEMA_PATH.exists():
+        return dict(_BOOTSTRAP_BOARD_TABLE_SCHEMA)
+    try:
+        document = json.loads(BOARD_SCHEMA_PATH.read_text(encoding="utf-8"))
+        if set(document) != {"schema_version", "content_sha256", "sections"}:
+            return {}
+        version = document["schema_version"]
+        sections = document["sections"]
+        if version != "zhishi-task-board/v1" or not isinstance(sections, dict):
+            return {}
+        if set(sections) != set(_BOOTSTRAP_BOARD_TABLE_SCHEMA):
+            return {}
+        normalized = {}
+        for section, schema in sections.items():
+            if (
+                not isinstance(schema, list)
+                or len(schema) != 2
+                or not all(
+                    isinstance(line, str) and line.startswith("|")
+                    for line in schema
+                )
+            ):
+                return {}
+            normalized[section] = tuple(schema)
+        if document["content_sha256"] != _board_schema_digest(version, sections):
+            return {}
+        if any(
+            normalized[section] != _BOOTSTRAP_BOARD_TABLE_SCHEMA[section]
+            for section in normalized
+        ):
+            return {}
+        return normalized
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError):
+        return {}
+
+
+BOARD_TABLE_SCHEMA = _load_board_table_schema()
 AUTOMATION_SCOPE_PATTERN = re.compile(r"^- 自动合并范围：(.+)$", re.MULTILINE)
 MERGE_SHA_PATTERN = re.compile(
     r"^- 合并提交SHA：`([0-9a-f]{40})`$", re.MULTILINE
