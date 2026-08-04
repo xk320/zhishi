@@ -158,7 +158,7 @@ def delivery_board(
         pending = "无。"
         repair = (
             review_schema
-            + f"| {priority} | 任务-{task_id} | {title} | {branch} | [#{pr_number}](https://github.com/xk320/zhishi/pull/{pr_number}) |"
+            + f"| {priority} | 任务-{task_id} | {title} | `{branch}` | [#{pr_number}](https://github.com/xk320/zhishi/pull/{pr_number}) |"
         )
     else:
         repair = "无。"
@@ -167,7 +167,7 @@ def delivery_board(
             + f"| {priority} | 任务-{task_id} | {title} | {dependency} |"
         )
     review = (
-        review_schema + f"| {priority} | 任务-{task_id} | {title} | {branch} | [#{pr_number}](https://github.com/xk320/zhishi/pull/{pr_number}) |"
+        review_schema + f"| {priority} | 任务-{task_id} | {title} | `{branch}` | [#{pr_number}](https://github.com/xk320/zhishi/pull/{pr_number}) |"
         if head
         else "无。"
     )

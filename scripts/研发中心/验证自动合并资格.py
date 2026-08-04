@@ -1368,7 +1368,7 @@ def _validate_delivery_board(
                 base_status == "需修复"
                 and len(base_cells) == 5
                 and base_branch is not None
-                and base_cells[3] == base_branch
+                and base_cells[3] == f"`{base_branch}`"
                 and base_pr_match is not None
                 and base_cells[4]
                 == (
@@ -1406,7 +1406,7 @@ def _validate_delivery_board(
         )
         if (
             head_branch is None
-            or head_cells[3] != head_branch
+            or head_cells[3] != f"`{head_branch}`"
             or head_cells[4] != expected_pr
         ):
             _append_reason(reasons, mapping_reason)
