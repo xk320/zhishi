@@ -22,6 +22,7 @@ from typing import Iterable, Mapping, Sequence
 
 AUDIT_VERSION = "1.0"
 RULE_VERSION = "dq-rules-1.0"
+CURRENT_TARGETS = ("BTC", "ETH")
 ALLOWED_ROOTS = (
     "/opt/binance-event",
     "/opt/celueqing",
@@ -1280,7 +1281,7 @@ def render_report(
             }
             for row in quality_rows
         )
-        for symbol in ("BTC", "ETH", "SOL")
+        for symbol in CURRENT_TARGETS
     }
     lines = [
         "# 《知势》数据质量审计报告",
@@ -1301,7 +1302,7 @@ def render_report(
         "",
         "## 技术摘要",
         "",
-        f"- **结论：BTC、ETH、SOL均为无法判定。** {unresolved}个验证单元没有一个具备已证明的标的身份、三类时间、频率、重放和最小闭环证据。",
+        f"- **结论：BTC、ETH均为无法判定。** {unresolved}个验证单元没有一个具备已证明的标的身份、三类时间、频率、重放和最小闭环证据。",
         f"- **文件结构质量已形成部分可重算证据。** {complete}个文件完整扫描，共{file_records}条记录、{structural_missing}项空值或空文本；已量化{exact_duplicates}条规范记录重复。",
         f"- **时间与断档硬门仍未建立。** 只有{arrival_candidates}个验证单元出现到达时间候选字段，且候选字段均未获得业务语义证明；全部断档结果保持无法判定。",
         f"- **审计保持只读。** {metadata_only}个MySQL对象仅查询元数据，{sensitive_excluded}个敏感系统日志保留覆盖记录但未读取正文；{input_drift}个动态文件因两阶段身份漂移未形成内容结论。",
@@ -1337,12 +1338,12 @@ def render_report(
         "5. 重复集合超过固定上限时保留记录与缺失统计，但重复结论降级为无法判定。",
         "6. 三份逐对象CSV用于精确复算；未绘制图表，因为审计明细和不可比口径更适合表格查验。",
         "",
-        "## BTC、ETH、SOL均无法判定",
+        "## BTC、ETH均无法判定",
         "",
         "| 标的 | 结论 | 精确作用域 | 主要依据 | 限制与解除条件 |",
         "| --- | --- | --- | --- | --- |",
     ]
-    for symbol in ("BTC", "ETH", "SOL"):
+    for symbol in CURRENT_TARGETS:
         count = symbol_counts[symbol]
         if count:
             scope = (

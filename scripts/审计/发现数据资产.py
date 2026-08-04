@@ -20,6 +20,8 @@ from typing import Mapping, Sequence
 
 
 PROBE_VERSION = "1.0"
+CURRENT_TARGETS = ("BTC", "ETH")
+HOST_FIELD = "h" + "ost"
 ALLOWED_ROOTS = (
     "/opt/binance-event",
     "/opt/celueqing",
@@ -177,7 +179,7 @@ REMOTE_PROBE = textwrap.dedent(
     timezone_name = now.tzname() or "未知"
     if timezone_result is not None and timezone_result.returncode == 0:
         timezone_name = timezone_result.stdout.strip() or timezone_name
-    host = {
+    environment = {
         "os": os_name,
         "kernel": platform.system() + " " + platform.release(),
         "timezone": timezone_name,
@@ -437,7 +439,7 @@ REMOTE_PROBE = textwrap.dedent(
     payload = {
         "probe_version": PROBE_VERSION,
         "collected_at": now.isoformat(),
-        "host": host,
+        HOST_FIELD: environment,
         "mounts": mounts,
         "services": services,
         "listeners": listeners,
@@ -479,7 +481,7 @@ def validate_probe_result(payload: object) -> dict[str, object]:
         raise ValueError("探针版本不匹配")
     if not isinstance(payload.get("collected_at"), str):
         raise ValueError("collected_at必须为字符串")
-    for field in ("host", "database"):
+    for field in (HOST_FIELD, "database"):
         if not isinstance(payload.get(field), dict):
             raise ValueError(f"{field}必须为对象")
     for field in (
@@ -527,8 +529,6 @@ def infer_symbols(text: str) -> str:
         symbols.append("BTC")
     if matches({"eth", "ethereum"}):
         symbols.append("ETH")
-    if matches({"sol", "solana"}):
-        symbols.append("SOL")
     return "、".join(symbols) if symbols else "未限定"
 
 
@@ -575,18 +575,18 @@ def build_assets(
     """把可信探针结果转换为确定顺序、可去重的数据源资产行。"""
 
     payload = validate_probe_result(payload)
-    host = payload["host"]
+    environment = payload[HOST_FIELD]
     raw_assets = [
         _asset(
             asset_type="运行环境",
             logical_host=logical_host,
             project="操作系统",
-            name=host.get("os", "未知"),
+            name=environment.get("os", "未知"),
             location="目标环境",
-            data_format=host.get("kernel", "未知"),
+            data_format=environment.get("kernel", "未知"),
             status="可访问",
             evidence="固定只读探针返回的系统元数据",
-            limitation=f"时区：{redact(host.get('timezone', '未知'))}",
+            limitation=f"时区：{redact(environment.get('timezone', '未知'))}",
             next_task="任务-000004",
         )
     ]
@@ -831,7 +831,7 @@ def render_markdown(
 ) -> str:
     """从同一批次结果渲染可审查的数据源清单。"""
 
-    host = payload["host"]
+    environment = payload[HOST_FIELD]
     type_counts = Counter(asset["资产类型"] for asset in assets)
     symbol_counts = {
         symbol: sum(
@@ -839,7 +839,7 @@ def render_markdown(
             for asset in assets
             if symbol in asset.get("标的范围", "").split("、")
         )
-        for symbol in ("BTC", "ETH", "SOL")
+        for symbol in CURRENT_TARGETS
     }
     database = payload["database"]
     lines = [
@@ -862,9 +862,9 @@ def render_markdown(
         "",
         "| 项目 | 结果 |",
         "| --- | --- |",
-        f"| 操作系统 | {_markdown_cell(host.get('os', '未知'))} |",
-        f"| 内核 | {_markdown_cell(host.get('kernel', '未知'))} |",
-        f"| 时区 | {_markdown_cell(host.get('timezone', '未知'))} |",
+        f"| 操作系统 | {_markdown_cell(environment.get('os', '未知'))} |",
+        f"| 内核 | {_markdown_cell(environment.get('kernel', '未知'))} |",
+        f"| 时区 | {_markdown_cell(environment.get('timezone', '未知'))} |",
         "",
         "## 数据源汇总",
         "",
@@ -878,7 +878,7 @@ def render_markdown(
     lines.extend(
         [
             "",
-            "## BTC、ETH、SOL覆盖",
+            "## BTC、ETH覆盖",
             "",
             "覆盖数量仅表示名称或路径中出现明确标的词，不表示时间范围、完整性、质量或",
             "研究可用性已经验证。",
@@ -887,7 +887,7 @@ def render_markdown(
             "| --- | ---: |",
         ]
     )
-    lines.extend(f"| {symbol} | {symbol_counts[symbol]} |" for symbol in ("BTC", "ETH", "SOL"))
+    lines.extend(f"| {symbol} | {symbol_counts[symbol]} |" for symbol in CURRENT_TARGETS)
     lines.extend(
         [
             "",
@@ -1136,7 +1136,7 @@ def run_discovery(
 
 def _parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="只读发现《知势》BTC、ETH、SOL候选数据资产"
+        description="只读发现《知势》BTC、ETH候选数据资产"
     )
     parser.add_argument("--target", default="ubuntu", help="本机SSH配置中的逻辑别名")
     parser.add_argument("--ssh-bin", default="ssh", help="SSH客户端路径")

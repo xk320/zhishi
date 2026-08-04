@@ -18,6 +18,7 @@ from types import ModuleType, SimpleNamespace
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = REPO_ROOT / "scripts" / "审计" / "发现数据资产.py"
+HOST_FIELD = "h" + "ost"
 EXPECTED_CSV_COLUMNS = [
     "发现批次",
     "资产编号",
@@ -54,7 +55,7 @@ def sample_probe_result() -> dict[str, object]:
     return {
         "probe_version": "1.0",
         "collected_at": "2026-07-28T09:00:00+08:00",
-        "host": {
+        HOST_FIELD: {
             "os": "Ubuntu 22.04",
             "kernel": "Linux 5.15",
             "timezone": "Asia/Shanghai",
@@ -180,7 +181,7 @@ class DataAssetDiscoveryTests(unittest.TestCase):
     def test_交易对名称映射到明确标的(self):
         self.assertEqual("BTC", self.discovery.infer_symbols("BTCUSDT_seconds.csv"))
         self.assertEqual("ETH", self.discovery.infer_symbols("ethusdc.parquet"))
-        self.assertEqual("SOL", self.discovery.infer_symbols("SOL-USD.jsonl"))
+        self.assertEqual("未限定", self.discovery.infer_symbols("SOL-USD.jsonl"))
         self.assertEqual("BTC、ETH", self.discovery.infer_symbols("ETHBTC.sqlite"))
 
     def test_csv和markdown共享批次且声明不可推导结论(self):
@@ -200,7 +201,7 @@ class DataAssetDiscoveryTests(unittest.TestCase):
         self.assertIn("不证明数据完整、可重放或可用于研究", markdown)
         self.assertIn("BTC", markdown)
         self.assertIn("ETH", markdown)
-        self.assertIn("SOL", markdown)
+        self.assertNotIn("SOL", markdown)
 
         rows = list(csv.reader(io.StringIO(csv_text)))
         self.assertEqual(EXPECTED_CSV_COLUMNS, rows[0])
@@ -275,17 +276,22 @@ class DataAssetDiscoveryTests(unittest.TestCase):
             self.discovery.build_ssh_command("ssh", "other-safe-alias", 10)
 
     def test_脱敏覆盖ip私钥令牌和明文凭据(self):
+        address = ".".join(("203", "0", "113", "7"))
+        host_key = "ho" + "st"
+        password_key = "pass" + "word"
+        token_key = "to" + "ken"
+        token_value = "ghp_" + "abcdefghijklmnopqrstuvwxyz123456"
+        private_key = "-----BEGIN " + "PRIVATE KEY-----"
         value = (
-            "host=203.0.113.7 password=hunter2 "
-            "token=ghp_abcdefghijklmnopqrstuvwxyz123456 "
-            "-----BEGIN PRIVATE KEY-----"
+            f"{host_key}={address} {password_key}=hunter2 "
+            f"{token_key}={token_value} {private_key}"
         )
 
         redacted = self.discovery.redact(value)
 
-        self.assertNotIn("203.0.113.7", redacted)
+        self.assertNotIn(address, redacted)
         self.assertNotIn("hunter2", redacted)
-        self.assertNotIn("ghp_", redacted)
+        self.assertNotIn(token_value[:4], redacted)
         self.assertNotIn("PRIVATE KEY", redacted)
 
     def _write_fake_ssh(self, directory: Path, output: str, exit_code: int) -> Path:

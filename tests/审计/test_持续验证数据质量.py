@@ -108,7 +108,7 @@ def write_inventory(path: Path) -> None:
 
 def valid_plan(inventory: Path) -> dict[str, object]:
     return {
-        "方案版本": "dq-continuous-plan-1.0",
+        "方案版本": "dq-continuous-plan-1.1",
         "底层审计规则版本": "dq-rules-1.0",
         "资产清单指纹": sha256(inventory),
         "允许SSH目标": ["ubuntu"],
@@ -126,7 +126,7 @@ def valid_plan(inventory: Path) -> dict[str, object]:
             "无法判定": "无法判定",
         },
         "作用域": {
-            "标的": ["BTC", "ETH", "SOL"],
+            "标的": ["BTC", "ETH"],
             "主研究尺度": ["4小时", "8小时", "24小时", "48小时"],
             "结果观察窗口": ["15分钟", "1小时"],
             "分组维度": [

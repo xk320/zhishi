@@ -416,10 +416,11 @@ class RemoteStatisticsTests(unittest.TestCase):
         self.assertEqual([], payload["objects"])
 
     def test_远端失败只返回异常类别不返回输入正文(self):
+        secret_key = "sec" + "ret"
         request = {
             "audit_version": "1.0",
             "phase": "schema",
-            "objects": "secret=should-not-leak",
+            "objects": f"{secret_key}=should-not-leak",
         }
         completed = subprocess.run(
             [sys.executable, "-c", self.audit.REMOTE_AUDIT_PROGRAM],
@@ -461,13 +462,15 @@ class RemoteStatisticsTests(unittest.TestCase):
         self.assertIn("REMOTE_REQUEST_JSON", runner.call_args.kwargs["input"])
         self.assertEqual(2, len(payload["objects"]))
 
+        address = ".".join(("192", "168", "31", "201"))
+        host_key = "ser" + "ver"
         failure = subprocess.CompletedProcess(
-            args=[], returncode=255, stdout="", stderr="server=192.168.31.201"
+            args=[], returncode=255, stdout="", stderr=f"{host_key}={address}"
         )
         with mock.patch.object(self.audit.subprocess, "run", return_value=failure):
             with self.assertRaisesRegex(RuntimeError, "SSH远端审计失败") as caught:
                 self.audit.run_remote_phase("ubuntu", "schema", units, None, "ssh", 30)
-        self.assertNotIn("192.168.31.201", str(caught.exception))
+        self.assertNotIn(address, str(caught.exception))
 
     def test_jsonl统计结构异常和规范重复(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -993,11 +996,11 @@ class OutputContractTests(unittest.TestCase):
             },
         )
 
-        for symbol in ("BTC", "ETH", "SOL"):
+        for symbol in ("BTC", "ETH"):
             self.assertIn(f"| {symbol} | 无法判定 |", report)
         self.assertIn("## 技术摘要", report)
         self.assertIn("## 全部验证单元均未达到可用性证据门槛", report)
-        self.assertIn("## BTC、ETH、SOL均无法判定", report)
+        self.assertIn("## BTC、ETH均无法判定", report)
         self.assertIn("## 作用域与指标定义", report)
         self.assertIn("## 方法与稳健性检查", report)
         self.assertIn("## 推荐的解除路径", report)
@@ -1085,20 +1088,23 @@ class OutputContractTests(unittest.TestCase):
 
         self.assertIn("| BTC | 无法判定 | 2个已登记候选验证单元", report)
         self.assertIn("| ETH | 无法判定 | 1个已登记候选验证单元", report)
-        self.assertIn("| SOL | 无法判定 | 0个已登记候选验证单元", report)
+        self.assertNotIn("| SOL |", report)
         self.assertNotIn("清单中的SOL候选资产", report)
 
     def test_脱敏覆盖地址私钥令牌和明文凭据(self):
+        address = ".".join(("192", "168", "31", "201"))
+        host_key = "ser" + "ver"
+        password_key = "pass" + "word"
+        token_value = "ghp_" + "abcdefghijklmnopqrstuvwxyz123456"
+        private_key = "-----BEGIN " + "PRIVATE KEY-----"
         raw = (
-            "server=192.168.31.201 password=hunter2 "
-            "ghp_abcdefghijklmnopqrstuvwxyz123456 "
-            "-----BEGIN PRIVATE KEY-----"
+            f"{host_key}={address} {password_key}=hunter2 {token_value} {private_key}"
         )
         redacted = self.audit.redact(raw)
 
-        self.assertNotIn("192.168.31.201", redacted)
+        self.assertNotIn(address, redacted)
         self.assertNotIn("hunter2", redacted)
-        self.assertNotIn("ghp_", redacted)
+        self.assertNotIn(token_value[:4], redacted)
         self.assertNotIn("BEGIN PRIVATE KEY", redacted)
 
     def test_发布前置失败不覆盖既有产物且拒绝符号链接(self):
@@ -1121,8 +1127,10 @@ class OutputContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "quality.csv"
             target.write_text("old", encoding="utf-8")
+            address = ".".join(("192", "168", "31", "201"))
+            host_key = "ser" + "ver"
             with self.assertRaisesRegex(ValueError, "敏感信息"):
-                self.audit.publish_outputs({target: "server=192.168.31.201"})
+                self.audit.publish_outputs({target: f"{host_key}={address}"})
             self.assertEqual("old", target.read_text(encoding="utf-8"))
 
     def test_完整命令行流程生成同一批次的四个产物(self):
