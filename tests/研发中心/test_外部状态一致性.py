@@ -1,8 +1,15 @@
 from pathlib import Path
 import unittest
+from datetime import datetime, timedelta, timezone
+import importlib.util
 
 
 ROOT = Path(__file__).resolve().parents[2]
+SCRIPT_PATH = ROOT / "scripts/研发中心/验证外部状态一致性.py"
+SPEC = importlib.util.spec_from_file_location("external_state_contract", SCRIPT_PATH)
+assert SPEC is not None and SPEC.loader is not None
+CONTRACT = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(CONTRACT)
 CANONICAL_CURRENT_STATE_PREFIXES = (
     "当前外部事实以任务-000031最新脱敏执行",
     "当前外部状态以任务-000031最新脱敏执行",
@@ -55,6 +62,61 @@ class ExternalStateConsistencyTests(unittest.TestCase):
         historical = (ROOT / "docs/研发中心/任务/任务-000028.md").read_text(encoding="utf-8")
         self.assertIn("任务-000028：统一阶段状态与BTC、ETH研究范围", historical)
         self.assertIn("执行记录", historical)
+
+    def test_四个现行外部状态词汇已冻结(self):
+        design = (ROOT / "docs/superpowers/specs/2026-08-04-external-state-consistency-design.md").read_text(encoding="utf-8")
+        self.assertEqual(
+            CONTRACT.STATE_VOCABULARY,
+            ("未验证", "可达（仅连接）", "不可达", "可达但审计未完成"),
+        )
+        for state in CONTRACT.STATE_VOCABULARY:
+            self.assertIn(f"`{state}`", design)
+
+    def test_证据新鲜度拒绝缺时区未来和过期(self):
+        observed = datetime(2026, 8, 4, 4, 0, tzinfo=timezone.utc)
+        self.assertTrue(
+            CONTRACT.evidence_is_fresh(
+                observed - timedelta(minutes=30), observed
+            )
+        )
+        self.assertFalse(
+            CONTRACT.evidence_is_fresh(
+                observed - timedelta(minutes=61), observed
+            )
+        )
+        self.assertFalse(
+            CONTRACT.evidence_is_fresh(
+                observed + timedelta(minutes=1), observed
+            )
+        )
+        self.assertFalse(
+            CONTRACT.evidence_is_fresh(
+                datetime(2026, 8, 4, 3, 30), observed
+            )
+        )
+
+    def test_恢复只能走阻塞到待执行或需修复(self):
+        common = {
+            "current_state": "阻塞",
+            "probe_reachable": True,
+            "audit_evidence": True,
+            "evidence_fresh": True,
+        }
+        self.assertTrue(
+            CONTRACT.recovery_is_permitted(transition="阻塞→待执行", **common)
+        )
+        self.assertTrue(
+            CONTRACT.recovery_is_permitted(transition="阻塞→需修复", **common)
+        )
+        for transition in ("待执行→执行中", "阻塞→已完成", "执行中→待执行"):
+            self.assertFalse(
+                CONTRACT.recovery_is_permitted(transition=transition, **common)
+            )
+        self.assertFalse(
+            CONTRACT.recovery_is_permitted(
+                transition="阻塞→待执行", **{**common, "audit_evidence": False}
+            )
+        )
 
 
 if __name__ == "__main__":
