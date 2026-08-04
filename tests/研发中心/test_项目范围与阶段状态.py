@@ -396,7 +396,7 @@ class TaskContractTests(unittest.TestCase):
 
     def test_看板当前阶段反映阶段1证据修复(self):
         board = BOARD_PATH.read_text(encoding="utf-8")
-        self.assertIn("阶段1最终审计进行中", board)
+        self.assertIn("阶段1数据闭环证据修复", board)
         self.assertNotIn("进入研究数据闭环真实化阶段", board)
 
 
