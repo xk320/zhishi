@@ -94,3 +94,150 @@ class MergeFactDerivationTests(unittest.TestCase):
             self.policy._derive_merge_facts(repo, "main", {"000001": task}),
         )
 
+    def test_custom_subject_single_parent_is_rejected(self):
+        directory, repo = self.create_repo()
+        self.addCleanup(directory.cleanup)
+        commit_sha = git(repo, "rev-parse", "HEAD")
+        commit_time = git(repo, "show", "-s", "--format=%cI", commit_sha)
+        normalized_time = self.policy.datetime.fromisoformat(commit_time).strftime(
+            "%Y-%m-%d %H:%M:%S %z"
+        )
+        task = (
+            "- Pull Request：[#154](https://github.com/xk320/zhishi/pull/154)\n"
+            f"- 合并时间：{normalized_time}\n"
+            f"- 合并提交SHA：`{commit_sha}`\n"
+            f"- 交付提交SHA：`{commit_sha}`\n"
+        )
+        self.assertNotIn(
+            "000001",
+            self.policy._derive_merge_facts(repo, "main", {"000001": task}),
+        )
+
+    def test_custom_subject_three_parents_is_rejected(self):
+        directory, repo = self.create_repo()
+        self.addCleanup(directory.cleanup)
+        base_sha = git(repo, "rev-parse", "HEAD")
+        git(repo, "switch", "-q", "-c", "one")
+        (repo / "one.txt").write_text("one\n", encoding="utf-8")
+        git(repo, "add", "one.txt")
+        git(repo, "commit", "-qm", "one")
+        one_sha = git(repo, "rev-parse", "HEAD")
+        git(repo, "switch", "-q", "main")
+        git(repo, "switch", "-q", "-c", "two")
+        (repo / "two.txt").write_text("two\n", encoding="utf-8")
+        git(repo, "add", "two.txt")
+        git(repo, "commit", "-qm", "two")
+        two_sha = git(repo, "rev-parse", "HEAD")
+        tree_sha = git(repo, "rev-parse", f"{two_sha}^{{tree}}")
+        merge_sha = git(
+            repo,
+            "commit-tree",
+            tree_sha,
+            "-p",
+            base_sha,
+            "-p",
+            one_sha,
+            "-p",
+            two_sha,
+            "-m",
+            "custom merge",
+        )
+        git(repo, "update-ref", "refs/heads/main", merge_sha)
+        merge_time = git(repo, "show", "-s", "--format=%cI", merge_sha)
+        normalized_time = self.policy.datetime.fromisoformat(merge_time).strftime(
+            "%Y-%m-%d %H:%M:%S %z"
+        )
+        task = (
+            "- Pull Request：[#154](https://github.com/xk320/zhishi/pull/154)\n"
+            f"- 合并时间：{normalized_time}\n"
+            f"- 合并提交SHA：`{merge_sha}`\n"
+            f"- 交付提交SHA：`{one_sha}`\n"
+        )
+        self.assertNotIn(
+            "000001",
+            self.policy._derive_merge_facts(repo, "main", {"000001": task}),
+        )
+
+    def test_custom_subject_delivery_head_not_second_parent_is_rejected(self):
+        directory, repo = self.create_repo()
+        self.addCleanup(directory.cleanup)
+        git(repo, "switch", "-q", "-c", "delivery")
+        (repo / "delivery.txt").write_text("delivery\n", encoding="utf-8")
+        git(repo, "add", "delivery.txt")
+        git(repo, "commit", "-qm", "delivery")
+        delivery_sha = git(repo, "rev-parse", "HEAD")
+        git(repo, "switch", "-q", "main")
+        git(repo, "switch", "-q", "-c", "other")
+        (repo / "other.txt").write_text("other\n", encoding="utf-8")
+        git(repo, "add", "other.txt")
+        git(repo, "commit", "-qm", "other")
+        other_sha = git(repo, "rev-parse", "HEAD")
+        git(repo, "switch", "-q", "main")
+        git(repo, "merge", "--no-ff", "-q", "other", "-m", "custom merge")
+        merge_sha = git(repo, "rev-parse", "HEAD")
+        merge_time = git(repo, "show", "-s", "--format=%cI", merge_sha)
+        normalized_time = self.policy.datetime.fromisoformat(merge_time).strftime(
+            "%Y-%m-%d %H:%M:%S %z"
+        )
+        task = (
+            "- Pull Request：[#154](https://github.com/xk320/zhishi/pull/154)\n"
+            f"- 合并时间：{normalized_time}\n"
+            f"- 合并提交SHA：`{merge_sha}`\n"
+            f"- 交付提交SHA：`{delivery_sha}`\n"
+        )
+        self.assertNotIn(
+            "000001",
+            self.policy._derive_merge_facts(repo, "main", {"000001": task}),
+        )
+
+    def test_custom_subject_not_in_base_is_rejected(self):
+        directory, repo = self.create_repo()
+        self.addCleanup(directory.cleanup)
+        git(repo, "switch", "-q", "-c", "delivery")
+        (repo / "delivery.txt").write_text("delivery\n", encoding="utf-8")
+        git(repo, "add", "delivery.txt")
+        git(repo, "commit", "-qm", "delivery")
+        delivery_sha = git(repo, "rev-parse", "HEAD")
+        git(repo, "switch", "-q", "main")
+        git(repo, "merge", "--no-ff", "-q", "delivery", "-m", "custom merge")
+        merge_sha = git(repo, "rev-parse", "HEAD")
+        git(repo, "update-ref", "refs/heads/main", "HEAD~1")
+        merge_time = git(repo, "show", "-s", "--format=%cI", merge_sha)
+        normalized_time = self.policy.datetime.fromisoformat(merge_time).strftime(
+            "%Y-%m-%d %H:%M:%S %z"
+        )
+        task = (
+            "- Pull Request：[#154](https://github.com/xk320/zhishi/pull/154)\n"
+            f"- 合并时间：{normalized_time}\n"
+            f"- 合并提交SHA：`{merge_sha}`\n"
+            f"- 交付提交SHA：`{delivery_sha}`\n"
+        )
+        self.assertNotIn(
+            "000001",
+            self.policy._derive_merge_facts(repo, "main", {"000001": task}),
+        )
+
+    def test_custom_subject_without_pr_number_is_rejected(self):
+        directory, repo = self.create_repo()
+        self.addCleanup(directory.cleanup)
+        git(repo, "switch", "-q", "-c", "delivery")
+        (repo / "delivery.txt").write_text("delivery\n", encoding="utf-8")
+        git(repo, "add", "delivery.txt")
+        git(repo, "commit", "-qm", "delivery")
+        delivery_sha = git(repo, "rev-parse", "HEAD")
+        git(repo, "switch", "-q", "main")
+        git(repo, "merge", "--no-ff", "-q", "delivery", "-m", "custom merge")
+        merge_sha = git(repo, "rev-parse", "HEAD")
+        merge_time = git(repo, "show", "-s", "--format=%cI", merge_sha)
+        normalized_time = self.policy.datetime.fromisoformat(merge_time).strftime(
+            "%Y-%m-%d %H:%M:%S %z"
+        )
+        task = (
+            f"- 合并时间：{normalized_time}\n"
+            f"- 合并提交SHA：`{merge_sha}`\n"
+            f"- 交付提交SHA：`{delivery_sha}`\n"
+        )
+        self.assertNotIn(
+            "000001",
+            self.policy._derive_merge_facts(repo, "main", {"000001": task}),
+        )
