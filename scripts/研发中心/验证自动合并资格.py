@@ -204,6 +204,9 @@ MERGE_TIME_PATTERN = re.compile(
     r"^- 合并时间：(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4})$",
     re.MULTILINE,
 )
+DELIVERY_SHA_PATTERN = re.compile(
+    r"^- 交付提交SHA：`([0-9a-f]{40})`$", re.MULTILINE
+)
 PULL_REQUEST_PATTERN = re.compile(
     r"^- Pull Request：\[#(\d+)\]\(https://github\.com/xk320/zhishi/pull/\1\)$",
     re.MULTILINE,
@@ -2637,6 +2640,18 @@ def _git_text(repo_root: Path, arguments: Sequence[str]) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+def _git_is_ancestor(repo_root: Path, ancestor: str, descendant: str) -> bool:
+    """验证一个Git提交是否是另一个提交的祖先，不读取提交正文。"""
+
+    result = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
 def _derive_merge_facts(
     repo_root: Path,
     base_ref: str,
@@ -2665,7 +2680,24 @@ def _derive_merge_facts(
             continue
         pr_match = re.fullmatch(r"Merge pull request #(\d+) from .+", subject)
         if pr_match is None:
-            continue
+            # GitHub允许调用方覆盖合并提交主题。兼容路径只接受可复算的
+            # 双父提交，并要求任务执行记录中的交付头位于第二父链；不能
+            # 仅凭自定义文案、Issue或聊天把提交解释为PR合并事实。
+            parents_text = _git_text(
+                repo_root, ["show", "-s", "--format=%P", declared.sha]
+            )
+            parents = parents_text.split() if parents_text else []
+            delivery_match = DELIVERY_SHA_PATTERN.search(task)
+            if (
+                len(parents) != 2
+                or delivery_match is None
+                or not _git_is_ancestor(repo_root, parents[0], base_ref)
+                or not _git_is_ancestor(repo_root, delivery_match.group(1), parents[1])
+            ):
+                continue
+            pr_number = declared.pr_number
+        else:
+            pr_number = int(pr_match.group(1))
         try:
             normalized_time = datetime.fromisoformat(committed_at).strftime(
                 "%Y-%m-%d %H:%M:%S %z"
@@ -2675,7 +2707,7 @@ def _derive_merge_facts(
         facts[task_id] = MergeFact(
             sha=declared.sha,
             merged_at=normalized_time,
-            pr_number=int(pr_match.group(1)),
+            pr_number=pr_number,
         )
     return facts
 
