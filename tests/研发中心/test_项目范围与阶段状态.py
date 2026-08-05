@@ -401,6 +401,33 @@ class TaskContractTests(unittest.TestCase):
 
 
 class ProjectScopeAndStageTests(unittest.TestCase):
+    def test_现行外部状态绑定最新只读预检(self):
+        current_paths = (
+            "AGENTS.md",
+            "README.md",
+            "docs/研发中心/总体计划.md",
+            "docs/研发中心/Codex自动执行提示词.md",
+        )
+        for relative_path in current_paths:
+            text = (ROOT / relative_path).read_text(encoding="utf-8")
+            self.assertIn("ubuntu", text, f"{relative_path}缺少外部状态身份")
+            self.assertIn("只读预检", text, f"{relative_path}缺少只读预检边界")
+            self.assertIn("可达", text, f"{relative_path}缺少最新可达结论")
+            self.assertNotIn("ubuntu`不可达", text, f"{relative_path}仍引用失效可达性")
+            self.assertIn("不表示", text, f"{relative_path}未声明可达性不等于准入")
+
+    def test_现行前向范围只含双标的并保留SOL历史边界(self):
+        current_paths = (
+            "README.md",
+            "docs/研发中心/总体计划.md",
+            "docs/研发中心/Codex自动执行提示词.md",
+        )
+        for relative_path in current_paths:
+            text = (ROOT / relative_path).read_text(encoding="utf-8")
+            self.assertIn("BTC", text, f"{relative_path}缺少BTC现行范围")
+            self.assertIn("ETH", text, f"{relative_path}缺少ETH现行范围")
+            self.assertIn("SOL仅", text, f"{relative_path}未声明SOL历史边界")
+
     def test_受控研发自动合并治理入口一致(self):
         for relative_path in AUTOMATION_GOVERNANCE_FILES:
             text = (ROOT / relative_path).read_text(encoding="utf-8")
@@ -419,7 +446,12 @@ class ProjectScopeAndStageTests(unittest.TestCase):
     def test_前向规范只允许BTC和ETH(self):
         for relative_path in FORWARD_SCOPE_FILES:
             text = (ROOT / relative_path).read_text(encoding="utf-8")
-            self.assertNotIn("SOL", text, f"{relative_path}仍包含SOL前向范围")
+            if "SOL" in text:
+                self.assertIn(
+                    "SOL仅保留在历史证据、历史任务和负向测试上下文",
+                    text,
+                    f"{relative_path}仍包含未限定边界的SOL前向范围",
+                )
 
     def test_现行文档不保留失效状态(self):
         forbidden = (
