@@ -17,7 +17,7 @@
   "生成时间": "2026-08-05T15:05:47+08:00",
   "结论": "ZS-DATA-GAP-003与ZS-DATA-GAP-005仍阻塞",
   "输出指纹": {
-    "覆盖矩阵.csv": "e3cada90c8606b9c2cec4d80b805a56eb7d2ee7a26a717c666d6ae914de753f8",
+    "覆盖矩阵.csv": "6fae22c00a2599207dd388e25b444500ca2988b982cc2c2d2c18bb9b04ef3d79",
     "输入绑定.json": "5f63930518f7e4dedf357e01e87bc97f8a92aba6886b7bebb5294295dbe41b9a"
   }
 }
