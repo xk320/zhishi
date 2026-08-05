@@ -73,11 +73,13 @@ class BoardModeContractTests(unittest.TestCase):
         self.assertFalse(self.policy._board_schema_is_valid(legacy))
 
     def test_重复表头失败关闭(self):
+        separator = self.policy.BOARD_TABLE_SCHEMA["已完成"][1]
         duplicate = self.board.replace(
-            "| --- | --- | --- | --- | --- |",
-            "| --- | --- | --- | --- | --- |\n| --- | --- | --- | --- | --- |",
+            separator,
+            separator + "\n" + separator,
             1,
         )
+        self.assertNotEqual(duplicate, self.board)
         self.assertFalse(self.policy._board_schema_is_valid(duplicate))
 
     def test_缺少标准状态分区失败关闭(self):
