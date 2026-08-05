@@ -83,7 +83,9 @@ def task_text(
     )
 
 
-def blocked_contract_repair_executor_text(*, status: str) -> str:
+def blocked_contract_repair_executor_text(
+    *, status: str, blocker_evidence: str = "任务-000055当前阻塞合同"
+) -> str:
     """任务-000056的最小可验证合同夹具。"""
 
     review = (
@@ -107,7 +109,7 @@ def blocked_contract_repair_executor_text(*, status: str) -> str:
         "- 只在任务-000055任务文件中增加唯一的`自动合并范围：治理自动化`字段；\n\n"
         "## 默认工程决策\n\n- 最小字段授权。\n\n"
         "## 允许停止条件\n\n- 需要生产权限时停止。\n\n"
-        "## 输入合同\n\n- 任务-000055当前阻塞合同。\n\n"
+        f"## 输入合同\n\n- {blocker_evidence}。\n\n"
         "## 输出合同\n\n"
         "- 更新后的`docs/研发中心/任务/任务-000055.md`，仅增加受控治理自动化授权字段；\n\n"
         "## 工作范围\n\n- 对齐任务-000055合同。\n\n"
@@ -1072,6 +1074,41 @@ class AutoMergeEligibilityTests(unittest.TestCase):
     def test_阻塞任务合同修复只允许单字段目标映射(self):
         result = self.evaluate_blocked_repair()
         self.assertTrue(result.eligible, result.reasons)
+
+        existing_contract = self.blocked_repair_inputs(
+            base_tasks={
+                "000056": blocked_contract_repair_executor_text(
+                    status="待执行", blocker_evidence="任务-000055最新阻塞状态"
+                ),
+                "000055": blocked_contract_repair_target_text(),
+            },
+            head_tasks={
+                "000056": blocked_contract_repair_executor_text(
+                    status="待评审", blocker_evidence="任务-000055最新阻塞状态"
+                ),
+                "000055": blocked_contract_repair_target_text(authorized=True),
+            },
+        )
+        result = self.policy.evaluate_eligibility(**existing_contract)
+        self.assertTrue(result.eligible, result.reasons)
+
+        missing_blocker_evidence = self.blocked_repair_inputs(
+            base_tasks={
+                "000056": blocked_contract_repair_executor_text(
+                    status="待执行", blocker_evidence="未指定阻塞对象"
+                ),
+                "000055": blocked_contract_repair_target_text(),
+            },
+            head_tasks={
+                "000056": blocked_contract_repair_executor_text(
+                    status="待评审", blocker_evidence="未指定阻塞对象"
+                ),
+                "000055": blocked_contract_repair_target_text(authorized=True),
+            },
+        )
+        result = self.policy.evaluate_eligibility(**missing_blocker_evidence)
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000056合同未证明任务-000055唯一目标", result.reasons)
 
         blocked_executor = self.blocked_repair_inputs(
             base_tasks={
