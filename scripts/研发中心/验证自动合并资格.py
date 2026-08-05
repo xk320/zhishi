@@ -1767,13 +1767,10 @@ def _validate_blocked_contract_repair(
         "更新后的`docs/研发中心/任务/任务-000055.md`",
         "只在任务-000055任务文件中增加唯一的`自动合并范围：治理自动化`字段",
     )
-    blocker_evidence = (
-        "任务-000055当前阻塞合同",
-        "任务-000055最新阻塞状态",
-    )
+    blocker_evidence = "任务-000055最新阻塞状态"
     if (
         any(item not in executor_base for item in required_contract_evidence)
-        or not any(item in executor_base for item in blocker_evidence)
+        or blocker_evidence not in executor_base
     ):
         _append_reason(reasons, "任务-000056合同未证明任务-000055唯一目标")
     if _task_field(TASK_TYPE_PATTERN, executor_base) != "治理":

@@ -84,7 +84,7 @@ def task_text(
 
 
 def blocked_contract_repair_executor_text(
-    *, status: str, blocker_evidence: str = "任务-000055当前阻塞合同"
+    *, status: str, blocker_evidence: str = "任务-000055最新阻塞状态"
 ) -> str:
     """任务-000056的最小可验证合同夹具。"""
 
@@ -1075,22 +1075,27 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         result = self.evaluate_blocked_repair()
         self.assertTrue(result.eligible, result.reasons)
 
-        existing_contract = self.blocked_repair_inputs(
+        existing_contract = self.blocked_repair_inputs()
+        result = self.policy.evaluate_eligibility(**existing_contract)
+        self.assertTrue(result.eligible, result.reasons)
+
+        legacy_contract = self.blocked_repair_inputs(
             base_tasks={
                 "000056": blocked_contract_repair_executor_text(
-                    status="待执行", blocker_evidence="任务-000055最新阻塞状态"
+                    status="待执行", blocker_evidence="任务-000055当前阻塞合同"
                 ),
                 "000055": blocked_contract_repair_target_text(),
             },
             head_tasks={
                 "000056": blocked_contract_repair_executor_text(
-                    status="待评审", blocker_evidence="任务-000055最新阻塞状态"
+                    status="待评审", blocker_evidence="任务-000055当前阻塞合同"
                 ),
                 "000055": blocked_contract_repair_target_text(authorized=True),
             },
         )
-        result = self.policy.evaluate_eligibility(**existing_contract)
-        self.assertTrue(result.eligible, result.reasons)
+        result = self.policy.evaluate_eligibility(**legacy_contract)
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000056合同未证明任务-000055唯一目标", result.reasons)
 
         missing_blocker_evidence = self.blocked_repair_inputs(
             base_tasks={
