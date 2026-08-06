@@ -78,7 +78,7 @@ V2_BATCH_RULE_FINGERPRINT = "c63500fcc8c473814e5d20505df72f419462ae076c03e6f9f74
 V2_TEMP_KEY_FINGERPRINT = "SHA256:MqNDDq6W87QmhU84qMhLVLCwK6EcgJNHzcALcgipkJo"
 V2_PARENT_BATCH = "批次-20260806T143417Z-v1"
 V2_BATCH_NATURE = "历史真实采集；固定入口/规则版本绑定采集时指纹；当前验证器仅回放不可变脱敏结果，不宣称重新采集"
-V3_COLLECTION_RULE_FINGERPRINTS = {"7115ba6587e06acc4cfdae9bdb5e7738ddfc498eb86762b3309f9417311df9c7"}
+V3_COLLECTION_RULE_FINGERPRINTS = {"7115ba6587e06acc4cfdae9bdb5e7738ddfc498eb86762b3309f9417311df9c7", "9996c66e7178b0eeffc642fa45baf9215fc7a8253c24de6359dca742be94196c"}
 V2_REVOCATION = {
     "状态": "已撤销",
     "密钥指纹": V2_TEMP_KEY_FINGERPRINT,
@@ -340,7 +340,9 @@ def _validate_v3_artifact(metadata: dict[str, Any], payload: dict[str, Any], sum
         raise ContractError("artifact-input-binding")
     revocation = metadata.get("临时凭据撤销")
     required_revocation = {"状态", "密钥指纹", "撤销动作", "保留身份", "远端入口状态", "本地密钥状态", "撤销时间", "复核事实"}
-    key_count_marker = "v3-key-count=0" if str(metadata.get("批次")).endswith("-v3") else "v2-key-count=0"
+    action_text = str(revocation.get("撤销动作")) if isinstance(revocation, dict) else ""
+    version_match = re.search(r"task-000071-schema-audit-(v\d+)", action_text)
+    key_count_marker = f"{version_match.group(1)}-key-count=0" if version_match else ""
     if not isinstance(revocation, dict) or set(revocation) != required_revocation or revocation.get("状态") != "已撤销" or revocation.get("密钥指纹") != auth.get("临时只读密钥") or revocation.get("远端入口状态") != "不存在" or revocation.get("本地密钥状态") != "不存在" or key_count_marker not in str(revocation.get("复核事实")):
         raise ContractError("artifact-revocation")
     if metadata.get("安全声明") != {"仅结构元数据": True, "原始数据修改": False, "数据库写入": False, "远端临时写入": False, "交易结论": False, "未来数据使用": False, "凭据落盘": False}:

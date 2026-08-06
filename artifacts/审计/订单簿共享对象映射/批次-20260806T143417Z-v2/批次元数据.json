@@ -19,7 +19,7 @@
   },
   "协议": "zhishi-ro/schema-audit/1",
   "合同版本": "task-000071",
-  "回放验证器指纹": "9996c66e7178b0eeffc642fa45baf9215fc7a8253c24de6359dca742be94196c",
+  "回放验证器指纹": "6b015fc9261fff2be35d4adc3c431e712ec835f2d3568f054feaea95ee88e093",
   "安全声明": {
     "交易结论": false,
     "仅结构元数据": true,
