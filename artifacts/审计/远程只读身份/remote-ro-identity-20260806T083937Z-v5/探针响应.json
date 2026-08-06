@@ -1,0 +1,22 @@
+{
+  "admin_group_membership": false,
+  "database_business_read_performed": false,
+  "gid": 1001,
+  "market_data_read_performed": false,
+  "operation": "identity",
+  "original_command_present": false,
+  "protected_system_path_writable": false,
+  "protocol": "zhishi-ro/1",
+  "reason_code": "",
+  "remote_write_performed": false,
+  "root_home_openable": false,
+  "root_home_readable": false,
+  "root_home_writable": false,
+  "status": "通过",
+  "sudo_noninteractive_allowed": false,
+  "supplementary_group_count": 0,
+  "uid": 1001,
+  "uid_nonzero": true,
+  "wrapper_sha256": "4fe3cc3863ea047edd19db2c799ea0591ad08b6d08030c6b954e231da2a89387",
+  "wrapper_version": "zhishi-ro-identity-probe-1.0"
+}
