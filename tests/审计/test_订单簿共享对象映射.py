@@ -36,13 +36,13 @@ class OrderBookMappingTests(unittest.TestCase):
     def test_源代码结构指纹可复算(self):
         parsed = self.validator.source_contract(self.validator.SOURCE_DEFAULT)
         expected = self.validator.SCHEMA_EXPECTATIONS
-        self.assertEqual({key: parsed["表"][key] for key in expected}, expected)
+        self.assertEqual({key: parsed["表"][key]["摘要"] for key in expected}, expected)
         self.assertEqual(parsed["未登记候选"], self.validator.SOURCE_ONLY_CANDIDATES)
 
     def test_状态守恒且顺序固定(self):
         validator = self.validator
         rows = [
-            {"资产编号": item["资产编号"], "表": item["表"], "采集状态": "已采集", **validator.SCHEMA_EXPECTATIONS[item["表"]]}
+            {"资产编号": item["资产编号"], "表": item["表"], "表身份指纹": validator.object_identity_fingerprint(item["数据库"], item["表"]), "采集状态": "已采集", **validator.SCHEMA_EXPECTATIONS[item["表"]]}
             for item in validator.TARGETS
         ]
         self.assertEqual(validator.validate_states(rows), {"匹配": 16, "漂移": 0, "未发现": 0, "无法判定": 0, "失败": 0})
@@ -55,21 +55,44 @@ class OrderBookMappingTests(unittest.TestCase):
     def test_远端文档拒绝业务正文和写入标记(self):
         validator = self.validator
         rows = [
-            {"资产编号": item["资产编号"], "表": item["表"], "采集状态": "已采集", **validator.SCHEMA_EXPECTATIONS[item["表"]]}
+            {"资产编号": item["资产编号"], "表": item["表"], "表身份指纹": validator.object_identity_fingerprint(item["数据库"], item["表"]), "采集状态": "已采集", **validator.SCHEMA_EXPECTATIONS[item["表"]]}
             for item in validator.TARGETS
         ]
         document = {
             "protocol": validator.PROTOCOL,
+            "operation": "schema-audit",
+            "status": "通过",
+            "wrapper_version": validator.REMOTE_WRAPPER_VERSION,
+            "wrapper_sha256": validator.sha256_bytes(ENTRY_PATH.read_bytes()),
             "合同版本": validator.CONTRACT_VERSION,
             "覆盖矩阵指纹": validator.MATRIX_FINGERPRINT,
             "对象清单指纹": validator.TARGET_MANIFEST_FINGERPRINT,
             "资源合同": validator.RESOURCE_CONTRACT,
+            "规则脚本指纹": validator.sha256_bytes(VALIDATOR_PATH.read_bytes()),
+            "授权会话指纹": validator.EXPECTED_SESSION_FINGERPRINT,
+            "授权权限快照指纹": validator.EXPECTED_GRANTS_FINGERPRINT,
             "远端临时写入": False,
             "对象结果": rows,
         }
         self.assertEqual(validator.validate_remote_document(document)["匹配"], 16)
         bad = json.loads(json.dumps(document, ensure_ascii=False))
         bad["远端临时写入"] = True
+        with self.assertRaises(validator.ContractError):
+            validator.validate_remote_document(bad)
+        bad = json.loads(json.dumps(document, ensure_ascii=False))
+        bad["wrapper_sha256"] = "0" * 64
+        with self.assertRaises(validator.ContractError):
+            validator.validate_remote_document(bad)
+        bad = json.loads(json.dumps(document, ensure_ascii=False))
+        bad["规则脚本指纹"] = "0" * 64
+        with self.assertRaises(validator.ContractError):
+            validator.validate_remote_document(bad)
+        bad = json.loads(json.dumps(document, ensure_ascii=False))
+        bad["授权权限快照指纹"] = "0" * 64
+        with self.assertRaises(validator.ContractError):
+            validator.validate_remote_document(bad)
+        bad = json.loads(json.dumps(document, ensure_ascii=False))
+        bad["对象结果"][0]["表身份指纹"] = bad["对象结果"][1]["表身份指纹"]
         with self.assertRaises(validator.ContractError):
             validator.validate_remote_document(bad)
         bad = json.loads(json.dumps(document, ensure_ascii=False))
@@ -103,7 +126,19 @@ class OrderBookMappingTests(unittest.TestCase):
         self.assertIn("information_schema.COLUMNS", source)
         self.assertIn("information_schema.STATISTICS", source)
         self.assertIn("SSH_ORIGINAL_COMMAND", source)
+        self.assertIn("NON_UNIQUE", source)
         self.assertNotIn("/Users/", source)
+
+    def test_源合同保留列内键与索引唯一性(self):
+        parsed = self.validator.source_contract(self.validator.SOURCE_DEFAULT)
+        first = parsed["表"]["historical_backfill_files"]
+        self.assertEqual(first["列"][0]["键"], "pri")
+        self.assertTrue(all("非唯一" in index and "索引类型" in index for index in first["索引"]))
+
+    def test_批次目录可复验(self):
+        path = ROOT / "artifacts/审计/订单簿共享对象映射/批次-20260806T143417Z-v2"
+        if path.exists():
+            self.assertEqual(self.validator.validate_artifact_directory(path)["匹配"], 5)
 
 
 if __name__ == "__main__":

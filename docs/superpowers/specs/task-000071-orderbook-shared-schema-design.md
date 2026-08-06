@@ -40,11 +40,12 @@
 ## 远端复核规则
 
 1. 本任务先将`远程共享表元数据固定入口.py`以root-owned文件安装到白名单Ubuntu，固定协议`zhishi-ro/schema-audit/1`、固定16个目标和目标清单SHA-256、固定字段白名单、资源合同和脚本指纹；批次结束后撤销临时调用密钥并记录撤销事实。
-2. 固定入口只读取`information_schema.COLUMNS`和`information_schema.STATISTICS`，按源代码表顺序、列序以及`INDEX_NAME`（不区分大小写）、`SEQ_IN_INDEX`规范化索引顺序输出指纹，不接受远程命令、任意SQL、未登记对象或业务字段。
-3. 逐表状态固定为：`匹配`、`漂移`、`未发现`、`无法判定`、`失败`；未知字段、权限不足、指纹漂移和超限均不能标记为匹配。
-4. `匹配`仅表示结构声明一致，不表示有数据、有历史覆盖、有BTC/ETH独立证据或质量通过。
-5. 16个表之外的对象不纳入本合同；不得用未登记候选、其它对象、其它标的或SOL数据补齐缺失。
-6. 批次只保存对象指纹、结构指纹、状态、原因码和资源事实，不保存列值、业务正文、连接串或凭据。
+2. 固定入口只读取`information_schema.COLUMNS`、`information_schema.STATISTICS`以及固定只读身份的`CURRENT_USER()`/`SHOW GRANTS`授权快照；按任务-000063资产成员顺序、列序以及`INDEX_NAME`（casefold）、`SEQ_IN_INDEX`和列名（casefold）规范化索引顺序输出指纹，不接受远程命令、任意SQL、未登记对象或业务字段。
+3. 列指纹包含`COLUMN_NAME`、`COLUMN_TYPE`、`ORDINAL_POSITION`、`IS_NULLABLE`和`COLUMN_KEY`；索引指纹包含`INDEX_NAME`、`SEQ_IN_INDEX`、`COLUMN_NAME`、`NON_UNIQUE`和`INDEX_TYPE`，以便复核长度/unsigned、空值、主键和唯一性。
+4. 逐表状态固定为：`匹配`、`漂移`、`未发现`、`无法判定`、`失败`；未知字段、权限不足、指纹漂移和超限均不能标记为匹配。
+5. `匹配`仅表示结构声明一致，不表示有数据、有历史覆盖、有BTC/ETH独立证据或质量通过。
+6. 16个表之外的对象不纳入本合同；不得用未登记候选、其它对象、其它标的或SOL数据补齐缺失。
+7. 批次只保存对象编号、表身份指纹、结构指纹、状态、原因码和资源事实，不保存列值、业务正文、连接串或凭据。
 
 ## 研究尺度与安全边界
 

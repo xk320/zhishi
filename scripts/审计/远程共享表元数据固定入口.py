@@ -21,7 +21,7 @@ from typing import Any
 
 
 PROTOCOL = "zhishi-ro/schema-audit/1"
-WRAPPER_VERSION = "zhishi-ro-schema-audit-1.0"
+WRAPPER_VERSION = "zhishi-ro-schema-audit-1.1"
 CONTRACT_VERSION = "task-000071"
 MATRIX_FINGERPRINT = "6fae22c00a2599207dd388e25b444500ca2988b982cc2c2d2c18bb9b04ef3d79"
 TARGETS_PATH = Path("/usr/local/libexec/zhishi_ro_schema_targets.json")
@@ -188,7 +188,7 @@ def _one(item: dict[str, str], deadline: float) -> dict[str, Any]:
     }
     try:
         columns = _mysql(
-            "SELECT COLUMN_NAME, DATA_TYPE, ORDINAL_POSITION FROM information_schema.COLUMNS "
+            "SELECT COLUMN_NAME, COLUMN_TYPE, ORDINAL_POSITION, IS_NULLABLE, COLUMN_KEY FROM information_schema.COLUMNS "
             "WHERE TABLE_SCHEMA=" + _lit(item["数据库"]) + " AND TABLE_NAME=" + _lit(item["表"]) +
             " ORDER BY ORDINAL_POSITION;", deadline
         )
@@ -199,17 +199,17 @@ def _one(item: dict[str, str], deadline: float) -> dict[str, Any]:
         column_rows: list[str] = []
         for line in columns["stdout"].splitlines():
             fields = line.split("\t")
-            if len(fields) == 3 and fields[2].isdigit():
-                column_rows.append(f"{fields[0]}:{fields[1].lower()}:{fields[2]}")
+            if len(fields) == 5 and fields[2].isdigit():
+                column_rows.append(f"{fields[0].casefold()}:{fields[1].casefold()}:{fields[2]}:{fields[3].casefold()}:{fields[4].casefold()}")
         if not column_rows:
             result["采集状态"], result["原因码"] = "未发现", "table-not-found"
             return result
         result["列数"] = len(column_rows)
         result["列指纹"] = _fp("|".join(column_rows))
         indexes = _mysql(
-            "SELECT INDEX_NAME, SEQ_IN_INDEX, COLUMN_NAME FROM information_schema.STATISTICS "
+            "SELECT INDEX_NAME, SEQ_IN_INDEX, COLUMN_NAME, NON_UNIQUE, INDEX_TYPE FROM information_schema.STATISTICS "
             "WHERE TABLE_SCHEMA=" + _lit(item["数据库"]) + " AND TABLE_NAME=" + _lit(item["表"]) +
-            " ORDER BY INDEX_NAME, SEQ_IN_INDEX;", deadline
+            " ORDER BY LOWER(INDEX_NAME), SEQ_IN_INDEX, LOWER(COLUMN_NAME);", deadline
         )
         result["读取字节数"] += indexes["bytes"]
         if not indexes["ok"]:
@@ -218,8 +218,8 @@ def _one(item: dict[str, str], deadline: float) -> dict[str, Any]:
         index_rows: list[str] = []
         for line in indexes["stdout"].splitlines():
             fields = line.split("\t")
-            if len(fields) == 3 and fields[1].isdigit():
-                index_rows.append(f"{fields[0]}:{fields[1]}:{fields[2]}")
+            if len(fields) == 5 and fields[1].isdigit() and fields[3] in {"0", "1"}:
+                index_rows.append(f"{fields[0].casefold()}:{fields[1]}:{fields[2].casefold()}:{fields[3]}:{fields[4].casefold()}")
         result["索引数"] = len(index_rows)
         result["索引指纹"] = _fp("|".join(index_rows))
         result["采集状态"], result["原因码"] = "已采集", "metadata-only"
