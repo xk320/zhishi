@@ -27,9 +27,14 @@ CONTRACT = ROOT / "docs/superpowers/specs/phase1-incomplete-scan-authorization-v
 # 这些值是已批准合同的脱敏指纹，不是账户名、路径或凭据。
 EXPECTED_MATRIX_FP = "6fae22c00a2599207dd388e25b444500ca2988b982cc2c2d2c18bb9b04ef3d79"
 EXPECTED_CONTRACT_FP = "0acd47b2f1396dc1aadd604d20386fb8b0e6ff346101571f5352424091884d8d"
-EXPECTED_DB_SESSION_FP = "7fa9069e2bdbb9976f59d52202d0003b89b91bbf32898b4dbf90f907acbca905"
-EXPECTED_DB_GRANTS_FP = "a7dcbefb5b0917ba3a0965358e2b288131e0dc074404f3ae9cbb605695316390"
-EXPECTED_DB_CONFIG_PATH_FP = "b69738efb2ac68eff4243e6fa57cd886b2931d1430d2d3312cfc54eac98776a9"
+EXPECTED_BODY_PROTOCOL = "zhishi-ro/2"
+EXPECTED_BODY_WRAPPER_VERSION = "zhishi-ro-body-audit-1.0"
+EXPECTED_BODY_WRAPPER_FP = "e821c5764531879e119896606fe816ac47c1c4d355ae11a93248673a2a167553"
+EXPECTED_BODY_TARGETS_FP = "1c8adccb082d30ff37ff456b139c5560a716f55e208450e8945ddfabce11e187"
+EXPECTED_BODY_RESOURCE_FP = "d28c31bbc213b0aaa5586f7cb40ba67bac7039065d8fac60bc99620352e93edc"
+EXPECTED_DB_SESSION_FP = "2e642610c2d0f286f489b5226081f23077a8674bffb0e255c8cea98825601943"
+EXPECTED_DB_GRANTS_FP = "ad26cec63d094b7a68f4229ca4668a36eaa9aee7343970d8dfc6e8f9c6631a2e"
+EXPECTED_BODY_KEY_FP = "SHA256:sAHa0lV+dd9ZGdcnc/JuQ1yNgqvhHE1sQmCKuW2xB3k"
 EXPECTED_LOG_TARGET_FP = "3aec10efd62c05a4ccf4c23022bfdd1ba987c08d6764792047decc241297953d"
 EXPECTED_LOG_KEY_FP = "SHA256:oq45bCRm3+qAuQr/CVmB6P27cq2u1Z+3f0vrzi8GvyI"
 EXPECTED_LOG_WRAPPER_FP = "d63540742cc71bc07908c0d31d09e7e95c1ed8d89fc43c00d848277a62b6cbc3"
@@ -320,13 +325,45 @@ print(_encoded)
     )
 
 
-def run_remote_database(database: list[dict[str, str]], cutoff: str, script_fingerprint: str, db_config_path: str) -> tuple[dict[str, Any], str]:
-    if sha256_text(db_config_path) != EXPECTED_DB_CONFIG_PATH_FP:
-        raise RuntimeError("数据库配置入口指纹不匹配")
-    script = make_remote_script(database, cutoff, script_fingerprint, db_config_path)
-    command = ["ssh", "-o", "BatchMode=yes", "-o", "LogLevel=ERROR", "ubuntu", "python3", "-"]
+def run_remote_database(database: list[dict[str, str]], cutoff: str, script_fingerprint: str, body_key: Path) -> tuple[dict[str, Any], str]:
+    """通过专用密钥调用远端root-owned固定正文入口。
+
+    不接受远程命令或脚本；stdin只发送任务-000070版本化请求，远端入口负责
+    白名单、数据库身份、资源上限和脱敏输出。数据库配置文件永远不离开Ubuntu。
+    """
+    if _key_fingerprint(body_key) != EXPECTED_BODY_KEY_FP:
+        raise RuntimeError("正文复采专用密钥指纹不匹配")
+    request = {
+        "protocol": EXPECTED_BODY_PROTOCOL,
+        "operation": "body-audit",
+        "payload": {
+            "合同版本": "task-000070",
+            "覆盖矩阵指纹": EXPECTED_MATRIX_FP,
+            "对象清单指纹": EXPECTED_BODY_TARGETS_FP,
+            "资源合同指纹": EXPECTED_BODY_RESOURCE_FP,
+            "数据截止": cutoff,
+            "规则脚本指纹": script_fingerprint,
+        },
+    }
+    command = [
+        "ssh", "-i", str(body_key),
+        "-o", "User=zhishi_ro",
+        "-o", "IdentitiesOnly=yes",
+        "-o", "BatchMode=yes",
+        "-o", "LogLevel=ERROR",
+        "-o", "PasswordAuthentication=no",
+        "-o", "RequestTTY=no",
+        "ubuntu",
+    ]
     try:
-        completed = subprocess.run(command, input=script, text=True, capture_output=True, timeout=650, check=False)
+        completed = subprocess.run(
+            command,
+            input=json.dumps(request, ensure_ascii=False, separators=(",", ":")) + "\n",
+            text=True,
+            capture_output=True,
+            timeout=650,
+            check=False,
+        )
     except subprocess.TimeoutExpired as error:
         raise RuntimeError("数据库批次超过650秒外部超时") from error
     if completed.returncode != 0:
@@ -337,11 +374,36 @@ def run_remote_database(database: list[dict[str, str]], cutoff: str, script_fing
         document = json.loads(completed.stdout)
     except json.JSONDecodeError as error:
         raise RuntimeError("数据库只读批次输出不是结构化JSON") from error
-    if not isinstance(document, dict) or set(document) != {"规则脚本指纹", "授权会话指纹", "授权权限快照指纹", "对象结果", "资源上限"} or len(document.get("对象结果", [])) != 92:
-        raise RuntimeError("数据库只读批次对象数不是92")
+    expected_document_keys = {
+        "protocol", "wrapper_version", "wrapper_sha256", "operation", "合同版本",
+        "覆盖矩阵指纹", "规则脚本指纹", "授权会话指纹", "授权权限快照指纹",
+        "对象结果", "资源上限", "远端临时写入",
+    }
+    if not isinstance(document, dict) or set(document) != expected_document_keys or len(document.get("对象结果", [])) != 92:
+        raise RuntimeError("数据库固定入口输出对象数或字段不匹配")
+    if (
+        document.get("protocol") != EXPECTED_BODY_PROTOCOL
+        or document.get("wrapper_version") != EXPECTED_BODY_WRAPPER_VERSION
+        or document.get("wrapper_sha256") != EXPECTED_BODY_WRAPPER_FP
+        or document.get("operation") != "body-audit"
+        or document.get("合同版本") != "task-000070"
+        or document.get("覆盖矩阵指纹") != EXPECTED_MATRIX_FP
+        or document.get("规则脚本指纹") != script_fingerprint
+        or document.get("远端临时写入") is not False
+    ):
+        raise RuntimeError("数据库固定入口协议或规则指纹漂移")
     if document.get("授权会话指纹") != EXPECTED_DB_SESSION_FP or document.get("授权权限快照指纹") != EXPECTED_DB_GRANTS_FP:
         raise RuntimeError("数据库只读授权指纹不匹配")
-    if document.get("资源上限") != {"单对象字节": 65536, "单对象秒": 30, "批次秒": 600, "批次输出字节": 8388608, "样本行数": 64, "内存字节": 536870912, "远端临时写入": False}:
+    if document.get("资源上限") != {
+        "数据库单对象最大读取字节": 65536,
+        "数据库单对象最大耗时秒": 30,
+        "数据库批次最大耗时秒": 600,
+        "数据库批次最大输出字节": 8388608,
+        "数据库最大并发": 1,
+        "数据库样本最大行数": 64,
+        "最大内存字节": 536870912,
+        "远端临时写入": False,
+    }:
         raise RuntimeError("数据库资源合同漂移")
     expected_keys = {"资产编号", "对象指纹", "状态", "记录数", "已观察记录数", "时间字段指纹", "时间可解析记录数", "时间空值记录数", "未来记录", "Schema指纹", "读取字节数", "耗时毫秒", "错误类别"}
     expected_assets = [item["资产编号"] for item in database]
@@ -467,7 +529,7 @@ def main() -> int:
     parser.add_argument("--cutoff", required=True)
     parser.add_argument("--log-target", required=True)
     parser.add_argument("--log-key", required=True)
-    parser.add_argument("--db-config-path", required=True)
+    parser.add_argument("--body-key", required=True, help="专用正文复采密钥的受限本地路径")
     args = parser.parse_args()
     if not re.fullmatch(r"批次-\d{8}T\d{6}Z-v\d+", args.batch_id):
         raise RuntimeError("批次标识格式错误")
@@ -489,7 +551,8 @@ def main() -> int:
     matrix_fp = sha256_bytes(MATRIX.read_bytes())
     contract_fp = sha256_bytes(CONTRACT.read_bytes())
     logs_document, logs_raw = run_remote_logs(args.log_target, Path(args.log_key))
-    database_document, database_raw = run_remote_database(database, args.cutoff, script_fp, args.db_config_path)
+    body_key = Path(args.body_key).expanduser()
+    database_document, database_raw = run_remote_database(database, args.cutoff, script_fp, body_key)
     results = list(database_document["对象结果"])
     for index, item in enumerate(logs_document["对象结果"]):
         result = dict(item)
@@ -513,7 +576,9 @@ def main() -> int:
         "授权输入指纹": {
             "数据库会话": EXPECTED_DB_SESSION_FP,
             "数据库权限快照": EXPECTED_DB_GRANTS_FP,
-            "数据库配置入口": EXPECTED_DB_CONFIG_PATH_FP,
+            "正文固定入口": EXPECTED_BODY_WRAPPER_FP,
+            "正文对象清单": EXPECTED_BODY_TARGETS_FP,
+            "正文专用密钥": EXPECTED_BODY_KEY_FP,
             "日志目标": EXPECTED_LOG_TARGET_FP,
             "日志密钥": EXPECTED_LOG_KEY_FP,
             "日志强制入口": EXPECTED_LOG_WRAPPER_FP,
