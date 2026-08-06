@@ -17,6 +17,7 @@ from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = REPO_ROOT / "scripts" / "研发中心" / "验证自动合并资格.py"
+CONTRACT_REPAIR_BASE_SHA = "9b89057fcd58407701b972369e85ea57969b0483"
 
 
 def load_policy_module() -> ModuleType:
@@ -1097,8 +1098,14 @@ class AutoMergeEligibilityTests(unittest.TestCase):
                 "- 解除条件：已满足。\n"
             ),
         )
-        target_base = (REPO_ROOT / "docs/研发中心/任务/任务-000066.md").read_text(
-            encoding="utf-8"
+        target_base = subprocess.check_output(
+            [
+                "git",
+                "show",
+                f"{CONTRACT_REPAIR_BASE_SHA}:docs/研发中心/任务/任务-000066.md",
+            ],
+            cwd=REPO_ROOT,
+            text=True,
         )
         old_completion = (
             "本登记PR合并后任务保持`阻塞`，不标记已完成。只有解除条件有证据并经独立状态闭环PR恢复为待执行后，\n"
