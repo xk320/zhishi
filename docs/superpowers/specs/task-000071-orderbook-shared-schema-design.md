@@ -10,7 +10,7 @@
 
 冻结文件：`src/orderbook_service/storage.py`，SHA-256：`d4fed7bf0fc89666a9836a17f144ef41d2a6d13d829124437032c9787bf9b05d`。
 
-## 17个共享表的声明映射
+## 16个已登记共享表的声明映射
 
 | 表 | 主键/唯一键 | 事件或研究时间候选 | 到达/采集时间候选 | 关键业务键 | 时间单位 | 远端状态初始值 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -29,18 +29,22 @@
 | `order_book_market_structure_snapshots` | `snapshot_id` | `as_of_ms` | `created_at`,`updated_at` | `symbol,structure_version` | 毫秒 | 无法判定 |
 | `order_book_public_context_snapshots` | `snapshot_id` | `as_of_ms` | `created_at`,`updated_at` | `symbol,source,provider` | 毫秒 | 无法判定 |
 | `order_book_decision_context_snapshots` | `decision_id`; `(symbol,input_snapshot_id,decision_model_version)`唯一 | `decision_time_ms`,`as_of_ms` | `created_at`,`updated_at` | `symbol,input_snapshot_id,decision_model_version` | 毫秒 | 无法判定 |
-| `order_book_derived_state_revisions` | `symbol,revision`; `analysis_cycle_id`唯一 | `persisted_at_ms` | — | `symbol,analysis_cycle_id,input_snapshot_id` | 毫秒 | 无法判定 |
 | `historical_backfill_files` | `data_source,market_type,dataset,symbol,interval_name,file_date` | `file_date`（文件日期，不等同事件时间） | `created_at_ms`,`updated_at_ms` | `data_source,market_type,dataset,symbol,interval_name` | 日期/毫秒 | 无法判定 |
 
 表内字段只是源代码声明。只有远端列类型、键、索引顺序与本表完全匹配，并且已有来源、时区、精度、迟到、修订和截止合同，才可以把相应字段用于质量审计；`created_at`、`updated_at`和文件修改时间不得自动替代事件时间。
 
+## 未登记源代码候选（不执行远端查询）
+
+`order_book_derived_state_revisions`只存在于冻结的`storage.py`源代码声明中，当前任务-000063覆盖矩阵没有对应资产编号，因此不进入任务-000071的远端对象清单。它不能被分配临时编号、不能冒充16个已登记对象，也不能被用来补偿BTC或ETH缺口；如需纳入，必须先建立独立任务合同和数据资产登记。
+
 ## 远端复核规则
 
-1. 只读取`information_schema.COLUMNS`和`information_schema.STATISTICS`，按源代码表顺序和列序输出指纹。
-2. 逐表状态固定为：`匹配`、`漂移`、`未发现`、`无法判定`、`失败`；未知字段、权限不足、指纹漂移和超限均不能标记为匹配。
-3. `匹配`仅表示结构声明一致，不表示有数据、有历史覆盖、有BTC/ETH独立证据或质量通过。
-4. 17个表之外的对象不纳入本合同；不得用其它对象、其它标的或SOL数据补齐缺失。
-5. 批次只保存对象指纹、结构指纹、状态、原因码和资源事实，不保存列值、业务正文、连接串或凭据。
+1. 本任务先将`远程共享表元数据固定入口.py`以root-owned文件安装到白名单Ubuntu，固定协议`zhishi-ro/schema-audit/1`、固定16个目标和目标清单SHA-256、固定字段白名单、资源合同和脚本指纹；批次结束后撤销临时调用密钥并记录撤销事实。
+2. 固定入口只读取`information_schema.COLUMNS`和`information_schema.STATISTICS`，按源代码表顺序和列序输出指纹，不接受远程命令、任意SQL、未登记对象或业务字段。
+3. 逐表状态固定为：`匹配`、`漂移`、`未发现`、`无法判定`、`失败`；未知字段、权限不足、指纹漂移和超限均不能标记为匹配。
+4. `匹配`仅表示结构声明一致，不表示有数据、有历史覆盖、有BTC/ETH独立证据或质量通过。
+5. 16个表之外的对象不纳入本合同；不得用未登记候选、其它对象、其它标的或SOL数据补齐缺失。
+6. 批次只保存对象指纹、结构指纹、状态、原因码和资源事实，不保存列值、业务正文、连接串或凭据。
 
 ## 研究尺度与安全边界
 
