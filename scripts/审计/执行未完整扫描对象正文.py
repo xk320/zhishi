@@ -432,7 +432,7 @@ def write_json(path: Path, document: Any) -> None:
 
 def build_report(batch_id: str, metadata: dict[str, Any], summary: dict[str, int], results: list[dict[str, Any]]) -> str:
     lines = [
-        "# Ubuntu未完整扫描对象正文质量复验报告", "", "<!-- markdownlint-disable MD013 -->", "",
+        "# Ubuntu未完整扫描对象正文质量复验报告", "", "<!-- markdownlint-disable MD013 MD024 MD025 -->", "",
         f"- 审计批次：`{batch_id}`", f"- 合同版本指纹：`{metadata['合同版本指纹']}`", f"- 覆盖矩阵指纹：`{metadata['覆盖矩阵指纹']}`", f"- 规则脚本指纹：`{metadata['规则脚本指纹']}`",
         f"- 数据库对象：92；敏感日志文件：2；合同授权截止：`{metadata['合同授权截止']}`；本批次数据截止：`{metadata['数据截止']}`",
         "- 远端入口：仅使用白名单逻辑别名的固定指纹；不写入远端临时文件，不输出用户名、原始日志或业务字段值。", "",

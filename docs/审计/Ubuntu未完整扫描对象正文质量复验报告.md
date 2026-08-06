@@ -1,6 +1,6 @@
 # Ubuntu未完整扫描对象正文质量复验报告
 
-<!-- markdownlint-disable MD013 -->
+<!-- markdownlint-disable MD013 MD024 MD025 -->
 
 - 审计批次：`批次-20260806T043100Z-v5`
 - 合同版本指纹：`0acd47b2f1396dc1aadd604d20386fb8b0e6ff346101571f5352424091884d8d`
@@ -140,7 +140,7 @@
 
 # Ubuntu未完整扫描对象正文质量复验报告
 
-<!-- markdownlint-disable MD013 -->
+<!-- markdownlint-disable MD013 MD024 MD025 -->
 
 - 审计批次：`批次-20260806T044500Z-v6`
 - 合同版本指纹：`0acd47b2f1396dc1aadd604d20386fb8b0e6ff346101571f5352424091884d8d`
