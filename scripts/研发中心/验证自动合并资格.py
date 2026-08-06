@@ -203,9 +203,6 @@ CONTRACT_CONFLICT_REPAIR_TARGET = "000066"
 CONTRACT_CONFLICT_REPAIR_PR = 165
 CONTRACT_CONFLICT_REPAIR_ALLOWED_PATHS = frozenset(
     {
-        "AGENTS.md",
-        "docs/研发中心/任务规范.md",
-        "docs/治理/PR自动合并策略.md",
         "docs/研发中心/看板.md",
     }
 )
@@ -1855,18 +1852,10 @@ def _target_contract_without_repair_fields(text: str) -> tuple[str, ...]:
     """保留目标任务合同，排除本次两项受控修复字段。"""
 
     lines = text.splitlines()
-    record_start = next(
-        (
-            index
-            for index, line in enumerate(lines)
-            if line.strip() == "## 执行记录"
-        ),
-        len(lines),
-    )
     completion_start = next(
         (
             index
-            for index, line in enumerate(lines[:record_start])
+            for index, line in enumerate(lines)
             if line.strip() == "## 完成定义"
         ),
         -1,
@@ -1874,13 +1863,13 @@ def _target_contract_without_repair_fields(text: str) -> tuple[str, ...]:
     completion_end = next(
         (
             index
-            for index in range(completion_start + 1, record_start)
+            for index in range(completion_start + 1, len(lines))
             if lines[index].startswith("## ")
         ),
-        record_start,
+        len(lines),
     ) if completion_start >= 0 else -1
     output: list[str] = []
-    for index, line in enumerate(lines[:record_start]):
+    for index, line in enumerate(lines):
         if line.startswith("- 交付提交SHA："):
             continue
         if completion_start <= index < completion_end:
@@ -3097,6 +3086,8 @@ def main() -> int:
         task_id=(
             BLOCKED_CONTRACT_REPAIR_EXECUTOR
             if change_type == BLOCKED_CONTRACT_REPAIR_TYPE
+            else CONTRACT_CONFLICT_REPAIR_EXECUTOR
+            if change_type == CONTRACT_CONFLICT_REPAIR_TYPE
             else next(iter(ordered_ids), "")
         ),
     )

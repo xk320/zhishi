@@ -93,6 +93,7 @@ jobs:
           with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
               output.write(f"base_sha={pull_request['base']['sha']}\n")
               output.write(f"head_sha={pull_request['head']['sha']}\n")
+              output.write(f"head_ref={pull_request['head']['ref']}\n")
               task_ids = re.findall(r"(?m)^\s*-\s*任务-(\d{6})\s*$", pull_request.get("body") or "")
               if len(task_ids) == 1:
                   output.write(f"task_id={task_ids[0]}\n")
@@ -250,6 +251,7 @@ jobs:
         id: merge
         env:
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
           BASE_SHA: ${{ steps.pr.outputs.base_sha }}
           MERGE_PATH: ${{ runner.temp }}/merge-result.json
           FINAL_PR_PATH: ${{ runner.temp }}/final-pull-request.json
@@ -327,7 +329,9 @@ jobs:
               raise SystemExit("；".join(failures))
           PY
           gh api --method PUT "repos/${REPOSITORY}/pulls/${PR_NUMBER}/merge" \
-            -f sha="$HEAD_SHA" -f merge_method=merge > "$MERGE_PATH"
+            -f sha="$HEAD_SHA" \
+            -f merge_method=merge \
+            -f commit_title="Merge pull request #${PR_NUMBER} from xk320/${HEAD_REF}" > "$MERGE_PATH"
           python3 - <<'PY'
           import json
           import os

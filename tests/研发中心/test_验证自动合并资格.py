@@ -1118,6 +1118,12 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             target_head = target_head.replace("- 状态：待评审", "- 状态：已完成", 1)
         if mutate_target == "extra":
             target_head = target_head.replace("- 类型：数据审计", "- 类型：治理", 1)
+        if mutate_target == "record":
+            target_head = target_head.replace(
+                "最终批次：`批次-20260806T045500Z-v7`",
+                "最终批次：`批次-20260806T045500Z-v8`",
+                1,
+            )
         title = executor_title
         changed_paths = [
             "docs/研发中心/任务/任务-000068.md",
@@ -1172,6 +1178,11 @@ class AutoMergeEligibilityTests(unittest.TestCase):
 
             extra = self.contract_conflict_repair_inputs(mutate_target="extra")
             result = self.policy.evaluate_eligibility(**extra)
+            self.assertFalse(result.eligible)
+            self.assertIn("任务-000066合同修复夹带两项字段以外的改写", result.reasons)
+
+            record = self.contract_conflict_repair_inputs(mutate_target="record")
+            result = self.policy.evaluate_eligibility(**record)
             self.assertFalse(result.eligible)
             self.assertIn("任务-000066合同修复夹带两项字段以外的改写", result.reasons)
 
@@ -3476,6 +3487,75 @@ class GitPathFactIntegrationTests(unittest.TestCase):
         self.assertNotIn("阻塞任务合同修复最多关联1个任务", payload["reasons"])
         self.assertEqual(
             "000056",
+            conflict_check.call_args.kwargs["task_id"],
+        )
+
+    def test_cli任务合同冲突修复将执行任务传给跨载体检查(self):
+        metadata_path = self.repo / "contract-conflict-repair.json"
+        metadata_path.write_text(
+            json.dumps(
+                {
+                    "body": (
+                        "## 关联任务\n\n- 任务-000068\n\n"
+                        "## 变更类型\n\n- 任务合同冲突修复\n"
+                    ),
+                    "base_ref": "main",
+                    "repository": "xk320/zhishi",
+                    "head_repository": "xk320/zhishi",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        arguments = SimpleNamespace(
+            repo_root=self.repo,
+            base_ref="base",
+            head_ref="head",
+            metadata=metadata_path,
+        )
+        facts = tuple(
+            self.policy.PathFact(
+                path=path,
+                status="M",
+                mode="100644",
+                object_type="blob",
+                size=4,
+                text="safe",
+            )
+            for path in (
+                "docs/研发中心/任务/任务-000068.md",
+                "docs/研发中心/任务/任务-000066.md",
+                "docs/研发中心/看板.md",
+            )
+        )
+        output = io.StringIO()
+        with (
+            mock.patch.object(self.policy, "_parse_arguments", return_value=arguments),
+            mock.patch.object(self.policy, "_load_path_facts", return_value=facts),
+            mock.patch.object(
+                self.policy,
+                "_load_ref_task_ids",
+                return_value=("000066", "000068"),
+            ),
+            mock.patch.object(
+                self.policy,
+                "_load_ref_tasks",
+                side_effect=({}, {}),
+            ),
+            mock.patch.object(self.policy, "_read_path_at_ref", return_value=None),
+            mock.patch.object(self.policy, "_derive_merge_facts", return_value={}),
+            mock.patch.object(
+                self.policy,
+                "_cross_carrier_conflict_reasons",
+                return_value=(),
+            ) as conflict_check,
+            redirect_stdout(output),
+        ):
+            return_code = self.policy.main()
+
+        self.assertEqual(1, return_code)
+        self.assertEqual(
+            "000068",
             conflict_check.call_args.kwargs["task_id"],
         )
 
