@@ -2657,6 +2657,7 @@ def evaluate_eligibility(
     head_board: str | None = None,
     path_facts: Sequence[PathFact] | None = None,
     enforce_board_sync: bool = False,
+    task_ids_override: Sequence[str] | None = None,
 ) -> EligibilityResult:
     """按基线任务合同、严格PR合同和变更路径判定资格。"""
 
@@ -2670,9 +2671,12 @@ def evaluate_eligibility(
     if not changed_paths:
         _append_reason(reasons, "PR没有可验证的变更路径")
 
-    task_ids = parse_task_references(pr_body)
-    if not task_ids:
+    parsed_task_ids = parse_task_references(pr_body)
+    task_ids = tuple(task_ids_override) if task_ids_override is not None else parsed_task_ids
+    if not parsed_task_ids:
         _append_reason(reasons, "PR正文未引用任务编号")
+    if task_ids_override is not None and tuple(sorted(parsed_task_ids)) != tuple(sorted(task_ids)):
+        _append_reason(reasons, "可信入口执行任务编号与PR正文引用不一致")
     change_type = parse_change_type(pr_body)
     if change_type is None:
         _append_reason(reasons, "PR正文缺少有效变更类型")
@@ -3072,6 +3076,11 @@ def main() -> int:
         ),
         path_facts=path_facts,
         enforce_board_sync=True,
+        task_ids_override=(
+            (CONTRACT_CONFLICT_REPAIR_EXECUTOR,)
+            if change_type == CONTRACT_CONFLICT_REPAIR_TYPE
+            else None
+        ),
     )
     conflict_reasons = _cross_carrier_conflict_reasons(
         repo_root,

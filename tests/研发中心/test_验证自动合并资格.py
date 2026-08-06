@@ -3542,6 +3542,11 @@ class GitPathFactIntegrationTests(unittest.TestCase):
                 "_load_ref_tasks",
                 side_effect=({}, {}),
             ),
+            mock.patch.object(
+                self.policy,
+                "_validate_contract_conflict_repair",
+                return_value={"000066"},
+            ) as contract_repair,
             mock.patch.object(self.policy, "_read_path_at_ref", return_value=None),
             mock.patch.object(self.policy, "_derive_merge_facts", return_value={}),
             mock.patch.object(
@@ -3553,7 +3558,11 @@ class GitPathFactIntegrationTests(unittest.TestCase):
         ):
             return_code = self.policy.main()
 
-        self.assertEqual(1, return_code)
+        self.assertEqual(0, return_code)
+        self.assertEqual(
+            ("000068",),
+            contract_repair.call_args.kwargs["task_ids"],
+        )
         self.assertEqual(
             "000068",
             conflict_check.call_args.kwargs["task_id"],
