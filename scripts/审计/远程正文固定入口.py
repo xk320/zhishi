@@ -41,6 +41,8 @@ RESOURCE_CONTRACT = {
     "最大内存字节": 536870912,
     "远端临时写入": False,
 }
+RESOURCE_CONTRACT_FINGERPRINT = "d28c31bbc213b0aaa5586f7cb40ba67bac7039065d8fac60bc99620352e93edc"
+FROZEN_DATA_CUTOFF = "2026-08-06T12:00:00+08:00"
 ALLOWED_STATUSES = {"通过", "拒绝", "无法判定", "失败", "未成熟", "失效", "未执行"}
 
 
@@ -93,13 +95,17 @@ def _parse_request(raw: str) -> dict[str, Any]:
         raise ProtocolError("request-operation")
     payload = value.get("payload")
     if not isinstance(payload, dict) or set(payload) != {
-        "合同版本", "覆盖矩阵指纹", "数据截止", "规则脚本指纹"
+        "合同版本", "覆盖矩阵指纹", "对象清单指纹", "资源合同指纹", "数据截止", "规则脚本指纹"
     }:
         raise ProtocolError("request-payload")
     if payload["合同版本"] != CONTRACT_VERSION:
         raise ProtocolError("contract-mismatch")
     if payload["覆盖矩阵指纹"] != MATRIX_FINGERPRINT:
         raise ProtocolError("matrix-mismatch")
+    if payload["对象清单指纹"] != TARGETS_FINGERPRINT:
+        raise ProtocolError("targets-mismatch")
+    if payload["资源合同指纹"] != RESOURCE_CONTRACT_FINGERPRINT:
+        raise ProtocolError("resource-contract-mismatch")
     if not isinstance(payload["数据截止"], str) or not isinstance(payload["规则脚本指纹"], str):
         raise ProtocolError("payload-type")
     if len(payload["规则脚本指纹"]) != 64 or any(c not in "0123456789abcdef" for c in payload["规则脚本指纹"]):
@@ -108,7 +114,7 @@ def _parse_request(raw: str) -> dict[str, Any]:
         cutoff = dt.datetime.fromisoformat(payload["数据截止"])
     except ValueError as error:
         raise ProtocolError("cutoff-format") from error
-    if cutoff.tzinfo is None or cutoff > dt.datetime.now(cutoff.tzinfo):
+    if payload["数据截止"] != FROZEN_DATA_CUTOFF or cutoff.tzinfo is None or cutoff > dt.datetime.now(cutoff.tzinfo):
         raise ProtocolError("cutoff-invalid")
     return value
 
@@ -286,8 +292,8 @@ def _set_limits() -> None:
         resource.setrlimit(resource.RLIMIT_CPU, (600, 600))
         signal.signal(signal.SIGALRM, lambda *_: os._exit(124))
         signal.alarm(RESOURCE_CONTRACT["数据库批次最大耗时秒"])
-    except (OSError, ValueError):
-        pass
+    except (OSError, ValueError) as error:
+        raise RuntimeError("resource-limit-failed") from error
 
 
 def body_audit(request: dict[str, Any]) -> dict[str, Any]:
@@ -330,15 +336,15 @@ def body_audit(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def main() -> int:
-    _set_limits()
-    if os.environ.get("SSH_ORIGINAL_COMMAND"):
-        response = _reject("original-command")
-    else:
-        try:
+    try:
+        _set_limits()
+        if os.environ.get("SSH_ORIGINAL_COMMAND"):
+            response = _reject("original-command")
+        else:
             raw = sys.stdin.read(4097)
             response = body_audit(_parse_request(raw))
-        except (OSError, ProtocolError, RuntimeError, ValueError, TypeError) as error:
-            response = _reject(str(error)[:64] or "safe-failure")
+    except (OSError, ProtocolError, RuntimeError, ValueError, TypeError) as error:
+        response = _reject(str(error)[:64] or "safe-failure")
     sys.stdout.write(json.dumps(response, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
     return 0 if response.get("status", "通过") == "通过" else 1
 

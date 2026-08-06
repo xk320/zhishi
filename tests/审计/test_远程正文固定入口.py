@@ -21,6 +21,15 @@ def load_module():
     return module
 
 
+def load_fixed_entry():
+    spec = importlib.util.spec_from_file_location("fixed_body_entry", FIXED_ENTRY)
+    if spec is None or spec.loader is None:
+        raise AssertionError("无法加载远程固定入口")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class FixedBodyEntryTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -32,6 +41,33 @@ class FixedBodyEntryTests(unittest.TestCase):
         self.assertIn('if os.environ.get("SSH_ORIGINAL_COMMAND")', text)
         self.assertIn('raise ProtocolError("request-operation")', text)
         self.assertIn('len(objects) != 92', text)
+        self.assertNotIn("/Users/", text)
+        self.assertIn('raise RuntimeError("resource-limit-failed")', text)
+
+    def test_请求绑定对象资源指纹和冻结截止(self):
+        entry = load_fixed_entry()
+        valid = {
+            "protocol": "zhishi-ro/2",
+            "operation": "body-audit",
+            "payload": {
+                "合同版本": "task-000070",
+                "覆盖矩阵指纹": entry.MATRIX_FINGERPRINT,
+                "对象清单指纹": entry.TARGETS_FINGERPRINT,
+                "资源合同指纹": entry.RESOURCE_CONTRACT_FINGERPRINT,
+                "数据截止": entry.FROZEN_DATA_CUTOFF,
+                "规则脚本指纹": "a" * 64,
+            },
+        }
+        self.assertEqual(valid, entry._parse_request(json.dumps(valid, ensure_ascii=False)))
+        for key, value in (("对象清单指纹", "0" * 64), ("资源合同指纹", "0" * 64)):
+            invalid = json.loads(json.dumps(valid, ensure_ascii=False))
+            invalid["payload"][key] = value
+            with self.assertRaises(entry.ProtocolError):
+                entry._parse_request(json.dumps(invalid, ensure_ascii=False))
+        invalid = json.loads(json.dumps(valid, ensure_ascii=False))
+        invalid["payload"]["数据截止"] = "2020-01-01T00:00:00+08:00"
+        with self.assertRaises(entry.ProtocolError):
+            entry._parse_request(json.dumps(invalid, ensure_ascii=False))
 
     def test_数据库调用只发送stdin请求而没有远程命令(self):
         module = self.module

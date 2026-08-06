@@ -29,12 +29,12 @@ EXPECTED_MATRIX_FP = "6fae22c00a2599207dd388e25b444500ca2988b982cc2c2d2c18bb9b04
 EXPECTED_CONTRACT_FP = "0acd47b2f1396dc1aadd604d20386fb8b0e6ff346101571f5352424091884d8d"
 EXPECTED_BODY_PROTOCOL = "zhishi-ro/2"
 EXPECTED_BODY_WRAPPER_VERSION = "zhishi-ro-body-audit-1.0"
-EXPECTED_BODY_WRAPPER_FP = "5252f264a443e30177bbebee5f4bc32d8b9900362f120442bb9777491376d7d8"
+EXPECTED_BODY_WRAPPER_FP = "e821c5764531879e119896606fe816ac47c1c4d355ae11a93248673a2a167553"
 EXPECTED_BODY_TARGETS_FP = "1c8adccb082d30ff37ff456b139c5560a716f55e208450e8945ddfabce11e187"
+EXPECTED_BODY_RESOURCE_FP = "d28c31bbc213b0aaa5586f7cb40ba67bac7039065d8fac60bc99620352e93edc"
 EXPECTED_DB_SESSION_FP = "2e642610c2d0f286f489b5226081f23077a8674bffb0e255c8cea98825601943"
 EXPECTED_DB_GRANTS_FP = "ad26cec63d094b7a68f4229ca4668a36eaa9aee7343970d8dfc6e8f9c6631a2e"
 EXPECTED_BODY_KEY_FP = "SHA256:sAHa0lV+dd9ZGdcnc/JuQ1yNgqvhHE1sQmCKuW2xB3k"
-DEFAULT_BODY_KEY_PATH = "/Users/luweiming/.ssh/zhishi_body_ro_ed25519"
 EXPECTED_LOG_TARGET_FP = "3aec10efd62c05a4ccf4c23022bfdd1ba987c08d6764792047decc241297953d"
 EXPECTED_LOG_KEY_FP = "SHA256:oq45bCRm3+qAuQr/CVmB6P27cq2u1Z+3f0vrzi8GvyI"
 EXPECTED_LOG_WRAPPER_FP = "d63540742cc71bc07908c0d31d09e7e95c1ed8d89fc43c00d848277a62b6cbc3"
@@ -339,6 +339,8 @@ def run_remote_database(database: list[dict[str, str]], cutoff: str, script_fing
         "payload": {
             "合同版本": "task-000070",
             "覆盖矩阵指纹": EXPECTED_MATRIX_FP,
+            "对象清单指纹": EXPECTED_BODY_TARGETS_FP,
+            "资源合同指纹": EXPECTED_BODY_RESOURCE_FP,
             "数据截止": cutoff,
             "规则脚本指纹": script_fingerprint,
         },
@@ -527,7 +529,7 @@ def main() -> int:
     parser.add_argument("--cutoff", required=True)
     parser.add_argument("--log-target", required=True)
     parser.add_argument("--log-key", required=True)
-    parser.add_argument("--body-key", default=DEFAULT_BODY_KEY_PATH, help="专用正文复采密钥的受限本地路径")
+    parser.add_argument("--body-key", required=True, help="专用正文复采密钥的受限本地路径")
     args = parser.parse_args()
     if not re.fullmatch(r"批次-\d{8}T\d{6}Z-v\d+", args.batch_id):
         raise RuntimeError("批次标识格式错误")
