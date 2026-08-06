@@ -243,6 +243,42 @@ class CrossCarrierConflictTests(unittest.TestCase):
             CONFLICT._check_task_contract_drift(ROOT, "base", "head", conflicts)
         self.assertTrue(any(item.code == "TASK_CONTRACT_CONFLICT" for item in conflicts))
 
+    def test任务合同冲突修复目标允许进入专用字段校验(self):
+        path = "docs/研发中心/任务/任务-000066.md"
+        base_text = (ROOT / path).read_text(encoding="utf-8")
+        head_text = base_text.replace(
+            "- 实现提交SHA：`eb632a33d3d0c08893dfe4bcee1f4dc549e03f4e`\n",
+            "- 实现提交SHA：`eb632a33d3d0c08893dfe4bcee1f4dc549e03f4e`\n"
+            "- 交付提交SHA：`c5a5f838f3c09b352150508388d15c3d7935818c`\n",
+            1,
+        ).replace(
+            "本登记PR合并后任务保持`阻塞`，不标记已完成。只有解除条件有证据并经独立状态闭环PR恢复为待执行后，\n"
+            "才能认领执行；正文审计交付须另行PR、双只读评审、main可信复验和合并后状态闭环。",
+            "正文审计交付PR已合并并完成双只读评审、主执行器验证和main可信复验；随后通过独立状态闭环PR标记本任务为`已完成`。\n"
+            "审计结果中的无法判定、失败和未成熟必须继续保留，不代表阶段1数据门槛或阶段2放行。",
+            1,
+        )
+
+        def paths(_repo, _ref):
+            return (path,)
+
+        def read(_repo, ref, requested):
+            self.assertEqual(path, requested)
+            return base_text if ref == "base" else head_text
+
+        conflicts = []
+        with mock.patch.object(CONFLICT, "_list_task_paths", side_effect=paths), mock.patch.object(
+            CONFLICT, "_read_at_ref", side_effect=read
+        ):
+            CONFLICT._check_task_contract_drift(
+                ROOT,
+                "base",
+                "head",
+                conflicts,
+                contract_conflict_repair_target="000066",
+            )
+        self.assertEqual([], conflicts)
+
     def test阻塞原因在依赖区段允许状态闭环(self):
         base_text = (
             "# 任务-000049：示例\n\n- 状态：阻塞\n\n"

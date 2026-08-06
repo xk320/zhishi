@@ -197,6 +197,18 @@ BLOCKED_CONTRACT_REPAIR_ALLOWED_PATHS = frozenset(
         "docs/治理/PR自动合并策略.md",
     }
 )
+CONTRACT_CONFLICT_REPAIR_TYPE = "任务合同冲突修复"
+CONTRACT_CONFLICT_REPAIR_EXECUTOR = "000068"
+CONTRACT_CONFLICT_REPAIR_TARGET = "000066"
+CONTRACT_CONFLICT_REPAIR_PR = 165
+CONTRACT_CONFLICT_REPAIR_ALLOWED_PATHS = frozenset(
+    {
+        "docs/研发中心/看板.md",
+    }
+)
+IMPLEMENTATION_SHA_PATTERN = re.compile(
+    r"^- 实现提交SHA：`([0-9a-f]{40})`$", re.MULTILINE
+)
 MERGE_SHA_PATTERN = re.compile(
     r"^- 合并提交SHA：`([0-9a-f]{40})`$", re.MULTILINE
 )
@@ -237,7 +249,13 @@ TASK_REFERENCE_LINE = re.compile(
     r"^\s*-\s*任务-(\d{6})(?:\s*[（(][^\r\n]*[）)])?\s*$"
 )
 CHANGE_TYPES = frozenset(
-    {"任务登记", "任务交付", "合并后状态闭环", "阻塞任务合同修复"}
+    {
+        "任务登记",
+        "任务交付",
+        "合并后状态闭环",
+        "阻塞任务合同修复",
+        CONTRACT_CONFLICT_REPAIR_TYPE,
+    }
 )
 REGISTRATION_STATUSES = frozenset({"待执行", "阻塞"})
 REQUIRED_TASK_FIELDS = (
@@ -508,6 +526,7 @@ def _task_reference_limit(change_type: str | None) -> int:
     return 2 if change_type in {
         "合并后状态闭环",
         BLOCKED_CONTRACT_REPAIR_TYPE,
+        CONTRACT_CONFLICT_REPAIR_TYPE,
     } else 1
 
 
@@ -1829,6 +1848,215 @@ def _validate_blocked_contract_repair(
     return allowed_unreferenced
 
 
+def _target_contract_without_repair_fields(text: str) -> tuple[str, ...]:
+    """保留目标任务合同，排除本次两项受控修复字段。"""
+
+    lines = text.splitlines()
+    completion_start = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if line.strip() == "## 完成定义"
+        ),
+        -1,
+    )
+    completion_end = next(
+        (
+            index
+            for index in range(completion_start + 1, len(lines))
+            if lines[index].startswith("## ")
+        ),
+        len(lines),
+    ) if completion_start >= 0 else -1
+    output: list[str] = []
+    for index, line in enumerate(lines):
+        if line.startswith("- 交付提交SHA："):
+            continue
+        if completion_start <= index < completion_end:
+            continue
+        output.append(line)
+    return tuple(output)
+
+
+def _completion_section_lines(text: str) -> tuple[str, ...] | None:
+    """读取任务合同完成定义段落（含标题，不读取执行记录）。"""
+
+    lines = text.splitlines()
+    start = next(
+        (index for index, line in enumerate(lines) if line.strip() == "## 完成定义"),
+        -1,
+    )
+    if start < 0:
+        return None
+    end = next(
+        (
+            index
+            for index in range(start + 1, len(lines))
+            if lines[index].startswith("## ")
+        ),
+        len(lines),
+    )
+    return tuple(lines[start:end])
+
+
+def _derive_contract_repair_delivery_sha(
+    *,
+    repo_root: Path,
+    base_ref: str,
+    target_base: str,
+    reasons: list[str],
+) -> str | None:
+    """从PR #165真实双父合并提交复算任务-000066交付头。"""
+
+    implementation = IMPLEMENTATION_SHA_PATTERN.findall(target_base)
+    pr_match = PULL_REQUEST_PATTERN.search(target_base)
+    if len(implementation) != 1 or pr_match is None:
+        _append_reason(reasons, "任务-000066缺少唯一实现提交SHA或PR事实")
+        return None
+    if int(pr_match.group(1)) != CONTRACT_CONFLICT_REPAIR_PR:
+        _append_reason(reasons, "任务-000066交付PR不是预绑定的PR #165")
+        return None
+    implementation_sha = implementation[0]
+    if not _git_is_ancestor(repo_root, implementation_sha, base_ref):
+        _append_reason(reasons, "任务-000066实现提交SHA不在main祖先链")
+        return None
+    merge_text = _git_text(
+        repo_root,
+        ["rev-list", "--first-parent", "--merges", "--max-count=2048", base_ref],
+    )
+    if merge_text is None:
+        _append_reason(reasons, "无法读取main双父合并提交列表")
+        return None
+    candidates: list[str] = []
+    for merge_sha in merge_text.splitlines():
+        parents_text = _git_text(
+            repo_root, ["show", "-s", "--format=%P", merge_sha]
+        )
+        parents = parents_text.split() if parents_text else []
+        if len(parents) != 2:
+            continue
+        # 只接受实现提交首次进入main的合并点；后续合并的第一父已经包含实现提交，
+        # 因而不会被误认作PR #165交付头。
+        if _git_is_ancestor(repo_root, implementation_sha, parents[0]):
+            continue
+        if _git_is_ancestor(repo_root, implementation_sha, parents[1]):
+            candidates.append(parents[1])
+    if len(candidates) != 1:
+        _append_reason(reasons, "任务-000066的PR #165无法复算唯一交付头")
+        return None
+    return candidates[0]
+
+
+def _validate_contract_conflict_repair(
+    *,
+    repo_root: Path,
+    base_ref: str,
+    task_ids: Sequence[str],
+    changed_paths: Sequence[str],
+    base_tasks: Mapping[str, str],
+    head_tasks: Mapping[str, str],
+    base_board: str | None,
+    head_board: str | None,
+    reasons: list[str],
+) -> set[str]:
+    """验证任务-000068→任务-000066的双字段合同修复。"""
+
+    executor_id = CONTRACT_CONFLICT_REPAIR_EXECUTOR
+    target_id = CONTRACT_CONFLICT_REPAIR_TARGET
+    allowed_unreferenced: set[str] = set()
+    if tuple(task_ids) != (executor_id,):
+        _append_reason(reasons, "任务合同冲突修复必须且只能关联任务-000068")
+        return allowed_unreferenced
+    executor_path = f"docs/研发中心/任务/任务-{executor_id}.md"
+    target_path = f"docs/研发中心/任务/任务-{target_id}.md"
+    required_paths = {executor_path, target_path, "docs/研发中心/看板.md"}
+    if not required_paths.issubset(set(changed_paths)):
+        _append_reason(reasons, "任务合同冲突修复必须同时修改执行任务、目标任务和看板")
+    allowed_paths = required_paths | CONTRACT_CONFLICT_REPAIR_ALLOWED_PATHS
+    for path in changed_paths:
+        if path in allowed_paths:
+            continue
+        pure_path = PurePosixPath(path)
+        if (
+            len(pure_path.parts) == 3
+            and pure_path.parts[:2] == ("tests", "研发中心")
+            and pure_path.suffix == ".py"
+        ):
+            continue
+        _append_reason(reasons, f"任务合同冲突修复包含不允许路径“{path}”")
+
+    executor_base = base_tasks.get(executor_id)
+    executor_head = head_tasks.get(executor_id)
+    target_base = base_tasks.get(target_id)
+    target_head = head_tasks.get(target_id)
+    if None in (executor_base, executor_head, target_base, target_head):
+        _append_reason(reasons, "任务合同冲突修复缺少执行任务或目标任务正文")
+        return allowed_unreferenced
+    assert executor_base is not None
+    assert executor_head is not None
+    assert target_base is not None
+    assert target_head is not None
+    _validate_delivery_tasks(
+        task_ids=(executor_id,),
+        base_tasks=base_tasks,
+        head_tasks=head_tasks,
+        reasons=reasons,
+    )
+    if _delivery_contract_without_metadata(executor_base) != _delivery_contract_without_metadata(executor_head):
+        _append_reason(reasons, "任务-000068合同冲突修复夹带执行任务合同改写")
+    if _task_field(TASK_STATUS_PATTERN, target_base) != "待评审" or _task_field(
+        TASK_STATUS_PATTERN, target_head
+    ) != "待评审":
+        _append_reason(reasons, "目标任务-000066基线和头部必须保持待评审")
+
+    expected_delivery_sha = _derive_contract_repair_delivery_sha(
+        repo_root=repo_root,
+        base_ref=base_ref,
+        target_base=target_base,
+        reasons=reasons,
+    )
+    base_delivery = DELIVERY_SHA_PATTERN.findall(target_base)
+    head_delivery = DELIVERY_SHA_PATTERN.findall(target_head)
+    if base_delivery:
+        _append_reason(reasons, "目标任务-000066基线已存在交付提交SHA")
+    if len(head_delivery) != 1 or (
+        expected_delivery_sha is not None and head_delivery[0] != expected_delivery_sha
+    ):
+        _append_reason(reasons, "目标任务-000066交付提交SHA与PR #165真实交付头不一致")
+
+    old_completion = (
+        "## 完成定义",
+        "",
+        "本登记PR合并后任务保持`阻塞`，不标记已完成。只有解除条件有证据并经独立状态闭环PR恢复为待执行后，",
+        "才能认领执行；正文审计交付须另行PR、双只读评审、main可信复验和合并后状态闭环。",
+        "",
+    )
+    new_completion = (
+        "## 完成定义",
+        "",
+        "正文审计交付PR已合并并完成双只读评审、主执行器验证和main可信复验；随后通过独立状态闭环PR标记本任务为`已完成`。",
+        "审计结果中的无法判定、失败和未成熟必须继续保留，不代表阶段1数据门槛或阶段2放行。",
+        "",
+    )
+    if _completion_section_lines(target_base) != old_completion:
+        _append_reason(reasons, "任务-000066基线完成定义不是预绑定旧段落")
+    if _completion_section_lines(target_head) != new_completion:
+        _append_reason(reasons, "任务-000066完成定义未按完整新段落修复")
+    if _target_contract_without_repair_fields(target_base) != _target_contract_without_repair_fields(target_head):
+        _append_reason(reasons, "任务-000066合同修复夹带两项字段以外的改写")
+
+    _validate_delivery_board(
+        task_ids=(executor_id,),
+        base_tasks=base_tasks,
+        head_tasks=head_tasks,
+        base_board=base_board,
+        head_board=head_board,
+        reasons=reasons,
+    )
+    allowed_unreferenced.add(target_id)
+    return allowed_unreferenced
+
+
 def _registration_field_value(text: str, field: str) -> str | None:
     """读取任务头部严格唯一且非空的合同字段。"""
 
@@ -2414,6 +2642,8 @@ def _validate_state_closure(
 
 def evaluate_eligibility(
     *,
+    repo_root: Path | None = None,
+    base_ref: str | None = None,
     changed_paths: Sequence[str],
     pr_body: str,
     base_tasks: Mapping[str, str],
@@ -2427,6 +2657,7 @@ def evaluate_eligibility(
     head_board: str | None = None,
     path_facts: Sequence[PathFact] | None = None,
     enforce_board_sync: bool = False,
+    task_ids_override: Sequence[str] | None = None,
 ) -> EligibilityResult:
     """按基线任务合同、严格PR合同和变更路径判定资格。"""
 
@@ -2440,9 +2671,12 @@ def evaluate_eligibility(
     if not changed_paths:
         _append_reason(reasons, "PR没有可验证的变更路径")
 
-    task_ids = parse_task_references(pr_body)
-    if not task_ids:
+    parsed_task_ids = parse_task_references(pr_body)
+    task_ids = tuple(task_ids_override) if task_ids_override is not None else parsed_task_ids
+    if not parsed_task_ids:
         _append_reason(reasons, "PR正文未引用任务编号")
+    if task_ids_override is not None and tuple(sorted(parsed_task_ids)) != tuple(sorted(task_ids)):
+        _append_reason(reasons, "可信入口执行任务编号与PR正文引用不一致")
     change_type = parse_change_type(pr_body)
     if change_type is None:
         _append_reason(reasons, "PR正文缺少有效变更类型")
@@ -2505,6 +2739,21 @@ def evaluate_eligibility(
             head_board=head_board,
             reasons=reasons,
         )
+    elif change_type == CONTRACT_CONFLICT_REPAIR_TYPE:
+        if repo_root is None or not base_ref:
+            _append_reason(reasons, "任务合同冲突修复缺少可信Git基线")
+        else:
+            allowed_unreferenced_task_ids = _validate_contract_conflict_repair(
+                repo_root=repo_root,
+                base_ref=base_ref,
+                task_ids=task_ids,
+                changed_paths=changed_paths,
+                base_tasks=base_tasks,
+                head_tasks=head_tasks,
+                base_board=base_board,
+                head_board=head_board,
+                reasons=reasons,
+            )
 
     referenced_task_ids = set(task_ids)
     changed_task_ids: set[str] = set()
@@ -2555,6 +2804,22 @@ def evaluate_eligibility(
                         reasons,
                         f"阻塞任务合同修复变更路径“{path}”不允许自动合并",
                     )
+        elif change_type == CONTRACT_CONFLICT_REPAIR_TYPE:
+            task_match = TASK_FILE_PATTERN.fullmatch(path)
+            is_allowed_task = task_match is not None and task_match.group(1) in {
+                CONTRACT_CONFLICT_REPAIR_EXECUTOR,
+                CONTRACT_CONFLICT_REPAIR_TARGET,
+            }
+            is_allowed_test = (
+                len(PurePosixPath(path).parts) == 3
+                and PurePosixPath(path).parts[:2] == ("tests", "研发中心")
+                and PurePosixPath(path).suffix == ".py"
+            )
+            if path not in CONTRACT_CONFLICT_REPAIR_ALLOWED_PATHS and not is_allowed_task and not is_allowed_test:
+                _append_reason(
+                    reasons,
+                    f"任务合同冲突修复变更路径“{path}”不允许自动合并",
+                )
 
     for task_id in task_ids:
         if task_id not in changed_task_ids:
@@ -2788,6 +3053,8 @@ def main() -> int:
             _read_task_at_ref(repo_root, arguments.head_ref, support_task_id) or "",
         )
     result = evaluate_eligibility(
+        repo_root=repo_root,
+        base_ref=arguments.base_ref,
         changed_paths=changed_paths,
         pr_body=pr_body,
         base_tasks=base_tasks,
@@ -2809,6 +3076,11 @@ def main() -> int:
         ),
         path_facts=path_facts,
         enforce_board_sync=True,
+        task_ids_override=(
+            (CONTRACT_CONFLICT_REPAIR_EXECUTOR,)
+            if change_type == CONTRACT_CONFLICT_REPAIR_TYPE
+            else None
+        ),
     )
     conflict_reasons = _cross_carrier_conflict_reasons(
         repo_root,
@@ -2823,6 +3095,8 @@ def main() -> int:
         task_id=(
             BLOCKED_CONTRACT_REPAIR_EXECUTOR
             if change_type == BLOCKED_CONTRACT_REPAIR_TYPE
+            else CONTRACT_CONFLICT_REPAIR_EXECUTOR
+            if change_type == CONTRACT_CONFLICT_REPAIR_TYPE
             else next(iter(ordered_ids), "")
         ),
     )

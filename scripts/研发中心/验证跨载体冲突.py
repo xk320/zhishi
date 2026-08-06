@@ -50,8 +50,11 @@ CANCELLATION_MERGE_SHA_PATTERN = re.compile(
 )
 PR_NUMBER_PATTERN = re.compile(r"#(\d+)")
 CHANGE_TYPE_PATTERN = re.compile(
-    r"(?ms)^## 变更类型\s*\n+\s*-\s*(任务登记|任务交付|合并后状态闭环|阻塞任务合同修复)\s*$"
+    r"(?ms)^## 变更类型\s*\n+\s*-\s*(任务登记|任务交付|合并后状态闭环|阻塞任务合同修复|任务合同冲突修复)\s*$"
 )
+CONTRACT_CONFLICT_REPAIR_TYPE = "任务合同冲突修复"
+CONTRACT_CONFLICT_REPAIR_EXECUTOR = "000068"
+CONTRACT_CONFLICT_REPAIR_TARGET = "000066"
 DEPENDENCY_PATTERN = re.compile(r"任务-(\d{6})")
 STANDARD_STATUSES = frozenset(
     {"待执行", "执行中", "阻塞", "待评审", "需修复", "已完成", "已取消"}
@@ -858,6 +861,7 @@ def _immutable_task_contract(
     allow_dependency_mutation: bool = False,
     allow_cancellation_mutation: bool = False,
     allow_blocked_contract_repair: bool = False,
+    allow_contract_conflict_repair: bool = False,
 ) -> str:
     """保留任务合同，排除状态和执行/合并证据记录。"""
 
@@ -886,6 +890,22 @@ def _immutable_task_contract(
         ),
         record_start,
     ) if dependency_start >= 0 else -1
+    completion_start = next(
+        (
+            index
+            for index, line in enumerate(lines[:record_start])
+            if line.strip() == "## 完成定义"
+        ),
+        -1,
+    )
+    completion_end = next(
+        (
+            index
+            for index in range(completion_start + 1, record_start)
+            if lines[index].startswith("## ")
+        ),
+        record_start,
+    ) if completion_start >= 0 else -1
     mutable_prefixes = MUTABLE_TASK_PREFIXES + (
         CANCELLATION_MUTABLE_TASK_PREFIXES
         if allow_cancellation_mutation
@@ -909,6 +929,14 @@ def _immutable_task_contract(
                 allow_blocked_contract_repair
                 and line == "- 自动合并范围：治理自动化"
             )
+            or (
+                allow_contract_conflict_repair
+                and completion_start <= index < completion_end
+            )
+            or (
+                allow_contract_conflict_repair
+                and line.startswith("- 交付提交SHA：")
+            )
         )
     ).strip()
 
@@ -922,6 +950,7 @@ def _check_task_contract_drift(
     allow_dependency_mutation: bool = False,
     allow_cancellation_mutation: bool = False,
     blocked_contract_repair_target: str | None = None,
+    contract_conflict_repair_target: str | None = None,
 ) -> None:
     """阻止交付或状态PR静默改写目标、范围、输入输出和安全边界。"""
 
@@ -952,6 +981,11 @@ def _check_task_contract_drift(
                 and path
                 == f"{TASK_DIR}/任务-{blocked_contract_repair_target}.md"
             ),
+            allow_contract_conflict_repair=(
+                contract_conflict_repair_target is not None
+                and path
+                == f"{TASK_DIR}/任务-{contract_conflict_repair_target}.md"
+            ),
         ) != _immutable_task_contract(
             head_text,
             allow_dependency_mutation=allow_dependency_mutation,
@@ -960,6 +994,11 @@ def _check_task_contract_drift(
                 blocked_contract_repair_target is not None
                 and path
                 == f"{TASK_DIR}/任务-{blocked_contract_repair_target}.md"
+            ),
+            allow_contract_conflict_repair=(
+                contract_conflict_repair_target is not None
+                and path
+                == f"{TASK_DIR}/任务-{contract_conflict_repair_target}.md"
             ),
         ):
             conflicts.append(
@@ -1349,6 +1388,12 @@ def check_refs(
             or change_type == "合并后状态闭环",
             blocked_contract_repair_target=(
                 "000055" if change_type == "阻塞任务合同修复" else None
+            ),
+            contract_conflict_repair_target=(
+                CONTRACT_CONFLICT_REPAIR_TARGET
+                if change_type == CONTRACT_CONFLICT_REPAIR_TYPE
+                and task_id == CONTRACT_CONFLICT_REPAIR_EXECUTOR
+                else None
             ),
         )
         _check_historical_immutability(repo_root, base_sha, head_sha, conflicts)

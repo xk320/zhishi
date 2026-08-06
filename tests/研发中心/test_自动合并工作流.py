@@ -150,6 +150,16 @@ class MergeWorkflowTests(unittest.TestCase):
             merge_block.index('pulls/${PR_NUMBER}/merge'),
         )
 
+    def test_合并主题固定为标准格式并由闭环复验主题(self):
+        merge_call = self.text.split(
+            'gh api --method PUT "repos/${REPOSITORY}/pulls/${PR_NUMBER}/merge"',
+            maxsplit=1,
+        )[1].split("python3 - <<'PY'", maxsplit=1)[0]
+        self.assertIn("-f merge_method=merge", merge_call)
+        self.assertIn('-f commit_title="Merge pull request #${PR_NUMBER} from xk320/${HEAD_REF}"', merge_call)
+        self.assertNotIn("commit_message", merge_call)
+        self.assertIn("Merge pull request #", merge_call)
+
     def test_当前提交所有检查必须为success(self):
         merge_block = self.text.split(
             "- name: 合并评审通过的精确提交", maxsplit=1
