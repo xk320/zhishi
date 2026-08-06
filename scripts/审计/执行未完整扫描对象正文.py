@@ -32,8 +32,8 @@ EXPECTED_DB_GRANTS_FP = "a7dcbefb5b0917ba3a0965358e2b288131e0dc074404f3ae9cbb605
 EXPECTED_DB_CONFIG_PATH_FP = "b69738efb2ac68eff4243e6fa57cd886b2931d1430d2d3312cfc54eac98776a9"
 EXPECTED_LOG_TARGET_FP = "3aec10efd62c05a4ccf4c23022bfdd1ba987c08d6764792047decc241297953d"
 EXPECTED_LOG_KEY_FP = "SHA256:oq45bCRm3+qAuQr/CVmB6P27cq2u1Z+3f0vrzi8GvyI"
-EXPECTED_LOG_WRAPPER_FP = "7a5ff0dcb146fbe576e309d6a0d6d48391b61f5bf80091ac1062131573c6cdf9"
-EXPECTED_LOG_ENTRY_PROOF_FP = "2adf2bf9d64b9783b425930e9ae9e0d1f39c83190a2d0ac8a322e3fe3de6a236"
+EXPECTED_LOG_WRAPPER_FP = "d63540742cc71bc07908c0d31d09e7e95c1ed8d89fc43c00d848277a62b6cbc3"
+EXPECTED_LOG_ENTRY_PROOF_FP = "cd2b318e10b970eb3ac171d85e3a38e59f009c2a4f510c83f63b5d33b903a74a"
 EXPECTED_LOG_ORDER = (
     "3b4c1660ead1953f8be41667c435478438c247ac9b13b4b5876a186b93ae6d78",
     "8abea0a4395c1db90828ad1b8edd7e9378f0d622b2a8517f0882545963a053ef",
@@ -375,12 +375,14 @@ def _key_fingerprint(path: Path) -> str:
 def _validate_log_document(document: Any) -> None:
     if not isinstance(document, dict):
         raise RuntimeError("敏感日志输出结构错误")
-    required = {"合同版本", "对象结果", "对象顺序", "批次耗时毫秒", "最大内存字节数", "最大单对象字节数", "最大总读取字节数", "最大耗时秒", "脱敏规则", "远端临时写入"}
+    required = {"合同版本", "强制入口指纹", "对象结果", "对象顺序", "批次耗时毫秒", "最大内存字节数", "最大单对象字节数", "最大总读取字节数", "最大耗时秒", "脱敏规则", "远端临时写入"}
     if set(document) != required or document["合同版本"] != "task-000064-log-readonly-v1":
         raise RuntimeError("敏感日志合同或字段漂移")
     if document["对象顺序"] != list(EXPECTED_LOG_ORDER) or document["最大单对象字节数"] != 32768 or document["最大总读取字节数"] != 65536 or document["最大耗时秒"] != 30 or document["最大内存字节数"] != 536870912 or document["远端临时写入"] is not False or document["脱敏规则"] != "仅输出指纹、计数、状态、资源与错误类别；不输出日志字段值":
         raise RuntimeError("敏感日志资源或脱敏合同漂移")
-    entry_proof = sha256_text("|".join((EXPECTED_LOG_TARGET_FP, EXPECTED_LOG_KEY_FP, EXPECTED_LOG_WRAPPER_FP, document["合同版本"], document["脱敏规则"])))
+    if document["强制入口指纹"] != EXPECTED_LOG_WRAPPER_FP:
+        raise RuntimeError("敏感日志远端包装器指纹漂移")
+    entry_proof = sha256_text("|".join((EXPECTED_LOG_TARGET_FP, EXPECTED_LOG_KEY_FP, document["强制入口指纹"], document["合同版本"], document["脱敏规则"])))
     if entry_proof != EXPECTED_LOG_ENTRY_PROOF_FP:
         raise RuntimeError("敏感日志固定强制入口指纹证明不匹配")
     if not isinstance(document["批次耗时毫秒"], int) or not 0 <= document["批次耗时毫秒"] <= 30000:
