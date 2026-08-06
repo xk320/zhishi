@@ -228,6 +228,16 @@ class RemoteReadonlyIdentityTest(unittest.TestCase):
             )
             with self.assertRaises(ValueError):
                 self.validator.build_batch_metadata(response, **bad_content)
+            bad_key_owner = dict(kwargs)
+            bad_key_owner["permission_facts_path"] = Path(directory) / "bad-key-owner.json"
+            bad_owner_snapshot = json.loads(permission_facts.read_text(encoding="utf-8"))
+            bad_owner_snapshot["authorized_keys"]["owner_uid"] = 1001
+            bad_owner_snapshot["authorized_keys"]["owner_gid"] = 1001
+            bad_key_owner["permission_facts_path"].write_text(
+                json.dumps(bad_owner_snapshot), encoding="utf-8"
+            )
+            with self.assertRaises(ValueError):
+                self.validator.build_batch_metadata(response, **bad_key_owner)
             authorized_keys.write_text(
                 f"{options} ssh-ed25519 AAECAwQ= tampered\n", encoding="utf-8"
             )

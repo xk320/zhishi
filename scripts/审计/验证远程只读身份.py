@@ -205,6 +205,8 @@ def load_permission_facts_snapshot(
         raise ValueError("授权文件事实快照与实际授权事实不一致")
     if authorized["content_sha256"] != authorized_facts["内容指纹"]:
         raise ValueError("授权文件内容指纹与实际文件不一致")
+    if authorized["owner_uid"] != authorized_facts["文件所有者UID"] or authorized["owner_gid"] != authorized_facts["文件所有者GID"]:
+        raise ValueError("授权文件所有者快照与实际文件不一致")
     if authorized["mode"] != authorized_facts["文件模式"] or authorized["regular_file"] != authorized_facts["普通文件"]:
         raise ValueError("授权文件模式快照与实际文件不一致")
     if not SHA256.fullmatch(str(authorized["content_sha256"])):
@@ -312,6 +314,8 @@ def build_batch_metadata(
     )
     if response_errors:
         raise ValueError("身份响应未通过：" + "；".join(response_errors))
+    if authorized_facts["文件所有者UID"] != response.get("uid") or authorized_facts["文件所有者GID"] != response.get("gid"):
+        raise ValueError("authorized_keys所有者与专用账户不一致")
     if not re.fullmatch(r"remote-ro-identity-[0-9TZ+:-]+-v[0-9]+", batch_id):
         raise ValueError("批次身份格式非法")
     if not FINGERPRINT.fullmatch(public_key_fingerprint):
