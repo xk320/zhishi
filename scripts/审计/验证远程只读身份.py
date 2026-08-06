@@ -88,8 +88,11 @@ def authorized_key_facts(path: Path, *, expected_options: str) -> dict[str, Any]
 
     if expected_options != FIXED_AUTHORIZED_OPTIONS:
         raise ValueError("强制命令必须绑定固定wrapper")
-    if path.is_symlink():
+    if path.is_symlink() or not path.is_file():
         raise ValueError("authorized_keys不得为符号链接")
+    file_stat = path.stat()
+    if not stat.S_ISREG(file_stat.st_mode) or stat.S_IMODE(file_stat.st_mode) != 0o600:
+        raise ValueError("authorized_keys必须是0600普通文件")
     lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     if len(lines) != 1:
         raise ValueError("authorized_keys必须且只能有一行")
@@ -100,6 +103,11 @@ def authorized_key_facts(path: Path, *, expected_options: str) -> dict[str, Any]
         "公钥数量": 1,
         "公钥指纹": _fingerprint_from_key_blob(parts[2]),
         "选项指纹": hashlib.sha256(parts[0].encode()).hexdigest(),
+        "内容指纹": sha256_file(path),
+        "文件所有者UID": file_stat.st_uid,
+        "文件所有者GID": file_stat.st_gid,
+        "文件模式": "0600",
+        "普通文件": True,
         "restrict": True,
         "固定命令": True,
     }
@@ -195,6 +203,10 @@ def load_permission_facts_snapshot(
     }
     if any(authorized[key] != expected for key, expected in expected_authorized.items()):
         raise ValueError("授权文件事实快照与实际授权事实不一致")
+    if authorized["content_sha256"] != authorized_facts["内容指纹"]:
+        raise ValueError("授权文件内容指纹与实际文件不一致")
+    if authorized["mode"] != authorized_facts["文件模式"] or authorized["regular_file"] != authorized_facts["普通文件"]:
+        raise ValueError("授权文件模式快照与实际文件不一致")
     if not SHA256.fullmatch(str(authorized["content_sha256"])):
         raise ValueError("授权文件内容指纹格式非法")
     return dict(value)

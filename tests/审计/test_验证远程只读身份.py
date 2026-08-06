@@ -87,10 +87,13 @@ class RemoteReadonlyIdentityTest(unittest.TestCase):
 
     def test_批次构建重新验证响应和权限事实(self):
         _, response = self.run_probe(self.probe.canonical_request())
-        response.update(
-            {
-                "uid": 1001,
-                "gid": 1001,
+        with tempfile.TemporaryDirectory() as directory:
+            fixture_uid = os.getuid() or 1001
+            fixture_gid = os.getgid() or 1001
+            response.update(
+                {
+                "uid": fixture_uid,
+                "gid": fixture_gid,
                 "uid_nonzero": True,
                 "admin_group_membership": False,
                 "sudo_noninteractive_allowed": False,
@@ -100,9 +103,8 @@ class RemoteReadonlyIdentityTest(unittest.TestCase):
                 "root_home_writable": False,
                 "protected_system_path_writable": False,
                 "original_command_present": False,
-            }
-        )
-        with tempfile.TemporaryDirectory() as directory:
+                }
+            )
             public_key = Path(directory) / "sample.pub"
             public_key.write_text("ssh-ed25519 AAECAwQ= sample\n", encoding="utf-8")
             authorized_keys = Path(directory) / "authorized_keys"
@@ -110,6 +112,7 @@ class RemoteReadonlyIdentityTest(unittest.TestCase):
             authorized_keys.write_text(
                 f"{options} ssh-ed25519 AAECAwQ= sample\n", encoding="utf-8"
             )
+            authorized_keys.chmod(0o600)
             wrapper_stat = Path(directory) / "wrapper-stat.json"
             wrapper_stat.write_text(
                 json.dumps(
@@ -130,8 +133,8 @@ class RemoteReadonlyIdentityTest(unittest.TestCase):
                         "snapshot_version": "zhishi-ro-permissions/1",
                         "source": "root-management-readonly",
                         "account": {
-                            "uid": 1001,
-                            "gid": 1001,
+                            "uid": fixture_uid,
+                            "gid": fixture_gid,
                             "supplementary_group_count": 0,
                             "admin_group_membership": False,
                             "password_locked": True,
@@ -145,11 +148,11 @@ class RemoteReadonlyIdentityTest(unittest.TestCase):
                             "content_sha256": self.validator.sha256_file(PROBE),
                         },
                         "authorized_keys": {
-                            "owner_uid": 1001,
-                            "owner_gid": 1001,
+                            "owner_uid": fixture_uid,
+                            "owner_gid": fixture_gid,
                             "mode": "0600",
                             "regular_file": True,
-                            "content_sha256": "a" * 64,
+                            "content_sha256": self.validator.sha256_file(authorized_keys),
                             "key_count": 1,
                             "key_fingerprint": "SHA256:CLteXW6qwQSe3giT0w7QIrGk2bW0jbQUhx9Rycs1KD0",
                             "options_fingerprint": hashlib.sha256(options.encode()).hexdigest(),
@@ -216,6 +219,24 @@ class RemoteReadonlyIdentityTest(unittest.TestCase):
             )
             with self.assertRaises(ValueError):
                 self.validator.build_batch_metadata(response, **bad_owner)
+            bad_content = dict(kwargs)
+            bad_content["permission_facts_path"] = Path(directory) / "bad-content.json"
+            bad_snapshot = json.loads(permission_facts.read_text(encoding="utf-8"))
+            bad_snapshot["authorized_keys"]["content_sha256"] = "a" * 64
+            bad_content["permission_facts_path"].write_text(
+                json.dumps(bad_snapshot), encoding="utf-8"
+            )
+            with self.assertRaises(ValueError):
+                self.validator.build_batch_metadata(response, **bad_content)
+            authorized_keys.write_text(
+                f"{options} ssh-ed25519 AAECAwQ= tampered\n", encoding="utf-8"
+            )
+            authorized_keys.chmod(0o600)
+            with self.assertRaises(ValueError):
+                self.validator.build_batch_metadata(response, **kwargs)
+            authorized_keys.chmod(0o644)
+            with self.assertRaises(ValueError):
+                self.validator.build_batch_metadata(response, **kwargs)
 
     def test_批次目录拒绝覆盖(self):
         with tempfile.TemporaryDirectory() as directory:
