@@ -201,8 +201,8 @@ def build_batch_metadata(
     disk_available_gib: float,
 ) -> dict[str, Any]:
     wrapper_stat = wrapper_path.stat()
-    if not stat.S_ISREG(wrapper_stat.st_mode) or stat.S_IMODE(wrapper_stat.st_mode) != 0o755:
-        raise ValueError("本地wrapper副本必须是普通文件且模式为0755")
+    if not stat.S_ISREG(wrapper_stat.st_mode):
+        raise ValueError("本地wrapper副本必须是普通文件")
     wrapper_sha256 = sha256_file(wrapper_path)
     public_key_fingerprint = compute_public_key_fingerprint(public_key_path)
     ssh_options_fingerprint = hashlib.sha256(ssh_options.encode()).hexdigest()
