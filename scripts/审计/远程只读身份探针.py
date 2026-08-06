@@ -12,12 +12,17 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import grp
+import resource
+import signal
 import sys
 from typing import Any, Mapping
 
 
 PROTOCOL = "zhishi-ro/1"
 WRAPPER_VERSION = "zhishi-ro-identity-probe-1.0"
+PROBE_TIMEOUT_SECONDS = 30
+PROBE_MEMORY_BYTES = 512 * 1024 * 1024
 REQUEST_KEYS = frozenset({"protocol", "operation", "payload"})
 RESPONSE_KEYS = frozenset(
     {
@@ -30,8 +35,10 @@ RESPONSE_KEYS = frozenset(
         "uid",
         "gid",
         "uid_nonzero",
+        "admin_group_membership",
         "supplementary_group_count",
         "root_home_readable",
+        "root_home_openable",
         "root_home_writable",
         "protected_system_path_writable",
         "original_command_present",
@@ -86,8 +93,10 @@ def _base_response(
         "uid": None,
         "gid": None,
         "uid_nonzero": False,
+        "admin_group_membership": False,
         "supplementary_group_count": None,
         "root_home_readable": None,
+        "root_home_openable": None,
         "root_home_writable": None,
         "protected_system_path_writable": None,
         "original_command_present": bool(os.environ.get("SSH_ORIGINAL_COMMAND")),
@@ -150,15 +159,26 @@ def _probe_with_environment(raw: str) -> dict[str, Any]:
     )
     uid = os.getuid()
     gid = os.getgid()
+    group_ids = set(os.getgroups()) | {gid}
+    admin_names = {"root", "sudo", "adm", "wheel", "docker"}
+    admin_membership = False
+    for group_id in group_ids:
+        try:
+            if grp.getgrgid(group_id).gr_name in admin_names:
+                admin_membership = True
+        except KeyError:
+            continue
     response.update(
         {
             "uid": uid,
             "gid": gid,
             "uid_nonzero": uid != 0,
+            "admin_group_membership": admin_membership,
             # 某些发行版会把主组同时放入getgroups()；只计主组之外的附加组。
             "supplementary_group_count": len({group for group in os.getgroups() if group != gid}),
             # 只查询目录权限，不读取目录内容；root目录由root拥有且默认不可读写。
             "root_home_readable": os.access("/root", os.R_OK),
+            "root_home_openable": _directory_openable("/root"),
             "root_home_writable": os.access("/root", os.W_OK),
             # /etc是受保护系统路径，用于证明普通身份没有系统写权限。
             "protected_system_path_writable": os.access("/etc", os.W_OK),
@@ -167,7 +187,31 @@ def _probe_with_environment(raw: str) -> dict[str, Any]:
     return response
 
 
+def _directory_openable(path: str) -> bool:
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    except OSError:
+        return False
+    os.close(fd)
+    return True
+
+
+def _set_resource_limits() -> None:
+    try:
+        resource.setrlimit(
+            resource.RLIMIT_AS, (PROBE_MEMORY_BYTES, PROBE_MEMORY_BYTES)
+        )
+    except (OSError, ValueError):
+        pass
+    try:
+        signal.signal(signal.SIGALRM, lambda *_: os._exit(124))
+        signal.alarm(PROBE_TIMEOUT_SECONDS)
+    except (OSError, ValueError):
+        pass
+
+
 def main() -> int:
+    _set_resource_limits()
     if sys.argv[1:] == ["--request"]:
         sys.stdout.write(canonical_request() + "\n")
         return 0
