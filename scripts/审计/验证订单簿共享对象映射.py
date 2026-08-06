@@ -221,8 +221,7 @@ def run_remote_schema_audit(key_path: Path, script_fingerprint: str, timeout: in
     request = canonical(build_request(script_fingerprint)).decode("utf-8")
     command = [
         "ssh", "-T", "-i", str(key_path), "-o", "IdentitiesOnly=yes",
-        "-o", "BatchMode=yes", "-o", "SendEnv=", "-o", "SetEnv=",
-        f"User={REMOTE_USER}", REMOTE_HOST,
+        "-o", "BatchMode=yes", "-o", f"User={REMOTE_USER}", REMOTE_HOST,
     ]
     completed = subprocess.run(command, input=request + "\n", text=True, capture_output=True, timeout=timeout, check=False)
     if completed.returncode != 0:
