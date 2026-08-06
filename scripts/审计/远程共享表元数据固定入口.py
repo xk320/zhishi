@@ -199,8 +199,10 @@ def _one(item: dict[str, str], deadline: float) -> dict[str, Any]:
         column_rows: list[str] = []
         for line in columns["stdout"].splitlines():
             fields = line.split("\t")
-            if len(fields) == 5 and fields[2].isdigit():
-                column_rows.append(f"{fields[0].casefold()}:{fields[1].casefold()}:{fields[2]}:{fields[3].casefold()}:{fields[4].casefold()}")
+            if not line or len(fields) != 5 or not fields[2].isdigit() or not fields[0] or not fields[1] or fields[3].casefold() not in {"yes", "no"} or fields[4].casefold() not in {"", "pri", "uni", "mul"}:
+                result["原因码"] = "malformed-column-row"
+                return result
+            column_rows.append(f"{fields[0].casefold()}:{fields[1].casefold()}:{fields[2]}:{fields[3].casefold()}:{fields[4].casefold()}")
         if not column_rows:
             result["采集状态"], result["原因码"] = "未发现", "table-not-found"
             return result
@@ -218,8 +220,10 @@ def _one(item: dict[str, str], deadline: float) -> dict[str, Any]:
         index_rows: list[str] = []
         for line in indexes["stdout"].splitlines():
             fields = line.split("\t")
-            if len(fields) == 5 and fields[1].isdigit() and fields[3] in {"0", "1"}:
-                index_rows.append(f"{fields[0].casefold()}:{fields[1]}:{fields[2].casefold()}:{fields[3]}:{fields[4].casefold()}")
+            if not line or len(fields) != 5 or not fields[1].isdigit() or not fields[0] or not fields[2] or fields[3] not in {"0", "1"} or not fields[4]:
+                result["原因码"] = "malformed-index-row"
+                return result
+            index_rows.append(f"{fields[0].casefold()}:{fields[1]}:{fields[2].casefold()}:{fields[3]}:{fields[4].casefold()}")
         result["索引数"] = len(index_rows)
         result["索引指纹"] = _fp("|".join(index_rows))
         result["采集状态"], result["原因码"] = "已采集", "metadata-only"

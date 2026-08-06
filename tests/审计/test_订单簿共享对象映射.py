@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import shutil
+import tempfile
 import unittest
 
 
@@ -47,6 +49,8 @@ class OrderBookMappingTests(unittest.TestCase):
         ]
         self.assertEqual(validator.validate_states(rows), {"匹配": 16, "漂移": 0, "未发现": 0, "无法判定": 0, "失败": 0})
         rows[1]["列数"] += 1
+        rows[1].pop("状态", None)
+        rows[1].pop("原因码", None)
         self.assertEqual(validator.validate_states(rows)["漂移"], 1)
         rows.reverse()
         with self.assertRaises(validator.ContractError):
@@ -139,6 +143,47 @@ class OrderBookMappingTests(unittest.TestCase):
         path = ROOT / "artifacts/审计/订单簿共享对象映射/批次-20260806T143417Z-v2"
         if path.exists():
             self.assertEqual(self.validator.validate_artifact_directory(path)["匹配"], 5)
+
+    def test_批次篡改和敏感字段失败安全(self):
+        source = ROOT / "artifacts/审计/订单簿共享对象映射/批次-20260806T143417Z-v2"
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / source.name
+            shutil.copytree(source, target)
+            payload_path = target / "对象结果.json"
+            payload = json.loads(payload_path.read_text(encoding="utf-8"))
+            payload["对象结果"][0]["payload_json"] = "SELECT password FROM secret"
+            payload_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaises(self.validator.ContractError):
+                self.validator.validate_artifact_directory(target)
+
+            shutil.copytree(source, target.parent / "clean", dirs_exist_ok=True)
+            metadata_path = target.parent / "clean" / "批次元数据.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["规则脚本指纹"] = "0" * 64
+            metadata_path.write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaises(self.validator.ContractError):
+                self.validator.validate_artifact_directory(target.parent / "clean")
+
+    def test_远端异常行失败安全且SSH禁用密码和转发(self):
+        entry = self.entry
+        original = entry._mysql
+        calls = []
+
+        def fake_mysql(sql, deadline):
+            calls.append(sql)
+            return {"ok": True, "error": None, "bytes": 1, "stdout": "a\tvarchar(1)\t1\tNO\t\nMALFORMED\n"}
+
+        entry._mysql = fake_mysql
+        try:
+            result = entry._one(self.validator.TARGETS[0], 9999999999)
+        finally:
+            entry._mysql = original
+        self.assertEqual(result["采集状态"], "失败")
+        self.assertEqual(result["原因码"], "malformed-column-row")
+        source = VALIDATOR_PATH.read_text(encoding="utf-8")
+        self.assertIn("PasswordAuthentication=no", source)
+        self.assertIn("ForwardAgent=no", source)
+        self.assertIn("ClearAllForwardings=yes", source)
 
 
 if __name__ == "__main__":

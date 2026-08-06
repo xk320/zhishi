@@ -73,6 +73,18 @@ TARGET_MANIFEST_FINGERPRINT = "8ba1b762c7739efd45a53b48f861d848cba21c2dea3f58409
 SOURCE_ONLY_CANDIDATES = {
     "order_book_derived_state_revisions": "无任务-000063资产编号，不进入远端查询",
 }
+V2_BATCH_ID = "批次-20260806T143417Z-v2"
+V2_BATCH_RULE_FINGERPRINT = "9df446bd0dab8405b729829bc6b2657a1f743c7c194115847fe38da432f29799"
+V2_TEMP_KEY_FINGERPRINT = "SHA256:MqNDDq6W87QmhU84qMhLVLCwK6EcgJNHzcALcgipkJo"
+V2_PARENT_BATCH = "批次-20260806T143417Z-v1"
+V2_PREVIOUS_INPUTS = {
+    "任务": "任务-000070",
+    "批次": "批次-20260806T131956Z-v3",
+    "批次指纹": "9b520fba9704212ce878a47bad52d33b0ff1aa47f73e70f753c65675cf94816b",
+    "规则脚本指纹": "298055c30ec273c8a5e3b51e602ddd5b007141fefbc4c197b7bdd99c7bdb905d",
+    "固定入口指纹": "e821c5764531879e119896606fe816ac47c1c4d355ae11a93248673a2a167553",
+    "资源合同指纹": "e1848916ced2bc3343ca0bda53e985add32070630c3ece8af317ac62e631e8b4",
+}
 
 
 class ContractError(ValueError):
@@ -180,6 +192,10 @@ def validate_states(results: Iterable[dict[str, Any]], expected_count: int = 16)
         if row["表身份指纹"] != object_identity_fingerprint(target["数据库"], target["表"]):
             raise ContractError("object-identity-binding")
         status, reason = schema_status(row)
+        if "状态" in row and row["状态"] != status:
+            raise ContractError("declared-state-mismatch")
+        if "原因码" in row and row["原因码"] != reason:
+            raise ContractError("declared-reason-mismatch")
         row["状态"] = status
         row["原因码"] = reason
         summary[status] += 1
@@ -227,15 +243,46 @@ def validate_artifact_directory(path: Path) -> dict[str, int]:
         summary_file = json.loads((path / "状态摘要.json").read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ContractError("artifact-files") from error
-    if metadata.get("合同版本") != CONTRACT_VERSION:
+    raw = json.dumps({"metadata": metadata, "payload": payload, "summary": summary_file}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    if any(token.lower() in raw.lower() for token in ("payload_json", "password", "token", "secret", "mysql://", "-----begin")):
+        raise ContractError("artifact-sensitive-output")
+    if metadata.get("批次") != V2_BATCH_ID or metadata.get("批次版本") != "v2":
+        raise ContractError("artifact-batch-identity")
+    if metadata.get("协议") != PROTOCOL or metadata.get("合同版本") != CONTRACT_VERSION:
         raise ContractError("artifact-contract")
-    if metadata.get("源代码合同清单指纹") != SOURCE_MANIFEST_FINGERPRINT:
-        raise ContractError("artifact-source-manifest")
-    if metadata.get("对象清单指纹") != TARGET_MANIFEST_FINGERPRINT:
-        raise ContractError("artifact-targets")
+    if metadata.get("执行分支") != "codex/task-000071-orderbook-shared-schema-v1":
+        raise ContractError("artifact-branch")
+    if metadata.get("数据截止") != FROZEN_DATA_CUTOFF:
+        raise ContractError("artifact-cutoff")
+    for key, expected in (("覆盖矩阵指纹", MATRIX_FINGERPRINT), ("对象清单指纹", TARGET_MANIFEST_FINGERPRINT), ("源代码合同清单指纹", SOURCE_MANIFEST_FINGERPRINT), ("规则脚本指纹", V2_BATCH_RULE_FINGERPRINT)):
+        if metadata.get(key) != expected:
+            raise ContractError(f"artifact-{key}")
+    if metadata.get("对象总数") != 16 or metadata.get("资源合同") != RESOURCE_CONTRACT:
+        raise ContractError("artifact-resources")
+    if metadata.get("源代码合同") != {"提交": SOURCE_COMMIT, "文件": SOURCE_FILE, "文件指纹": SOURCE_SHA256}:
+        raise ContractError("artifact-source-contract")
+    if metadata.get("远端固定入口") != {"版本": REMOTE_WRAPPER_VERSION, "文件指纹": "78ae10634876fc297963674dc58831eb068e58fe9dc47e1a9d50666b3c159ed1", "本地源指纹": "78ae10634876fc297963674dc58831eb068e58fe9dc47e1a9d50666b3c159ed1"}:
+        raise ContractError("artifact-wrapper")
+    if metadata.get("授权输入指纹") != {"数据库会话": EXPECTED_SESSION_FINGERPRINT, "数据库权限快照": EXPECTED_GRANTS_FINGERPRINT, "临时只读密钥": V2_TEMP_KEY_FINGERPRINT}:
+        raise ContractError("artifact-authorization")
+    if metadata.get("前序任务输入") != V2_PREVIOUS_INPUTS:
+        raise ContractError("artifact-previous-input")
+    if metadata.get("父批次") != {"批次": V2_PARENT_BATCH, "关系": "v1按旧解析器生成，已被v2结构合同取代，不覆盖历史字节"}:
+        raise ContractError("artifact-parent")
+    if metadata.get("未登记候选") != SOURCE_ONLY_CANDIDATES:
+        raise ContractError("artifact-exclusion")
+    if metadata.get("临时凭据撤销", {}).get("状态") != "已撤销":
+        raise ContractError("artifact-revocation")
+    if metadata.get("安全声明") != {"仅结构元数据": True, "原始数据修改": False, "数据库写入": False, "远端临时写入": False, "交易结论": False, "未来数据使用": False, "凭据落盘": False}:
+        raise ContractError("artifact-security")
+    if summary_file.get("批次") != V2_BATCH_ID or set(summary_file) != {"批次", "状态计数", "可解除范围", "判定说明"}:
+        raise ContractError("artifact-summary-fields")
     rows = payload.get("对象结果")
-    if not isinstance(rows, list):
+    if set(payload) != {"对象结果"} or not isinstance(rows, list):
         raise ContractError("artifact-rows")
+    expected_row_fields = {"资产编号", "表", "表身份指纹", "采集状态", "列数", "列指纹", "索引数", "索引指纹", "状态", "原因码", "读取字节数", "耗时毫秒"}
+    if any(set(row) != expected_row_fields for row in rows if isinstance(row, dict)):
+        raise ContractError("artifact-row-fields")
     summary = validate_states(rows)
     expected_summary = summary_file.get("状态计数")
     if expected_summary != summary or metadata.get("状态计数") != summary:
@@ -336,7 +383,10 @@ def run_remote_schema_audit(key_path: Path, script_fingerprint: str, timeout: in
     request = canonical(build_request(script_fingerprint)).decode("utf-8")
     command = [
         "ssh", "-T", "-i", str(key_path), "-o", "IdentitiesOnly=yes",
-        "-o", "BatchMode=yes", "-o", f"User={REMOTE_USER}", REMOTE_HOST,
+        "-o", "BatchMode=yes", "-o", "PasswordAuthentication=no",
+        "-o", "KbdInteractiveAuthentication=no", "-o", "PreferredAuthentications=publickey",
+        "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no",
+        "-o", f"User={REMOTE_USER}", REMOTE_HOST,
     ]
     completed = subprocess.run(command, input=request + "\n", text=True, capture_output=True, timeout=timeout, check=False)
     if completed.returncode != 0:
