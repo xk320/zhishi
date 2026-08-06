@@ -33,6 +33,7 @@ EXPECTED_DB_CONFIG_PATH_FP = "b69738efb2ac68eff4243e6fa57cd886b2931d1430d2d3312c
 EXPECTED_LOG_TARGET_FP = "3aec10efd62c05a4ccf4c23022bfdd1ba987c08d6764792047decc241297953d"
 EXPECTED_LOG_KEY_FP = "SHA256:oq45bCRm3+qAuQr/CVmB6P27cq2u1Z+3f0vrzi8GvyI"
 EXPECTED_LOG_WRAPPER_FP = "7a5ff0dcb146fbe576e309d6a0d6d48391b61f5bf80091ac1062131573c6cdf9"
+EXPECTED_LOG_ENTRY_PROOF_FP = "2adf2bf9d64b9783b425930e9ae9e0d1f39c83190a2d0ac8a322e3fe3de6a236"
 EXPECTED_LOG_ORDER = (
     "3b4c1660ead1953f8be41667c435478438c247ac9b13b4b5876a186b93ae6d78",
     "8abea0a4395c1db90828ad1b8edd7e9378f0d622b2a8517f0882545963a053ef",
@@ -137,14 +138,19 @@ def _lit(value):
         raise ValueError("literal_rejected")
     return "'" + value + "'"
 
-def _mysql(sql):
+def _mysql(sql, deadline=None):
     command = [
         "mysql", "--defaults-extra-file=__DB_CONFIG__", "--batch", "--raw",
         "--skip-column-names", "--quick", "--connect-timeout=5",
         "--init-command=SET SESSION max_execution_time=25000", "-e", sql,
     ]
+    timeout = 25
+    if deadline is not None:
+        timeout = min(timeout, deadline - _time.monotonic())
+        if timeout <= 0:
+            return {"ok": False, "error": "object_timeout", "bytes": 0}
     try:
-        result = _subprocess.run(command, text=True, capture_output=True, timeout=25, check=False)
+        result = _subprocess.run(command, text=True, capture_output=True, timeout=timeout, check=False)
     except _subprocess.TimeoutExpired:
         return {"ok": False, "error": "query_timeout", "bytes": 0}
     stdout = result.stdout.encode("utf-8", errors="replace")
@@ -178,13 +184,14 @@ def _result(item):
 
 def _one(item):
     started = _time.monotonic()
+    deadline = started + _MAX_SECONDS
     result = _result(item)
     try:
         db, table = item["数据库"], item["表"]
         metadata = _mysql(
             "SELECT COLUMN_NAME, DATA_TYPE FROM information_schema.COLUMNS "
             "WHERE TABLE_SCHEMA=" + _lit(db) + " AND TABLE_NAME=" + _lit(table) +
-            " ORDER BY ORDINAL_POSITION;"
+            " ORDER BY ORDINAL_POSITION;", deadline
         )
         result["读取字节数"] += metadata.get("bytes", 0)
         if not metadata["ok"]:
@@ -211,7 +218,7 @@ def _one(item):
         stats = _mysql(
             "SELECT COLUMN_NAME, INDEX_NAME FROM information_schema.STATISTICS "
             "WHERE TABLE_SCHEMA=" + _lit(db) + " AND TABLE_NAME=" + _lit(table) +
-            " ORDER BY SEQ_IN_INDEX;"
+            " ORDER BY SEQ_IN_INDEX;", deadline
         )
         result["读取字节数"] += stats.get("bytes", 0)
         if not stats["ok"]:
@@ -231,7 +238,7 @@ def _one(item):
         result["时间字段指纹"] = _fp(field)
         ref = _mysql(
             "EXPLAIN SELECT " + _ident(field) + " FROM " + _ident(db) + "." + _ident(table) +
-            " ORDER BY " + _ident(field) + " DESC LIMIT 64;"
+            " ORDER BY " + _ident(field) + " DESC LIMIT 64;", deadline
         )
         result["读取字节数"] += ref.get("bytes", 0)
         if not ref["ok"]:
@@ -244,7 +251,7 @@ def _one(item):
             return result
         sample = _mysql(
             "SELECT " + _ident(field) + " FROM " + _ident(db) + "." + _ident(table) +
-            " ORDER BY " + _ident(field) + " DESC LIMIT 64;"
+            " ORDER BY " + _ident(field) + " DESC LIMIT 64;", deadline
         )
         result["读取字节数"] += sample.get("bytes", 0)
         if result["读取字节数"] > _MAX_BYTES:
@@ -274,6 +281,9 @@ def _one(item):
         result["错误类别"] = "safe_parser_failure"
     finally:
         result["耗时毫秒"] = int((_time.monotonic() - started) * 1000)
+        if result["耗时毫秒"] > _MAX_SECONDS * 1000:
+            result["状态"] = "失败"
+            result["错误类别"] = "object_timeout"
     return result
 
 _session = _mysql("SELECT CURRENT_USER();")
@@ -327,10 +337,26 @@ def run_remote_database(database: list[dict[str, str]], cutoff: str, script_fing
         document = json.loads(completed.stdout)
     except json.JSONDecodeError as error:
         raise RuntimeError("数据库只读批次输出不是结构化JSON") from error
-    if not isinstance(document, dict) or len(document.get("对象结果", [])) != 92:
+    if not isinstance(document, dict) or set(document) != {"规则脚本指纹", "授权会话指纹", "授权权限快照指纹", "对象结果", "资源上限"} or len(document.get("对象结果", [])) != 92:
         raise RuntimeError("数据库只读批次对象数不是92")
     if document.get("授权会话指纹") != EXPECTED_DB_SESSION_FP or document.get("授权权限快照指纹") != EXPECTED_DB_GRANTS_FP:
         raise RuntimeError("数据库只读授权指纹不匹配")
+    if document.get("资源上限") != {"单对象字节": 65536, "单对象秒": 30, "批次秒": 600, "批次输出字节": 8388608, "样本行数": 64, "内存字节": 536870912, "远端临时写入": False}:
+        raise RuntimeError("数据库资源合同漂移")
+    expected_keys = {"资产编号", "对象指纹", "状态", "记录数", "已观察记录数", "时间字段指纹", "时间可解析记录数", "时间空值记录数", "未来记录", "Schema指纹", "读取字节数", "耗时毫秒", "错误类别"}
+    expected_assets = [item["资产编号"] for item in database]
+    for index, item in enumerate(document["对象结果"]):
+        if set(item) != expected_keys or item.get("资产编号") != expected_assets[index]:
+            raise RuntimeError("数据库对象身份或字段漂移")
+        expected_object_fp = sha256_text("MySQL/" + database[index]["数据库"] + "/" + database[index]["表"])
+        if item.get("对象指纹") != expected_object_fp or item.get("状态") not in ALLOWED_STATUSES:
+            raise RuntimeError("数据库对象指纹或状态漂移")
+        if not isinstance(item.get("读取字节数"), int) or not 0 <= item["读取字节数"] <= RESOURCE_CONTRACT["数据库单对象最大读取字节"]:
+            raise RuntimeError("数据库对象读取预算漂移")
+        if not isinstance(item.get("耗时毫秒"), int) or not 0 <= item["耗时毫秒"] <= RESOURCE_CONTRACT["数据库单对象最大耗时秒"] * 1000:
+            raise RuntimeError("数据库对象耗时预算漂移")
+        if item.get("已观察记录数") is not None and (not isinstance(item["已观察记录数"], int) or not 0 <= item["已观察记录数"] <= RESOURCE_CONTRACT["数据库样本最大行数"]):
+            raise RuntimeError("数据库样本行数漂移")
     return document, completed.stdout
 
 
@@ -354,10 +380,16 @@ def _validate_log_document(document: Any) -> None:
         raise RuntimeError("敏感日志合同或字段漂移")
     if document["对象顺序"] != list(EXPECTED_LOG_ORDER) or document["最大单对象字节数"] != 32768 or document["最大总读取字节数"] != 65536 or document["最大耗时秒"] != 30 or document["最大内存字节数"] != 536870912 or document["远端临时写入"] is not False or document["脱敏规则"] != "仅输出指纹、计数、状态、资源与错误类别；不输出日志字段值":
         raise RuntimeError("敏感日志资源或脱敏合同漂移")
+    entry_proof = sha256_text("|".join((EXPECTED_LOG_TARGET_FP, EXPECTED_LOG_KEY_FP, EXPECTED_LOG_WRAPPER_FP, document["合同版本"], document["脱敏规则"])))
+    if entry_proof != EXPECTED_LOG_ENTRY_PROOF_FP:
+        raise RuntimeError("敏感日志固定强制入口指纹证明不匹配")
+    if not isinstance(document["批次耗时毫秒"], int) or not 0 <= document["批次耗时毫秒"] <= 30000:
+        raise RuntimeError("敏感日志批次耗时超过合同上限")
     item_keys = {"内容指纹", "文件字节数", "时间字段可解析记录数", "状态", "结构异常记录数", "耗时毫秒", "记录数", "读取字节数", "路径指纹", "错误类别"}
     items = document["对象结果"]
     if not isinstance(items, list) or len(items) != 2:
         raise RuntimeError("敏感日志对象数不是2")
+    total_read = 0
     for index, item in enumerate(items):
         if not isinstance(item, dict) or set(item) != item_keys or item["路径指纹"] != EXPECTED_LOG_ORDER[index] or item["状态"] not in ALLOWED_STATUSES:
             raise RuntimeError("敏感日志对象字段或路径指纹漂移")
@@ -368,8 +400,11 @@ def _validate_log_document(document: Any) -> None:
                 raise RuntimeError("敏感日志计数字段错误")
         if item["文件字节数"] > 32768 or item["读取字节数"] > 32768:
             raise RuntimeError("敏感日志对象超过读取上限")
+        total_read += item["读取字节数"]
         if not (item["错误类别"] is None or isinstance(item["错误类别"], str)):
             raise RuntimeError("敏感日志错误字段错误")
+    if total_read > 65536:
+        raise RuntimeError("敏感日志批次读取超过合同上限")
 
 
 def run_remote_logs(log_target: str, log_key: Path) -> tuple[dict[str, Any], str]:
@@ -446,8 +481,7 @@ def main() -> int:
     if batch_root.exists() or any(part in {".", ".."} for part in Path(args.batch_id).parts):
         raise RuntimeError("批次路径已存在或非法")
     report_path = ROOT / "docs/审计/Ubuntu未完整扫描对象正文质量复验报告.md"
-    if report_path.exists():
-        raise RuntimeError("报告路径已存在；应创建新追加版本")
+    previous_report = report_path.read_text(encoding="utf-8") if report_path.exists() else ""
     started = stable_now()
     script_fp = sha256_text(Path(__file__).read_text(encoding="utf-8"))
     matrix_fp = sha256_bytes(MATRIX.read_bytes())
@@ -473,7 +507,16 @@ def main() -> int:
         "合同授权截止": AUTHORIZATION_DEADLINE, "数据截止": args.cutoff, "合同版本指纹": contract_fp,
         "覆盖矩阵指纹": matrix_fp, "规则脚本指纹": script_fp,
         "数据库远端输出指纹": sha256_text(database_raw), "日志远端输出指纹": sha256_text(logs_raw),
-        "日志固定入口指纹": EXPECTED_LOG_WRAPPER_FP, "资源合同": RESOURCE_CONTRACT,
+        "日志固定入口指纹": EXPECTED_LOG_WRAPPER_FP,
+        "授权输入指纹": {
+            "数据库会话": EXPECTED_DB_SESSION_FP,
+            "数据库权限快照": EXPECTED_DB_GRANTS_FP,
+            "数据库配置入口": EXPECTED_DB_CONFIG_PATH_FP,
+            "日志目标": EXPECTED_LOG_TARGET_FP,
+            "日志密钥": EXPECTED_LOG_KEY_FP,
+            "日志强制入口": EXPECTED_LOG_WRAPPER_FP,
+        },
+        "资源合同": RESOURCE_CONTRACT,
         "对象总数": len(results), "状态计数": statuses,
         "安全声明": {"原始数据修改": False, "远端临时写入": False, "日志正文输出": False, "业务字段输出": False, "未来数据使用": False, "交易结论": False},
     }
@@ -481,7 +524,10 @@ def main() -> int:
     write_json(batch_root / "批次元数据.json", metadata)
     write_json(batch_root / "对象结果.json", results)
     write_json(batch_root / "状态摘要.json", statuses)
-    report_path.write_text(build_report(args.batch_id, metadata, statuses, results), encoding="utf-8")
+    current_report = build_report(args.batch_id, metadata, statuses, results)
+    if previous_report:
+        current_report = previous_report.rstrip() + "\n\n---\n\n" + current_report
+    report_path.write_text(current_report, encoding="utf-8")
     print(json.dumps({"批次": args.batch_id, "报告": str(report_path.relative_to(ROOT)), "对象总数": len(results), "状态计数": statuses, "批次指纹": sha256_text(json.dumps(metadata, ensure_ascii=False, sort_keys=True))}, ensure_ascii=False, sort_keys=True))
     return 0
 
