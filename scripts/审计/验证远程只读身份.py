@@ -44,6 +44,8 @@ RESPONSE_KEYS = frozenset(
 FIXED_AUTHORIZED_OPTIONS = 'restrict,command="/usr/local/libexec/zhishi_ro_identity_probe.py"'
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 FINGERPRINT = re.compile(r"^SHA256:[A-Za-z0-9+/]+={0,2}$")
+PERMISSION_SNAPSHOT_VERSION = "zhishi-ro-permissions/1"
+PERMISSION_SNAPSHOT_SOURCE = "root-management-readonly"
 SENSITIVE = re.compile(
     r"(?i)(password|passwd|secret|token\s*=|authorization:|gh[pousr]_[A-Za-z0-9]|"
     r"-----BEGIN|\b(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}\b)"
@@ -119,6 +121,85 @@ def load_wrapper_stat_snapshot(path: Path, *, content_sha256: str) -> dict[str, 
     return dict(value)
 
 
+def load_permission_facts_snapshot(
+    path: Path,
+    *,
+    response: Mapping[str, Any],
+    wrapper_stat: Mapping[str, Any],
+    authorized_facts: Mapping[str, Any],
+    public_key_fingerprint: str,
+    password_locked: bool,
+    admin_groups: bool,
+    supplementary_group_count: int,
+) -> dict[str, Any]:
+    """校验root管理面生成的脱敏账户/授权事实快照。"""
+
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("权限事实快照必须是普通文件")
+    value = _load_object(path)
+    if set(value) != {"snapshot_version", "source", "account", "wrapper", "authorized_keys"}:
+        raise ValueError("权限事实快照字段不完整")
+    if value["snapshot_version"] != PERMISSION_SNAPSHOT_VERSION:
+        raise ValueError("权限事实快照版本不匹配")
+    if value["source"] != PERMISSION_SNAPSHOT_SOURCE:
+        raise ValueError("权限事实快照来源不匹配")
+    account = value["account"]
+    if set(account) != {
+        "uid",
+        "gid",
+        "supplementary_group_count",
+        "admin_group_membership",
+        "password_locked",
+        "sudo_noninteractive_allowed",
+    }:
+        raise ValueError("账户事实快照字段不完整")
+    expected_account = {
+        "uid": response.get("uid"),
+        "gid": response.get("gid"),
+        "supplementary_group_count": supplementary_group_count,
+        "admin_group_membership": admin_groups,
+        "password_locked": password_locked,
+        "sudo_noninteractive_allowed": response.get("sudo_noninteractive_allowed"),
+    }
+    if account != expected_account:
+        raise ValueError("账户事实快照与响应/权限参数不一致")
+    if account["password_locked"] is not True:
+        raise ValueError("账户密码必须锁定")
+    wrapper = value["wrapper"]
+    if dict(wrapper) != dict(wrapper_stat):
+        raise ValueError("权限快照中的wrapper事实与stat快照不一致")
+    authorized = value["authorized_keys"]
+    if set(authorized) != {
+        "owner_uid",
+        "owner_gid",
+        "mode",
+        "regular_file",
+        "content_sha256",
+        "key_count",
+        "key_fingerprint",
+        "options_fingerprint",
+        "restrict",
+        "fixed_command",
+    }:
+        raise ValueError("授权文件事实快照字段不完整")
+    if authorized["owner_uid"] != response.get("uid") or authorized["owner_gid"] != response.get("gid"):
+        raise ValueError("授权文件所有者与专用账户不一致")
+    if authorized["mode"] != "0600" or authorized["regular_file"] is not True:
+        raise ValueError("授权文件权限或普通文件事实不匹配")
+    expected_authorized = {
+        "key_count": authorized_facts["公钥数量"],
+        "key_fingerprint": public_key_fingerprint,
+        "options_fingerprint": authorized_facts["选项指纹"],
+        "restrict": True,
+        "fixed_command": True,
+    }
+    if any(authorized[key] != expected for key, expected in expected_authorized.items()):
+        raise ValueError("授权文件事实快照与实际授权事实不一致")
+    if not SHA256.fullmatch(str(authorized["content_sha256"])):
+        raise ValueError("授权文件内容指纹格式非法")
+    return dict(value)
+
+
 def _load_object(path: Path) -> Mapping[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, Mapping):
@@ -189,6 +270,7 @@ def build_batch_metadata(
     public_key_path: Path,
     authorized_keys_path: Path,
     wrapper_stat_path: Path,
+    permission_facts_path: Path,
     batch_id: str,
     frozen_at: str,
     ssh_options: str,
@@ -226,6 +308,16 @@ def build_batch_metadata(
         raise ValueError("SSH选项指纹格式非法")
     wrapper_stat = load_wrapper_stat_snapshot(
         wrapper_stat_path, content_sha256=wrapper_sha256
+    )
+    permission_facts = load_permission_facts_snapshot(
+        permission_facts_path,
+        response=response,
+        wrapper_stat=wrapper_stat,
+        authorized_facts=authorized_facts,
+        public_key_fingerprint=public_key_fingerprint,
+        password_locked=password_locked,
+        admin_groups=admin_groups,
+        supplementary_group_count=supplementary_group_count,
     )
     if authorized_key_count != authorized_facts["公钥数量"] or authorized_key_count != 1:
         raise ValueError("授权公钥必须且只能有一把")
@@ -272,6 +364,17 @@ def build_batch_metadata(
             "mode": wrapper_stat["mode"],
             "普通文件": wrapper_stat["regular_file"],
         },
+        "证据文件": {
+            "wrapper统计快照": {
+                "文件名": "wrapper-stat.json",
+                "SHA256": sha256_file(wrapper_stat_path),
+            },
+            "账户与授权事实快照": {
+                "文件名": "账户授权事实.json",
+                "SHA256": sha256_file(permission_facts_path),
+                "版本": permission_facts["snapshot_version"],
+            },
+        },
         "authorized_keys事实": {
             "公钥数量": authorized_facts["公钥数量"],
             "公钥指纹": public_key_fingerprint,
@@ -302,6 +405,7 @@ def write_batch_append_only(
     metadata: Mapping[str, Any],
     response: Mapping[str, Any],
     boundary_summary: Mapping[str, Any],
+    evidence_files: Mapping[str, Path],
     started_monotonic: float,
     max_batch_seconds: int = 600,
 ) -> None:
@@ -316,6 +420,8 @@ def write_batch_append_only(
     if output_dir.exists():
         raise FileExistsError("批次目录已存在，禁止覆盖")
     output_dir.mkdir(parents=True)
+    if set(evidence_files) != {"wrapper-stat.json", "账户授权事实.json"}:
+        raise ValueError("必须保存wrapper统计和账户授权事实快照")
     for filename, payload in (
         ("批次元数据.json", metadata),
         ("探针响应.json", response),
@@ -325,6 +431,17 @@ def write_batch_append_only(
         with path.open("x", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2)
             handle.write("\n")
+    for filename, source in evidence_files.items():
+        if source.is_symlink() or not source.is_file():
+            raise ValueError("证据文件必须是普通文件")
+        expected = metadata["证据文件"][
+            "wrapper统计快照" if filename == "wrapper-stat.json" else "账户与授权事实快照"
+        ]
+        if expected["文件名"] != filename or expected["SHA256"] != sha256_file(source):
+            raise ValueError("证据文件指纹与元数据不一致")
+        destination = output_dir / filename
+        with destination.open("x", encoding="utf-8") as handle:
+            handle.write(source.read_text(encoding="utf-8"))
 
 
 def _arguments() -> argparse.Namespace:

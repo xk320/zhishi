@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 from copy import deepcopy
@@ -122,6 +123,44 @@ class RemoteReadonlyIdentityTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            permission_facts = Path(directory) / "permission-facts.json"
+            permission_facts.write_text(
+                json.dumps(
+                    {
+                        "snapshot_version": "zhishi-ro-permissions/1",
+                        "source": "root-management-readonly",
+                        "account": {
+                            "uid": 1001,
+                            "gid": 1001,
+                            "supplementary_group_count": 0,
+                            "admin_group_membership": False,
+                            "password_locked": True,
+                            "sudo_noninteractive_allowed": False,
+                        },
+                        "wrapper": {
+                            "owner_uid": 0,
+                            "owner_gid": 0,
+                            "mode": "0755",
+                            "regular_file": True,
+                            "content_sha256": self.validator.sha256_file(PROBE),
+                        },
+                        "authorized_keys": {
+                            "owner_uid": 1001,
+                            "owner_gid": 1001,
+                            "mode": "0600",
+                            "regular_file": True,
+                            "content_sha256": "a" * 64,
+                            "key_count": 1,
+                            "key_fingerprint": "SHA256:CLteXW6qwQSe3giT0w7QIrGk2bW0jbQUhx9Rycs1KD0",
+                            "options_fingerprint": hashlib.sha256(options.encode()).hexdigest(),
+                            "restrict": True,
+                            "fixed_command": True,
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
             self.assertEqual(
                 self.validator.compute_public_key_fingerprint(public_key),
                 "SHA256:CLteXW6qwQSe3giT0w7QIrGk2bW0jbQUhx9Rycs1KD0",
@@ -131,6 +170,7 @@ class RemoteReadonlyIdentityTest(unittest.TestCase):
                 "public_key_path": public_key,
                 "authorized_keys_path": authorized_keys,
                 "wrapper_stat_path": wrapper_stat,
+                "permission_facts_path": permission_facts,
                 "batch_id": "remote-ro-identity-20260806T081014Z-v1",
                 "frozen_at": "2026-08-06T08:10:14Z",
                 "ssh_options": options,
@@ -180,12 +220,31 @@ class RemoteReadonlyIdentityTest(unittest.TestCase):
     def test_批次目录拒绝覆盖(self):
         with tempfile.TemporaryDirectory() as directory:
             out = Path(directory) / "batch"
-            payload = {"x": 1}
+            wrapper_evidence = Path(directory) / "wrapper-stat.json"
+            account_evidence = Path(directory) / "账户授权事实.json"
+            wrapper_evidence.write_text("{}\n", encoding="utf-8")
+            account_evidence.write_text("{}\n", encoding="utf-8")
+            payload = {
+                "证据文件": {
+                    "wrapper统计快照": {
+                        "文件名": "wrapper-stat.json",
+                        "SHA256": self.validator.sha256_file(wrapper_evidence),
+                    },
+                    "账户与授权事实快照": {
+                        "文件名": "账户授权事实.json",
+                        "SHA256": self.validator.sha256_file(account_evidence),
+                    },
+                }
+            }
             self.validator.write_batch_append_only(
                 out,
                 metadata=payload,
                 response=payload,
                 boundary_summary=payload,
+                evidence_files={
+                    "wrapper-stat.json": wrapper_evidence,
+                    "账户授权事实.json": account_evidence,
+                },
                 started_monotonic=time.monotonic(),
             )
             with self.assertRaises(TypeError):
@@ -194,6 +253,10 @@ class RemoteReadonlyIdentityTest(unittest.TestCase):
                     metadata=payload,
                     response=payload,
                     boundary_summary=payload,
+                    evidence_files={
+                        "wrapper-stat.json": wrapper_evidence,
+                        "账户授权事实.json": account_evidence,
+                    },
                 )
             with self.assertRaises(FileExistsError):
                 self.validator.write_batch_append_only(
@@ -201,6 +264,10 @@ class RemoteReadonlyIdentityTest(unittest.TestCase):
                     metadata=payload,
                     response=payload,
                     boundary_summary=payload,
+                    evidence_files={
+                        "wrapper-stat.json": wrapper_evidence,
+                        "账户授权事实.json": account_evidence,
+                    },
                     started_monotonic=time.monotonic(),
                 )
             with self.assertRaises(TimeoutError):
@@ -209,6 +276,10 @@ class RemoteReadonlyIdentityTest(unittest.TestCase):
                     metadata=payload,
                     response=payload,
                     boundary_summary=payload,
+                    evidence_files={
+                        "wrapper-stat.json": wrapper_evidence,
+                        "账户授权事实.json": account_evidence,
+                    },
                     started_monotonic=time.monotonic() - 601,
                 )
 
