@@ -109,6 +109,19 @@ class RemoteReadonlyIdentityTest(unittest.TestCase):
             authorized_keys.write_text(
                 f"{options} ssh-ed25519 AAECAwQ= sample\n", encoding="utf-8"
             )
+            wrapper_stat = Path(directory) / "wrapper-stat.json"
+            wrapper_stat.write_text(
+                json.dumps(
+                    {
+                        "owner_uid": 0,
+                        "owner_gid": 0,
+                        "mode": "0755",
+                        "regular_file": True,
+                        "content_sha256": self.validator.sha256_file(PROBE),
+                    }
+                ),
+                encoding="utf-8",
+            )
             self.assertEqual(
                 self.validator.compute_public_key_fingerprint(public_key),
                 "SHA256:CLteXW6qwQSe3giT0w7QIrGk2bW0jbQUhx9Rycs1KD0",
@@ -117,11 +130,10 @@ class RemoteReadonlyIdentityTest(unittest.TestCase):
                 "wrapper_path": PROBE,
                 "public_key_path": public_key,
                 "authorized_keys_path": authorized_keys,
+                "wrapper_stat_path": wrapper_stat,
                 "batch_id": "remote-ro-identity-20260806T081014Z-v1",
                 "frozen_at": "2026-08-06T08:10:14Z",
                 "ssh_options": options,
-                "wrapper_owner_uid": 0,
-                "wrapper_mode": 0o755,
                 "authorized_key_count": 1,
                 "password_locked": True,
                 "admin_groups": False,
@@ -144,17 +156,52 @@ class RemoteReadonlyIdentityTest(unittest.TestCase):
             fake_sudo["sudo_noninteractive_allowed"] = True
             with self.assertRaises(ValueError):
                 self.validator.build_batch_metadata(fake_sudo, **kwargs)
+            bad_options = dict(kwargs)
+            bad_options["ssh_options"] = 'restrict,command="/tmp/other-wrapper.py"'
+            with self.assertRaises(ValueError):
+                self.validator.build_batch_metadata(response, **bad_options)
+            bad_owner = dict(kwargs)
+            bad_owner["wrapper_stat_path"] = Path(directory) / "bad-wrapper-stat.json"
+            bad_owner["wrapper_stat_path"].write_text(
+                json.dumps(
+                    {
+                        "owner_uid": 501,
+                        "owner_gid": 20,
+                        "mode": "0644",
+                        "regular_file": True,
+                        "content_sha256": self.validator.sha256_file(PROBE),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError):
+                self.validator.build_batch_metadata(response, **bad_owner)
 
     def test_批次目录拒绝覆盖(self):
         with tempfile.TemporaryDirectory() as directory:
             out = Path(directory) / "batch"
             payload = {"x": 1}
             self.validator.write_batch_append_only(
-                out, metadata=payload, response=payload, boundary_summary=payload
+                out,
+                metadata=payload,
+                response=payload,
+                boundary_summary=payload,
+                started_monotonic=time.monotonic(),
             )
+            with self.assertRaises(TypeError):
+                self.validator.write_batch_append_only(
+                    Path(directory) / "missing-start",
+                    metadata=payload,
+                    response=payload,
+                    boundary_summary=payload,
+                )
             with self.assertRaises(FileExistsError):
                 self.validator.write_batch_append_only(
-                    out, metadata=payload, response=payload, boundary_summary=payload
+                    out,
+                    metadata=payload,
+                    response=payload,
+                    boundary_summary=payload,
+                    started_monotonic=time.monotonic(),
                 )
             with self.assertRaises(TimeoutError):
                 self.validator.write_batch_append_only(

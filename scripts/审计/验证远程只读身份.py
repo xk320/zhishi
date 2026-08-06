@@ -9,6 +9,7 @@ import datetime as dt
 import hashlib
 import json
 import re
+import stat
 import time
 from pathlib import Path
 from typing import Any, Mapping
@@ -40,6 +41,7 @@ RESPONSE_KEYS = frozenset(
         "market_data_read_performed",
     }
 )
+FIXED_AUTHORIZED_OPTIONS = 'restrict,command="/usr/local/libexec/zhishi_ro_identity_probe.py"'
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 FINGERPRINT = re.compile(r"^SHA256:[A-Za-z0-9+/]+={0,2}$")
 SENSITIVE = re.compile(
@@ -82,6 +84,8 @@ def _fingerprint_from_key_blob(encoded_key: str) -> str:
 def authorized_key_facts(path: Path, *, expected_options: str) -> dict[str, Any]:
     """复算authorized_keys的唯一行、选项和公钥指纹。"""
 
+    if expected_options != FIXED_AUTHORIZED_OPTIONS:
+        raise ValueError("强制命令必须绑定固定wrapper")
     if path.is_symlink():
         raise ValueError("authorized_keys不得为符号链接")
     lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -97,6 +101,22 @@ def authorized_key_facts(path: Path, *, expected_options: str) -> dict[str, Any]
         "restrict": True,
         "固定命令": True,
     }
+
+
+def load_wrapper_stat_snapshot(path: Path, *, content_sha256: str) -> dict[str, Any]:
+    """读取root采集的脱敏wrapper stat快照并绑定内容指纹。"""
+
+    value = _load_object(path)
+    expected = {"owner_uid", "owner_gid", "mode", "regular_file", "content_sha256"}
+    if set(value) != expected:
+        raise ValueError("wrapper stat快照字段不完整")
+    if value["owner_uid"] != 0 or value["owner_gid"] != 0:
+        raise ValueError("wrapper stat快照不是root-owned")
+    if value["mode"] != "0755" or value["regular_file"] is not True:
+        raise ValueError("wrapper stat快照模式或普通文件标志不匹配")
+    if value["content_sha256"] != content_sha256:
+        raise ValueError("wrapper stat快照与wrapper内容指纹不一致")
+    return dict(value)
 
 
 def _load_object(path: Path) -> Mapping[str, Any]:
@@ -168,11 +188,10 @@ def build_batch_metadata(
     wrapper_path: Path,
     public_key_path: Path,
     authorized_keys_path: Path,
+    wrapper_stat_path: Path,
     batch_id: str,
     frozen_at: str,
     ssh_options: str,
-    wrapper_owner_uid: int,
-    wrapper_mode: int,
     authorized_key_count: int,
     password_locked: bool,
     admin_groups: bool,
@@ -181,6 +200,9 @@ def build_batch_metadata(
     memory_available_percent: float,
     disk_available_gib: float,
 ) -> dict[str, Any]:
+    wrapper_stat = wrapper_path.stat()
+    if not stat.S_ISREG(wrapper_stat.st_mode) or stat.S_IMODE(wrapper_stat.st_mode) != 0o755:
+        raise ValueError("本地wrapper副本必须是普通文件且模式为0755")
     wrapper_sha256 = sha256_file(wrapper_path)
     public_key_fingerprint = compute_public_key_fingerprint(public_key_path)
     ssh_options_fingerprint = hashlib.sha256(ssh_options.encode()).hexdigest()
@@ -202,8 +224,9 @@ def build_batch_metadata(
         raise ValueError("公钥指纹格式非法")
     if not SHA256.fullmatch(ssh_options_fingerprint):
         raise ValueError("SSH选项指纹格式非法")
-    if wrapper_owner_uid != 0 or wrapper_mode != 0o755:
-        raise ValueError("wrapper必须是root-owned 0755普通文件")
+    wrapper_stat = load_wrapper_stat_snapshot(
+        wrapper_stat_path, content_sha256=wrapper_sha256
+    )
     if authorized_key_count != authorized_facts["公钥数量"] or authorized_key_count != 1:
         raise ValueError("授权公钥必须且只能有一把")
     if password_locked is not True:
@@ -244,9 +267,10 @@ def build_batch_metadata(
         "数据库业务正文读取": False,
         "真实市场数据读取": False,
         "wrapper文件事实": {
-            "owner_uid": wrapper_owner_uid,
-            "mode": f"{wrapper_mode:04o}",
-            "普通文件": True,
+            "owner_uid": wrapper_stat["owner_uid"],
+            "owner_gid": wrapper_stat["owner_gid"],
+            "mode": wrapper_stat["mode"],
+            "普通文件": wrapper_stat["regular_file"],
         },
         "authorized_keys事实": {
             "公钥数量": authorized_facts["公钥数量"],
@@ -278,14 +302,16 @@ def write_batch_append_only(
     metadata: Mapping[str, Any],
     response: Mapping[str, Any],
     boundary_summary: Mapping[str, Any],
-    started_monotonic: float | None = None,
+    started_monotonic: float,
     max_batch_seconds: int = 600,
 ) -> None:
     """以新目录和独占创建写入批次，拒绝覆盖既有批次。"""
 
     if max_batch_seconds < 1 or max_batch_seconds > 600:
         raise ValueError("批次总超时必须为1至600秒")
-    if started_monotonic is not None and time.monotonic() - started_monotonic > max_batch_seconds:
+    if not isinstance(started_monotonic, (int, float)):
+        raise ValueError("必须提供批次开始单调时钟")
+    if time.monotonic() - started_monotonic > max_batch_seconds:
         raise TimeoutError("批次超过总超时硬门")
     if output_dir.exists():
         raise FileExistsError("批次目录已存在，禁止覆盖")
