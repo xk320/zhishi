@@ -161,6 +161,18 @@ class OrderBookMappingTests(unittest.TestCase):
             with self.assertRaises(self.validator.ContractError):
                 self.validator.validate_artifact_directory(target)
 
+        valid_v5 = ROOT / "artifacts/审计/订单簿共享对象映射/批次-20260806T154636Z-v5"
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / valid_v5.name
+            shutil.copytree(valid_v5, target)
+            metadata_path = target / "批次元数据.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["授权输入指纹"]["临时只读密钥"] = "SHA256:fake"
+            metadata["临时凭据撤销"]["密钥指纹"] = "SHA256:fake"
+            metadata_path.write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaises(self.validator.ContractError):
+                self.validator.validate_artifact_directory(target)
+
     def test_批次篡改和敏感字段失败安全(self):
         source = ROOT / "artifacts/审计/订单簿共享对象映射/批次-20260806T143417Z-v2"
         with tempfile.TemporaryDirectory() as directory:

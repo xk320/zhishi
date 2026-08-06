@@ -81,6 +81,7 @@ V2_BATCH_NATURE = "历史真实采集；固定入口/规则版本绑定采集时
 V3_COLLECTION_RULE_FINGERPRINTS = {"7115ba6587e06acc4cfdae9bdb5e7738ddfc498eb86762b3309f9417311df9c7", "9996c66e7178b0eeffc642fa45baf9215fc7a8253c24de6359dca742be94196c", "855685dc4197925aa646cd4cdef6bc4f11335c576ecc92865e11b9a7ff9a714f"}
 V3_COLLECTION_WRAPPER_FINGERPRINTS = {"140edfc909c97f7b7f8a0553d5cf0ee518321e6bf1ea89824787033e087b972a"}
 HISTORICAL_REPLAY_VALIDATOR_FINGERPRINTS = {"6b015fc9261fff2be35d4adc3c431e712ec835f2d3568f054feaea95ee88e093", "855685dc4197925aa646cd4cdef6bc4f11335c576ecc92865e11b9a7ff9a714f"}
+SSH_SHA256_FINGERPRINT = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
 V2_REVOCATION = {
     "状态": "已撤销",
     "密钥指纹": V2_TEMP_KEY_FINGERPRINT,
@@ -343,7 +344,7 @@ def _validate_v3_artifact(metadata: dict[str, Any], payload: dict[str, Any], sum
     if not isinstance(wrapper, dict) or wrapper.get("版本") != REMOTE_WRAPPER_VERSION or wrapper.get("文件指纹") not in V3_COLLECTION_WRAPPER_FINGERPRINTS | {expected_wrapper} or wrapper.get("本地源指纹") != wrapper.get("文件指纹"):
         raise ContractError("artifact-wrapper")
     auth = metadata.get("授权输入指纹")
-    if not isinstance(auth, dict) or auth.get("数据库会话") != EXPECTED_SESSION_FINGERPRINT or auth.get("数据库权限快照") != EXPECTED_GRANTS_FINGERPRINT or not isinstance(auth.get("临时只读密钥"), str) or not auth["临时只读密钥"].startswith("SHA256:"):
+    if not isinstance(auth, dict) or auth.get("数据库会话") != EXPECTED_SESSION_FINGERPRINT or auth.get("数据库权限快照") != EXPECTED_GRANTS_FINGERPRINT or not isinstance(auth.get("临时只读密钥"), str) or SSH_SHA256_FINGERPRINT.fullmatch(auth["临时只读密钥"]) is None:
         raise ContractError("artifact-authorization")
     if metadata.get("前序任务输入") != V2_PREVIOUS_INPUTS or metadata.get("未登记候选") != SOURCE_ONLY_CANDIDATES:
         raise ContractError("artifact-input-binding")
