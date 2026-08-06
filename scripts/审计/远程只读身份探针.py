@@ -15,6 +15,8 @@ from pathlib import Path
 import grp
 import resource
 import signal
+import shutil
+import subprocess
 import sys
 from typing import Any, Mapping
 
@@ -36,6 +38,7 @@ RESPONSE_KEYS = frozenset(
         "gid",
         "uid_nonzero",
         "admin_group_membership",
+        "sudo_noninteractive_allowed",
         "supplementary_group_count",
         "root_home_readable",
         "root_home_openable",
@@ -94,6 +97,7 @@ def _base_response(
         "gid": None,
         "uid_nonzero": False,
         "admin_group_membership": False,
+        "sudo_noninteractive_allowed": False,
         "supplementary_group_count": None,
         "root_home_readable": None,
         "root_home_openable": None,
@@ -168,12 +172,28 @@ def _probe_with_environment(raw: str) -> dict[str, Any]:
                 admin_membership = True
         except KeyError:
             continue
+    sudo_allowed = False
+    sudo_path = shutil.which("sudo")
+    if sudo_path:
+        try:
+            sudo_result = subprocess.run(
+                [sudo_path, "-n", "-l"],
+                input="",
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            sudo_allowed = sudo_result.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            sudo_allowed = False
     response.update(
         {
             "uid": uid,
             "gid": gid,
             "uid_nonzero": uid != 0,
             "admin_group_membership": admin_membership,
+            "sudo_noninteractive_allowed": sudo_allowed,
             # 某些发行版会把主组同时放入getgroups()；只计主组之外的附加组。
             "supplementary_group_count": len({group for group in os.getgroups() if group != gid}),
             # 只查询目录权限，不读取目录内容；root目录由root拥有且默认不可读写。

@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 
@@ -69,6 +70,7 @@ class RemoteReadonlyIdentityTest(unittest.TestCase):
                 "gid": 1001,
                 "uid_nonzero": True,
                 "admin_group_membership": False,
+                "sudo_noninteractive_allowed": False,
                 "supplementary_group_count": 0,
                 "root_home_readable": False,
                 "root_home_openable": False,
@@ -90,6 +92,7 @@ class RemoteReadonlyIdentityTest(unittest.TestCase):
                 "gid": 1001,
                 "uid_nonzero": True,
                 "admin_group_membership": False,
+                "sudo_noninteractive_allowed": False,
                 "supplementary_group_count": 0,
                 "root_home_readable": False,
                 "root_home_openable": False,
@@ -98,39 +101,49 @@ class RemoteReadonlyIdentityTest(unittest.TestCase):
                 "original_command_present": False,
             }
         )
-        kwargs = {
-            "wrapper_sha256": self.validator.sha256_file(PROBE),
-            "batch_id": "remote-ro-identity-20260806T081014Z-v1",
-            "frozen_at": "2026-08-06T08:10:14Z",
-            "public_key_fingerprint": "SHA256:oq45bCRm3+qAuQr/CVmB6P27cq2u1Z+3f0vrzi8GvyI",
-            "ssh_options_fingerprint": "a" * 64,
-            "wrapper_owner_uid": 0,
-            "wrapper_mode": 0o755,
-            "authorized_key_count": 1,
-            "password_locked": True,
-            "admin_groups": False,
-            "supplementary_group_count": 0,
-            "probe_exit_code": 0,
-            "memory_available_percent": 72,
-            "disk_available_gib": 159.4,
-        }
-        metadata = self.validator.build_batch_metadata(response, **kwargs)
-        self.assertEqual(metadata["状态"], "通过")
-        fake = dict(response)
-        fake["uid"] = 0
-        with self.assertRaises(ValueError):
-            self.validator.build_batch_metadata(fake, **kwargs)
-        fake_admin = dict(response)
-        fake_admin["admin_group_membership"] = True
-        with self.assertRaises(ValueError):
-            self.validator.build_batch_metadata(fake_admin, **kwargs)
         with tempfile.TemporaryDirectory() as directory:
             public_key = Path(directory) / "sample.pub"
             public_key.write_text("ssh-ed25519 AAECAwQ= sample\n", encoding="utf-8")
+            authorized_keys = Path(directory) / "authorized_keys"
+            options = 'restrict,command="/usr/local/libexec/zhishi_ro_identity_probe.py"'
+            authorized_keys.write_text(
+                f"{options} ssh-ed25519 AAECAwQ= sample\n", encoding="utf-8"
+            )
             self.assertEqual(
-                self.validator.public_key_fingerprint(public_key),
+                self.validator.compute_public_key_fingerprint(public_key),
                 "SHA256:CLteXW6qwQSe3giT0w7QIrGk2bW0jbQUhx9Rycs1KD0",
             )
+            kwargs = {
+                "wrapper_path": PROBE,
+                "public_key_path": public_key,
+                "authorized_keys_path": authorized_keys,
+                "batch_id": "remote-ro-identity-20260806T081014Z-v1",
+                "frozen_at": "2026-08-06T08:10:14Z",
+                "ssh_options": options,
+                "wrapper_owner_uid": 0,
+                "wrapper_mode": 0o755,
+                "authorized_key_count": 1,
+                "password_locked": True,
+                "admin_groups": False,
+                "supplementary_group_count": 0,
+                "probe_exit_code": 0,
+                "memory_available_percent": 72,
+                "disk_available_gib": 159.4,
+            }
+            metadata = self.validator.build_batch_metadata(response, **kwargs)
+            self.assertEqual(metadata["状态"], "通过")
+            fake = dict(response)
+            fake["uid"] = 0
+            with self.assertRaises(ValueError):
+                self.validator.build_batch_metadata(fake, **kwargs)
+            fake_admin = dict(response)
+            fake_admin["admin_group_membership"] = True
+            with self.assertRaises(ValueError):
+                self.validator.build_batch_metadata(fake_admin, **kwargs)
+            fake_sudo = dict(response)
+            fake_sudo["sudo_noninteractive_allowed"] = True
+            with self.assertRaises(ValueError):
+                self.validator.build_batch_metadata(fake_sudo, **kwargs)
 
     def test_批次目录拒绝覆盖(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -142,6 +155,14 @@ class RemoteReadonlyIdentityTest(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 self.validator.write_batch_append_only(
                     out, metadata=payload, response=payload, boundary_summary=payload
+                )
+            with self.assertRaises(TimeoutError):
+                self.validator.write_batch_append_only(
+                    Path(directory) / "expired",
+                    metadata=payload,
+                    response=payload,
+                    boundary_summary=payload,
+                    started_monotonic=time.monotonic() - 601,
                 )
 
     def test_任意原始命令被拒绝(self):

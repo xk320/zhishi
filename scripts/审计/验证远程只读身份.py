@@ -9,6 +9,7 @@ import datetime as dt
 import hashlib
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -27,6 +28,7 @@ RESPONSE_KEYS = frozenset(
         "gid",
         "uid_nonzero",
         "admin_group_membership",
+        "sudo_noninteractive_allowed",
         "supplementary_group_count",
         "root_home_readable",
         "root_home_openable",
@@ -54,7 +56,7 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def public_key_fingerprint(path: Path) -> str:
+def compute_public_key_fingerprint(path: Path) -> str:
     """按OpenSSH公钥正文复算SHA256指纹。"""
 
     parts = path.read_text(encoding="utf-8").strip().split()
@@ -66,6 +68,35 @@ def public_key_fingerprint(path: Path) -> str:
         raise ValueError("公钥正文不是合法Base64") from error
     encoded = base64.b64encode(hashlib.sha256(key_blob).digest()).decode().rstrip("=")
     return f"SHA256:{encoded}"
+
+
+def _fingerprint_from_key_blob(encoded_key: str) -> str:
+    try:
+        key_blob = base64.b64decode(encoded_key, validate=True)
+    except (ValueError, base64.binascii.Error) as error:
+        raise ValueError("authorized_keys公钥正文不是合法Base64") from error
+    encoded = base64.b64encode(hashlib.sha256(key_blob).digest()).decode().rstrip("=")
+    return f"SHA256:{encoded}"
+
+
+def authorized_key_facts(path: Path, *, expected_options: str) -> dict[str, Any]:
+    """复算authorized_keys的唯一行、选项和公钥指纹。"""
+
+    if path.is_symlink():
+        raise ValueError("authorized_keys不得为符号链接")
+    lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if len(lines) != 1:
+        raise ValueError("authorized_keys必须且只能有一行")
+    parts = lines[0].split()
+    if len(parts) < 3 or parts[0] != expected_options or parts[1] != "ssh-ed25519":
+        raise ValueError("authorized_keys选项或算法不匹配")
+    return {
+        "公钥数量": 1,
+        "公钥指纹": _fingerprint_from_key_blob(parts[2]),
+        "选项指纹": hashlib.sha256(parts[0].encode()).hexdigest(),
+        "restrict": True,
+        "固定命令": True,
+    }
 
 
 def _load_object(path: Path) -> Mapping[str, Any]:
@@ -101,6 +132,8 @@ def validate_identity_response(
         errors.append("UID非零断言未通过")
     if response.get("admin_group_membership") is not False:
         errors.append("存在管理员组权限")
+    if response.get("sudo_noninteractive_allowed") is not False:
+        errors.append("sudo非交互能力未被拒绝")
     if response.get("supplementary_group_count") != 0:
         errors.append("存在补充组权限")
     for key in (
@@ -132,11 +165,12 @@ def validate_rejection(response: Mapping[str, Any], *, reason_code: str) -> tupl
 def build_batch_metadata(
     response: Mapping[str, Any],
     *,
-    wrapper_sha256: str,
+    wrapper_path: Path,
+    public_key_path: Path,
+    authorized_keys_path: Path,
     batch_id: str,
     frozen_at: str,
-    public_key_fingerprint: str,
-    ssh_options_fingerprint: str,
+    ssh_options: str,
     wrapper_owner_uid: int,
     wrapper_mode: int,
     authorized_key_count: int,
@@ -147,6 +181,16 @@ def build_batch_metadata(
     memory_available_percent: float,
     disk_available_gib: float,
 ) -> dict[str, Any]:
+    wrapper_sha256 = sha256_file(wrapper_path)
+    public_key_fingerprint = compute_public_key_fingerprint(public_key_path)
+    ssh_options_fingerprint = hashlib.sha256(ssh_options.encode()).hexdigest()
+    if not wrapper_path.is_file() or wrapper_path.is_symlink():
+        raise ValueError("wrapper必须是普通文件")
+    authorized_facts = authorized_key_facts(
+        authorized_keys_path, expected_options=ssh_options
+    )
+    if authorized_facts["公钥指纹"] != public_key_fingerprint:
+        raise ValueError("authorized_keys公钥与原始公钥不一致")
     response_errors = validate_identity_response(
         response, wrapper_sha256=wrapper_sha256
     )
@@ -160,7 +204,7 @@ def build_batch_metadata(
         raise ValueError("SSH选项指纹格式非法")
     if wrapper_owner_uid != 0 or wrapper_mode != 0o755:
         raise ValueError("wrapper必须是root-owned 0755普通文件")
-    if authorized_key_count != 1:
+    if authorized_key_count != authorized_facts["公钥数量"] or authorized_key_count != 1:
         raise ValueError("授权公钥必须且只能有一把")
     if password_locked is not True:
         raise ValueError("密码必须锁定")
@@ -205,15 +249,16 @@ def build_batch_metadata(
             "普通文件": True,
         },
         "authorized_keys事实": {
-            "公钥数量": authorized_key_count,
+            "公钥数量": authorized_facts["公钥数量"],
             "公钥指纹": public_key_fingerprint,
-            "选项指纹": ssh_options_fingerprint,
-            "restrict": True,
-            "固定命令": True,
+            "选项指纹": authorized_facts["选项指纹"],
+            "restrict": authorized_facts["restrict"],
+            "固定命令": authorized_facts["固定命令"],
         },
         "账户权限验证": {
             "UID非零": response.get("uid_nonzero"),
             "管理员组": admin_groups,
+            "sudo非交互能力": response.get("sudo_noninteractive_allowed"),
             "密码登录": "锁定" if password_locked else "未锁定",
             "补充组数量": supplementary_group_count,
             "强制命令": "root-owned固定wrapper",
@@ -233,9 +278,15 @@ def write_batch_append_only(
     metadata: Mapping[str, Any],
     response: Mapping[str, Any],
     boundary_summary: Mapping[str, Any],
+    started_monotonic: float | None = None,
+    max_batch_seconds: int = 600,
 ) -> None:
     """以新目录和独占创建写入批次，拒绝覆盖既有批次。"""
 
+    if max_batch_seconds < 1 or max_batch_seconds > 600:
+        raise ValueError("批次总超时必须为1至600秒")
+    if started_monotonic is not None and time.monotonic() - started_monotonic > max_batch_seconds:
+        raise TimeoutError("批次超过总超时硬门")
     if output_dir.exists():
         raise FileExistsError("批次目录已存在，禁止覆盖")
     output_dir.mkdir(parents=True)
@@ -273,7 +324,7 @@ def main() -> int:
                 errors.append("公钥指纹格式非法")
             elif args.public_key is None:
                 errors.append("公钥指纹缺少原始公钥复算路径")
-            elif public_key_fingerprint(args.public_key) != args.expected_key_fingerprint:
+            elif compute_public_key_fingerprint(args.public_key) != args.expected_key_fingerprint:
                 errors.append("公钥指纹与原始公钥不一致")
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
         errors = [str(error)]
