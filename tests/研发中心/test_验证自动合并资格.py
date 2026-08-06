@@ -1071,6 +1071,110 @@ class AutoMergeEligibilityTests(unittest.TestCase):
     def evaluate_blocked_repair(self, **overrides):
         return self.policy.evaluate_eligibility(**self.blocked_repair_inputs(**overrides))
 
+    def contract_conflict_repair_inputs(self, *, mutate_target: str = ""):
+        executor_title = "执行任务-000068合同冲突修复"
+        executor_base = task_text(
+            status="待执行",
+            dependency=None,
+            title=executor_title,
+            pr_number="168",
+            branch="codex/task-000068-contract-conflict-v1",
+            extra_contract=(
+                "- 唯一前序依赖：任务-000067；\n"
+                "- 当前阻塞原因：无；任务-000067已完成。\n"
+                "- 解除条件：已满足。\n"
+            ),
+        )
+        executor_head = task_text(
+            status="待评审",
+            dependency=None,
+            title=executor_title,
+            pr_number="168",
+            branch="codex/task-000068-contract-conflict-v1",
+            extra_contract=(
+                "- 唯一前序依赖：任务-000067；\n"
+                "- 当前阻塞原因：无；任务-000067已完成。\n"
+                "- 解除条件：已满足。\n"
+            ),
+        )
+        target_base = (REPO_ROOT / "docs/研发中心/任务/任务-000066.md").read_text(
+            encoding="utf-8"
+        )
+        old_completion = (
+            "本登记PR合并后任务保持`阻塞`，不标记已完成。只有解除条件有证据并经独立状态闭环PR恢复为待执行后，\n"
+            "才能认领执行；正文审计交付须另行PR、双只读评审、main可信复验和合并后状态闭环。"
+        )
+        new_completion = (
+            "正文审计交付PR已合并并完成双只读评审、主执行器验证和main可信复验；随后通过独立状态闭环PR标记本任务为`已完成`。\n"
+            "审计结果中的无法判定、失败和未成熟必须继续保留，不代表阶段1数据门槛或阶段2放行。"
+        )
+        target_head = target_base.replace(
+            "- 实现提交SHA：`eb632a33d3d0c08893dfe4bcee1f4dc549e03f4e`\n",
+            "- 实现提交SHA：`eb632a33d3d0c08893dfe4bcee1f4dc549e03f4e`\n"
+            "- 交付提交SHA：`c5a5f838f3c09b352150508388d15c3d7935818c`\n",
+            1,
+        ).replace(old_completion, new_completion, 1)
+        if mutate_target == "status":
+            target_head = target_head.replace("- 状态：待评审", "- 状态：已完成", 1)
+        if mutate_target == "extra":
+            target_head = target_head.replace("- 类型：数据审计", "- 类型：治理", 1)
+        title = executor_title
+        changed_paths = [
+            "docs/研发中心/任务/任务-000068.md",
+            "docs/研发中心/任务/任务-000066.md",
+            "docs/研发中心/看板.md",
+        ]
+        return {
+            "repo_root": REPO_ROOT,
+            "base_ref": "HEAD",
+            "changed_paths": changed_paths,
+            "pr_body": (
+                "## 关联任务\n\n- 任务-000068\n\n"
+                "## 变更类型\n\n- 任务合同冲突修复\n"
+            ),
+            "base_tasks": {"000068": executor_base, "000066": target_base},
+            "head_tasks": {"000068": executor_head, "000066": target_head},
+            "base_branch": "main",
+            "repository": "xk320/zhishi",
+            "head_repository": "xk320/zhishi",
+            "base_board": delivery_board(
+                head=False,
+                task_id="000068",
+                title=title,
+                dependency="000067",
+                pr_number="168",
+            ),
+            "head_board": delivery_board(
+                head=True,
+                task_id="000068",
+                title=title,
+                dependency="000067",
+                pr_number="168",
+                branch="codex/task-000068-contract-conflict-v1",
+            ),
+            "path_facts": [self.path_fact(path) for path in changed_paths],
+        }
+
+    def test_任务合同冲突修复两步入口正向与越权失败(self):
+        inputs = self.contract_conflict_repair_inputs()
+        with mock.patch.object(
+            self.policy,
+            "_derive_contract_repair_delivery_sha",
+            return_value="c5a5f838f3c09b352150508388d15c3d7935818c",
+        ):
+            result = self.policy.evaluate_eligibility(**inputs)
+            self.assertTrue(result.eligible, result.reasons)
+
+            migrated = self.contract_conflict_repair_inputs(mutate_target="status")
+            result = self.policy.evaluate_eligibility(**migrated)
+            self.assertFalse(result.eligible)
+            self.assertIn("目标任务-000066基线和头部必须保持待评审", result.reasons)
+
+            extra = self.contract_conflict_repair_inputs(mutate_target="extra")
+            result = self.policy.evaluate_eligibility(**extra)
+            self.assertFalse(result.eligible)
+            self.assertIn("任务-000066合同修复夹带两项字段以外的改写", result.reasons)
+
     def test_阻塞任务合同修复只允许单字段目标映射(self):
         result = self.evaluate_blocked_repair()
         self.assertTrue(result.eligible, result.reasons)
