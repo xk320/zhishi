@@ -164,6 +164,14 @@ class OrderBookMappingTests(unittest.TestCase):
             with self.assertRaises(self.validator.ContractError):
                 self.validator.validate_artifact_directory(target.parent / "clean")
 
+            shutil.copytree(source, target.parent / "revocation", dirs_exist_ok=True)
+            metadata_path = target.parent / "revocation" / "批次元数据.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["临时凭据撤销"]["远端入口状态"] = "存在"
+            metadata_path.write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaises(self.validator.ContractError):
+                self.validator.validate_artifact_directory(target.parent / "revocation")
+
     def test_远端异常行失败安全且SSH禁用密码和转发(self):
         entry = self.entry
         original = entry._mysql
@@ -184,6 +192,10 @@ class OrderBookMappingTests(unittest.TestCase):
         self.assertIn("PasswordAuthentication=no", source)
         self.assertIn("ForwardAgent=no", source)
         self.assertIn("ClearAllForwardings=yes", source)
+
+    def test_批次对象非字典失败安全(self):
+        with self.assertRaises(self.validator.ContractError):
+            self.validator.validate_states([None] * 16)
 
 
 if __name__ == "__main__":

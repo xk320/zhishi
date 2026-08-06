@@ -1,8 +1,10 @@
 {
   "临时凭据撤销": {
     "保留身份": "zhishi-log-ro 计数保持1",
+    "复核事实": "远端root只读复核：v2-key-count=0、log-key-count=1；远端固定入口与对象清单不存在；本地临时密钥不存在",
     "密钥指纹": "SHA256:MqNDDq6W87QmhU84qMhLVLCwK6EcgJNHzcALcgipkJo",
     "撤销动作": "远端 authorized_keys 删除任务-000071-schema-audit-v2；删除远端固定入口与对象清单；删除本地临时私钥及公钥",
+    "撤销时间": "2026-08-06T23:02:25+08:00",
     "本地密钥状态": "不存在",
     "状态": "已撤销",
     "远端入口状态": "不存在"
@@ -32,6 +34,7 @@
   "执行分支": "codex/task-000071-orderbook-shared-schema-v1",
   "执行方案": "复用固定只读入口，读取 information_schema.COLUMNS/STATISTICS 并绑定授权会话与权限快照",
   "批次": "批次-20260806T143417Z-v2",
+  "批次性质": "历史真实采集；固定入口/规则版本绑定采集时指纹；当前验证器仅回放不可变脱敏结果，不宣称重新采集",
   "批次版本": "v2",
   "授权输入指纹": {
     "临时只读密钥": "SHA256:MqNDDq6W87QmhU84qMhLVLCwK6EcgJNHzcALcgipkJo",

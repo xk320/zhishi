@@ -77,6 +77,17 @@ V2_BATCH_ID = "批次-20260806T143417Z-v2"
 V2_BATCH_RULE_FINGERPRINT = "9df446bd0dab8405b729829bc6b2657a1f743c7c194115847fe38da432f29799"
 V2_TEMP_KEY_FINGERPRINT = "SHA256:MqNDDq6W87QmhU84qMhLVLCwK6EcgJNHzcALcgipkJo"
 V2_PARENT_BATCH = "批次-20260806T143417Z-v1"
+V2_BATCH_NATURE = "历史真实采集；固定入口/规则版本绑定采集时指纹；当前验证器仅回放不可变脱敏结果，不宣称重新采集"
+V2_REVOCATION = {
+    "状态": "已撤销",
+    "密钥指纹": V2_TEMP_KEY_FINGERPRINT,
+    "撤销动作": "远端 authorized_keys 删除任务-000071-schema-audit-v2；删除远端固定入口与对象清单；删除本地临时私钥及公钥",
+    "保留身份": "zhishi-log-ro 计数保持1",
+    "远端入口状态": "不存在",
+    "本地密钥状态": "不存在",
+    "撤销时间": "2026-08-06T23:02:25+08:00",
+    "复核事实": "远端root只读复核：v2-key-count=0、log-key-count=1；远端固定入口与对象清单不存在；本地临时密钥不存在",
+}
 V2_PREVIOUS_INPUTS = {
     "任务": "任务-000070",
     "批次": "批次-20260806T131956Z-v3",
@@ -177,6 +188,8 @@ def validate_states(results: Iterable[dict[str, Any]], expected_count: int = 16)
     rows = list(results)
     if len(rows) != expected_count:
         raise ContractError("object-count")
+    if any(not isinstance(row, dict) for row in rows):
+        raise ContractError("object-row-type")
     expected_ids = [item["资产编号"] for item in TARGETS]
     actual_ids = [row.get("资产编号") for row in rows]
     if actual_ids != expected_ids:
@@ -271,7 +284,9 @@ def validate_artifact_directory(path: Path) -> dict[str, int]:
         raise ContractError("artifact-parent")
     if metadata.get("未登记候选") != SOURCE_ONLY_CANDIDATES:
         raise ContractError("artifact-exclusion")
-    if metadata.get("临时凭据撤销", {}).get("状态") != "已撤销":
+    if metadata.get("批次性质") != V2_BATCH_NATURE:
+        raise ContractError("artifact-batch-nature")
+    if metadata.get("临时凭据撤销") != V2_REVOCATION:
         raise ContractError("artifact-revocation")
     if metadata.get("安全声明") != {"仅结构元数据": True, "原始数据修改": False, "数据库写入": False, "远端临时写入": False, "交易结论": False, "未来数据使用": False, "凭据落盘": False}:
         raise ContractError("artifact-security")
@@ -281,7 +296,7 @@ def validate_artifact_directory(path: Path) -> dict[str, int]:
     if set(payload) != {"对象结果"} or not isinstance(rows, list):
         raise ContractError("artifact-rows")
     expected_row_fields = {"资产编号", "表", "表身份指纹", "采集状态", "列数", "列指纹", "索引数", "索引指纹", "状态", "原因码", "读取字节数", "耗时毫秒"}
-    if any(set(row) != expected_row_fields for row in rows if isinstance(row, dict)):
+    if any(not isinstance(row, dict) or set(row) != expected_row_fields for row in rows):
         raise ContractError("artifact-row-fields")
     summary = validate_states(rows)
     expected_summary = summary_file.get("状态计数")
