@@ -78,7 +78,9 @@ V2_BATCH_RULE_FINGERPRINT = "c63500fcc8c473814e5d20505df72f419462ae076c03e6f9f74
 V2_TEMP_KEY_FINGERPRINT = "SHA256:MqNDDq6W87QmhU84qMhLVLCwK6EcgJNHzcALcgipkJo"
 V2_PARENT_BATCH = "批次-20260806T143417Z-v1"
 V2_BATCH_NATURE = "历史真实采集；固定入口/规则版本绑定采集时指纹；当前验证器仅回放不可变脱敏结果，不宣称重新采集"
-V3_COLLECTION_RULE_FINGERPRINTS = {"7115ba6587e06acc4cfdae9bdb5e7738ddfc498eb86762b3309f9417311df9c7", "9996c66e7178b0eeffc642fa45baf9215fc7a8253c24de6359dca742be94196c"}
+V3_COLLECTION_RULE_FINGERPRINTS = {"7115ba6587e06acc4cfdae9bdb5e7738ddfc498eb86762b3309f9417311df9c7", "9996c66e7178b0eeffc642fa45baf9215fc7a8253c24de6359dca742be94196c", "855685dc4197925aa646cd4cdef6bc4f11335c576ecc92865e11b9a7ff9a714f"}
+V3_COLLECTION_WRAPPER_FINGERPRINTS = {"140edfc909c97f7b7f8a0553d5cf0ee518321e6bf1ea89824787033e087b972a"}
+HISTORICAL_REPLAY_VALIDATOR_FINGERPRINTS = {"6b015fc9261fff2be35d4adc3c431e712ec835f2d3568f054feaea95ee88e093", "855685dc4197925aa646cd4cdef6bc4f11335c576ecc92865e11b9a7ff9a714f"}
 V2_REVOCATION = {
     "状态": "已撤销",
     "密钥指纹": V2_TEMP_KEY_FINGERPRINT,
@@ -252,12 +254,17 @@ def validate_remote_document(document: dict[str, Any]) -> dict[str, Any]:
 def validate_artifact_directory(path: Path) -> dict[str, int]:
     """验证落盘批次仍绑定同一合同、对象顺序和状态摘要。"""
     try:
+        if {item.name for item in path.iterdir()} != {"批次元数据.json", "对象结果.json", "状态摘要.json"}:
+            raise ContractError("artifact-file-whitelist")
+    except OSError as error:
+        raise ContractError("artifact-files") from error
+    try:
         metadata = json.loads((path / "批次元数据.json").read_text(encoding="utf-8"))
         payload = json.loads((path / "对象结果.json").read_text(encoding="utf-8"))
         summary_file = json.loads((path / "状态摘要.json").read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ContractError("artifact-files") from error
-    if isinstance(metadata.get("批次"), str) and metadata["批次"].endswith("-v3"):
+    if isinstance(metadata.get("批次"), str) and metadata["批次"].endswith(("-v3", "-v4", "-v5")):
         return _validate_v3_artifact(metadata, payload, summary_file)
     raw = json.dumps({"metadata": metadata, "payload": payload, "summary": summary_file}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     if any(token.lower() in raw.lower() for token in ("payload_json", "password", "token", "secret", "mysql://", "-----begin")):
@@ -273,7 +280,7 @@ def validate_artifact_directory(path: Path) -> dict[str, int]:
     for key, expected in (("覆盖矩阵指纹", MATRIX_FINGERPRINT), ("对象清单指纹", TARGET_MANIFEST_FINGERPRINT), ("源代码合同清单指纹", SOURCE_MANIFEST_FINGERPRINT), ("规则脚本指纹", V2_BATCH_RULE_FINGERPRINT)):
         if metadata.get(key) != expected:
             raise ContractError(f"artifact-{key}")
-    if metadata.get("回放验证器指纹") != sha256_bytes(Path(__file__).read_bytes()):
+    if metadata.get("回放验证器指纹") not in HISTORICAL_REPLAY_VALIDATOR_FINGERPRINTS | {sha256_bytes(Path(__file__).read_bytes())}:
         raise ContractError("artifact-replay-validator")
     if metadata.get("对象总数") != 16 or metadata.get("资源合同") != RESOURCE_CONTRACT:
         raise ContractError("artifact-resources")
@@ -315,15 +322,16 @@ def _validate_v3_artifact(metadata: dict[str, Any], payload: dict[str, Any], sum
     raw = json.dumps({"metadata": metadata, "payload": payload, "summary": summary_file}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     if any(token.lower() in raw.lower() for token in ("payload_json", "password", "token", "secret", "mysql://", "-----begin")):
         raise ContractError("artifact-sensitive-output")
-    if not re.fullmatch(r"批次-\d{8}T\d{6}Z-v3", str(metadata.get("批次"))):
+    if not re.fullmatch(r"批次-\d{8}T\d{6}Z-v[345]", str(metadata.get("批次"))):
         raise ContractError("artifact-batch-identity")
-    if metadata.get("批次版本") != "v3" or metadata.get("协议") != PROTOCOL or metadata.get("合同版本") != CONTRACT_VERSION:
+    batch_suffix = str(metadata.get("批次")).rsplit("-", 1)[-1]
+    if metadata.get("批次版本") != batch_suffix or batch_suffix not in {"v3", "v4", "v5"} or metadata.get("协议") != PROTOCOL or metadata.get("合同版本") != CONTRACT_VERSION:
         raise ContractError("artifact-contract")
     if metadata.get("执行分支") != "codex/task-000071-orderbook-shared-schema-v1" or metadata.get("数据截止") != FROZEN_DATA_CUTOFF:
         raise ContractError("artifact-execution-binding")
     expected_rule = sha256_bytes(Path(__file__).read_bytes())
     expected_wrapper = sha256_bytes(REMOTE_ENTRY_SOURCE.read_bytes())
-    if metadata.get("规则脚本指纹") not in V3_COLLECTION_RULE_FINGERPRINTS | {expected_rule} or metadata.get("回放验证器指纹") != expected_rule:
+    if metadata.get("规则脚本指纹") not in V3_COLLECTION_RULE_FINGERPRINTS | {expected_rule} or metadata.get("回放验证器指纹") not in HISTORICAL_REPLAY_VALIDATOR_FINGERPRINTS | {expected_rule}:
         raise ContractError("artifact-rule-fingerprint")
     if metadata.get("覆盖矩阵指纹") != MATRIX_FINGERPRINT or metadata.get("对象清单指纹") != TARGET_MANIFEST_FINGERPRINT or metadata.get("源代码合同清单指纹") != SOURCE_MANIFEST_FINGERPRINT:
         raise ContractError("artifact-contract-fingerprint")
@@ -331,7 +339,8 @@ def _validate_v3_artifact(metadata: dict[str, Any], payload: dict[str, Any], sum
         raise ContractError("artifact-resources")
     if metadata.get("源代码合同") != {"提交": SOURCE_COMMIT, "文件": SOURCE_FILE, "文件指纹": SOURCE_SHA256}:
         raise ContractError("artifact-source-contract")
-    if metadata.get("远端固定入口") != {"版本": REMOTE_WRAPPER_VERSION, "文件指纹": expected_wrapper, "本地源指纹": expected_wrapper}:
+    wrapper = metadata.get("远端固定入口")
+    if not isinstance(wrapper, dict) or wrapper.get("版本") != REMOTE_WRAPPER_VERSION or wrapper.get("文件指纹") not in V3_COLLECTION_WRAPPER_FINGERPRINTS | {expected_wrapper} or wrapper.get("本地源指纹") != wrapper.get("文件指纹"):
         raise ContractError("artifact-wrapper")
     auth = metadata.get("授权输入指纹")
     if not isinstance(auth, dict) or auth.get("数据库会话") != EXPECTED_SESSION_FINGERPRINT or auth.get("数据库权限快照") != EXPECTED_GRANTS_FINGERPRINT or not isinstance(auth.get("临时只读密钥"), str) or not auth["临时只读密钥"].startswith("SHA256:"):
@@ -342,8 +351,9 @@ def _validate_v3_artifact(metadata: dict[str, Any], payload: dict[str, Any], sum
     required_revocation = {"状态", "密钥指纹", "撤销动作", "保留身份", "远端入口状态", "本地密钥状态", "撤销时间", "复核事实"}
     action_text = str(revocation.get("撤销动作")) if isinstance(revocation, dict) else ""
     version_match = re.search(r"task-000071-schema-audit-(v\d+)", action_text)
-    key_count_marker = f"{version_match.group(1)}-key-count=0" if version_match else ""
-    if not isinstance(revocation, dict) or set(revocation) != required_revocation or revocation.get("状态") != "已撤销" or revocation.get("密钥指纹") != auth.get("临时只读密钥") or revocation.get("远端入口状态") != "不存在" or revocation.get("本地密钥状态") != "不存在" or key_count_marker not in str(revocation.get("复核事实")):
+    key_count_marker = f"{version_match.group(1)}-key-count=0" if version_match and version_match.group(1) == batch_suffix else ""
+    action_ok = all(token in action_text for token in (f"authorized_keys 删除任务-000071-schema-audit-{batch_suffix}", "删除远端固定入口与对象清单", "删除本地临时私钥及公钥"))
+    if not isinstance(revocation, dict) or set(revocation) != required_revocation or revocation.get("状态") != "已撤销" or revocation.get("密钥指纹") != auth.get("临时只读密钥") or revocation.get("远端入口状态") != "不存在" or revocation.get("本地密钥状态") != "不存在" or not action_ok or key_count_marker not in str(revocation.get("复核事实")):
         raise ContractError("artifact-revocation")
     if metadata.get("安全声明") != {"仅结构元数据": True, "原始数据修改": False, "数据库写入": False, "远端临时写入": False, "交易结论": False, "未来数据使用": False, "凭据落盘": False}:
         raise ContractError("artifact-security")

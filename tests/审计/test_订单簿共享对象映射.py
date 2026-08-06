@@ -140,9 +140,26 @@ class OrderBookMappingTests(unittest.TestCase):
         self.assertTrue(all("非唯一" in index and "索引类型" in index for index in first["索引"]))
 
     def test_批次目录可复验(self):
-        path = ROOT / "artifacts/审计/订单簿共享对象映射/批次-20260806T143417Z-v2"
+        for name in ("批次-20260806T143417Z-v2", "批次-20260806T152759Z-v3", "批次-20260806T153128Z-v4", "批次-20260806T154636Z-v5"):
+            path = ROOT / "artifacts/审计/订单簿共享对象映射" / name
+            if path.exists():
+                self.assertEqual(self.validator.validate_artifact_directory(path)["匹配"], 5)
+
+    def test_历史混配批次失败安全且版本绑定(self):
+        path = ROOT / "artifacts/审计/订单簿共享对象映射/批次-20260806T153128Z-v3"
         if path.exists():
-            self.assertEqual(self.validator.validate_artifact_directory(path)["匹配"], 5)
+            with self.assertRaises(self.validator.ContractError):
+                self.validator.validate_artifact_directory(path)
+        valid = ROOT / "artifacts/审计/订单簿共享对象映射/批次-20260806T153128Z-v4"
+        metadata_path = valid / "批次元数据.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata["临时凭据撤销"]["撤销动作"] = metadata["临时凭据撤销"]["撤销动作"].replace("-v4", "-v1")
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / valid.name
+            shutil.copytree(valid, target)
+            (target / "批次元数据.json").write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaises(self.validator.ContractError):
+                self.validator.validate_artifact_directory(target)
 
     def test_批次篡改和敏感字段失败安全(self):
         source = ROOT / "artifacts/审计/订单簿共享对象映射/批次-20260806T143417Z-v2"
@@ -192,6 +209,9 @@ class OrderBookMappingTests(unittest.TestCase):
         self.assertIn("PasswordAuthentication=no", source)
         self.assertIn("ForwardAgent=no", source)
         self.assertIn("ClearAllForwardings=yes", source)
+        entry_source = ENTRY_PATH.read_text(encoding="utf-8")
+        self.assertIn("object_deadline = min", entry_source)
+        self.assertIn("单对象秒", entry_source)
 
     def test_批次对象非字典失败安全(self):
         with self.assertRaises(self.validator.ContractError):

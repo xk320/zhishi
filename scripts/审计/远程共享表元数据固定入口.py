@@ -173,6 +173,7 @@ def _mysql(sql: str, deadline: float) -> dict[str, Any]:
 
 def _one(item: dict[str, str], deadline: float) -> dict[str, Any]:
     started = time.monotonic()
+    object_deadline = min(deadline, started + RESOURCE_CONTRACT["单对象秒"])
     result: dict[str, Any] = {
         "资产编号": item["资产编号"],
         "表身份指纹": _fp("MySQL/" + item["数据库"] + "/" + item["表"]),
@@ -190,7 +191,7 @@ def _one(item: dict[str, str], deadline: float) -> dict[str, Any]:
         columns = _mysql(
             "SELECT COLUMN_NAME, COLUMN_TYPE, ORDINAL_POSITION, IS_NULLABLE, COLUMN_KEY FROM information_schema.COLUMNS "
             "WHERE TABLE_SCHEMA=" + _lit(item["数据库"]) + " AND TABLE_NAME=" + _lit(item["表"]) +
-            " ORDER BY ORDINAL_POSITION;", deadline
+            " ORDER BY ORDINAL_POSITION;", object_deadline
         )
         result["读取字节数"] += columns["bytes"]
         if not columns["ok"]:
@@ -206,12 +207,15 @@ def _one(item: dict[str, str], deadline: float) -> dict[str, Any]:
         if not column_rows:
             result["采集状态"], result["原因码"] = "未发现", "table-not-found"
             return result
+        if time.monotonic() >= object_deadline:
+            result["原因码"] = "object-timeout"
+            return result
         result["列数"] = len(column_rows)
         result["列指纹"] = _fp("|".join(column_rows))
         indexes = _mysql(
             "SELECT INDEX_NAME, SEQ_IN_INDEX, COLUMN_NAME, NON_UNIQUE, INDEX_TYPE FROM information_schema.STATISTICS "
             "WHERE TABLE_SCHEMA=" + _lit(item["数据库"]) + " AND TABLE_NAME=" + _lit(item["表"]) +
-            " ORDER BY LOWER(INDEX_NAME), SEQ_IN_INDEX, LOWER(COLUMN_NAME);", deadline
+            " ORDER BY LOWER(INDEX_NAME), SEQ_IN_INDEX, LOWER(COLUMN_NAME);", object_deadline
         )
         result["读取字节数"] += indexes["bytes"]
         if not indexes["ok"]:
