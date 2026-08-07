@@ -65,6 +65,15 @@ def _read(path: Path, label: str) -> bytes:
     return engine._read_regular_bytes(path, label)
 
 
+def _source_contract_fingerprint(path: Path) -> str:
+    """冻结来源合同结构，允许审计报告追加而不改变合同结构指纹。"""
+    document = json.loads(_read(path, "来源身份总合同").decode("utf-8"))
+    for item in document.get("输入文件", []):
+        if isinstance(item, dict) and str(item.get("路径", "")).startswith("docs/审计/"):
+            item["SHA-256"] = "<动态报告指纹>"
+    return _sha(_canonical(document))
+
+
 def _input_path(config: Mapping[str, object], purpose: str, repo_root: Path) -> Path:
     for item in config["输入文件"]:
         if item["用途"] == purpose:
@@ -105,7 +114,12 @@ def load_config(path: Path = CONFIG_PATH, repo_root: Path = REPO_ROOT) -> dict[s
         if not isinstance(item, dict) or set(item) != {"用途", "路径", "SHA-256"} or item["路径"] in seen:
             raise ValueError("输入合同字段或路径重复")
         seen.add(item["路径"])
-        if _sha(_read(repo_root / item["路径"], "来源身份声明输入")) != item["SHA-256"]:
+        actual = (
+            _source_contract_fingerprint(repo_root / item["路径"])
+            if item["用途"] == "来源身份总合同"
+            else _sha(_read(repo_root / item["路径"], "来源身份声明输入"))
+        )
+        if actual != item["SHA-256"]:
             raise ValueError(f"输入指纹漂移：{item['路径']}")
     return raw
 
