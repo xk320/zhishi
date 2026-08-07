@@ -76,7 +76,7 @@ class RecaptureSourceIdentityTests(unittest.TestCase):
     def test_non_whitelisted_target_is_rejected_before_probe(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaises(ValueError):
-                module.execute_batch(module.DEFAULT_CONTRACT, "192.168.31.201", Path(directory), 60)
+                module.execute_batch(module.DEFAULT_CONTRACT, "not-ubuntu", Path(directory), 60)
 
 
 if __name__ == "__main__":
