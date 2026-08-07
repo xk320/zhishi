@@ -86,8 +86,23 @@ class DatabaseMetadataIdentityTests(unittest.TestCase):
         rows, summary = self.module.build_rows(members, assets, payload, "batch-test", self.config)
         self.assertEqual("已观察", rows[0]["元数据状态"])
         self.assertEqual("无法判定", rows[0]["状态"])
+        self.assertEqual("METADATA_OBSERVED_IDENTITY_UNPROVEN", rows[0]["原因代码"])
+        self.assertIn("information_schema.TABLES", rows[0]["证据定位"])
+        self.assertRegex(rows[0]["执行器SHA-256"], r"^[0-9a-f]{64}$")
+        self.assertRegex(rows[0]["规则SHA-256"], r"^[0-9a-f]{64}$")
         self.assertEqual(2, summary["已观察"])
         self.assertEqual(0, summary["拒绝"])
+
+    def test_探针测试执行器也限制stderr(self):
+        command = ["ssh", "ubuntu"]
+
+        def runner(*_args, **_kwargs):
+            return subprocess.CompletedProcess(command, 0, '{"结果": []}', "x" * 100)
+
+        resources = dict(self.config["资源上限"])
+        resources["最大日志字节数"] = 10
+        with self.assertRaises(RuntimeError):
+            self.module.run_probe(command, "select", resources, runner=runner)
 
     def test_越权探针结果失败关闭(self):
         members = [{

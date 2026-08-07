@@ -32,13 +32,16 @@ CONTRACT_VERSION = "database-metadata-identity-evidence-recapture-1.0"
 PROBE_VERSION = engine.PROBE_VERSION
 CONFIG_PATH = REPO_ROOT / "config/数据/数据库元数据身份证据复采.json"
 DEFAULT_BATCH_ROOT = REPO_ROOT / "artifacts/数据/数据库元数据身份证据复采"
+TASK_CONTRACT_SNAPSHOT_PATH = REPO_ROOT / "docs/研发中心/任务/任务-000077.md"
+CONTRACT_DOC_PATH = REPO_ROOT / "docs/研究/数据库元数据身份与Schema证据合同.md"
 TARGETS = ("BTC", "ETH")
 MEMBER_COLUMNS = (
     "来源身份批次", "成员编号", "资产编号", "资产类型", "标的", "输入成员SHA-256",
 )
 OUTPUT_COLUMNS = MEMBER_COLUMNS + (
-    "数据库Schema", "数据库表", "状态", "元数据状态", "结构证据", "限制", "解除条件",
-    "元数据SHA-256", "SchemaSHA-256", "授权边界快照SHA-256", "成员记录SHA-256",
+    "数据库Schema", "数据库表", "状态", "元数据状态", "原因代码", "证据定位",
+    "结构证据", "限制", "解除条件", "元数据SHA-256", "SchemaSHA-256",
+    "授权边界快照SHA-256", "探针SHA-256", "规则SHA-256", "执行器SHA-256", "成员记录SHA-256",
 )
 CONFIG_KEYS = {
     "合同版本", "任务编号", "输入文件", "任务-000076来源身份批次", "标的",
@@ -64,6 +67,22 @@ def _canonical(value: object) -> bytes:
 
 def _fingerprint(value: object) -> str:
     return _sha(_canonical(value))
+
+
+def rules_fingerprint(config: Mapping[str, object]) -> str:
+    """返回不依赖运行时结果的规则指纹。"""
+    return _fingerprint({
+        "合同版本": CONTRACT_VERSION,
+        "探针版本": PROBE_VERSION,
+        "数据库元数据范围": config["数据库元数据范围"],
+        "状态范围": ["已观察", "拒绝", "无法判定", "失败", "未成熟", "失效"],
+        "主研究尺度": config["主研究尺度"],
+        "事后结果观察窗口": config["事后结果观察窗口"],
+    })
+
+
+def executor_fingerprint() -> str:
+    return engine.file_fingerprint(Path(__file__))
 
 
 def _read(path: Path, label: str) -> bytes:
@@ -168,6 +187,9 @@ def run_probe(
         completed = engine.run_bounded_process(command, input_text=script, timeout=timeout, maximum_stdout=stdout_limit, maximum_stderr=stderr_limit)
     else:
         completed = runner(command, input=script, capture_output=True, text=True, timeout=timeout, check=False)
+        stderr = completed.stderr if isinstance(completed.stderr, str) else ""
+        if len(stderr.encode("utf-8")) > stderr_limit:
+            raise RuntimeError("数据库元数据探针日志超限，未发布批次")
     if completed.returncode != 0:
         raise RuntimeError("数据库元数据只读探针失败，未发布批次")
     stdout = completed.stdout if isinstance(completed.stdout, str) else ""
@@ -194,11 +216,16 @@ def _authorization_fingerprint(asset_id: str, config: Mapping[str, object]) -> s
 def build_rows(
     members: Sequence[Mapping[str, str]], assets: Sequence[Mapping[str, str]],
     payload: Mapping[str, object], batch_id: str, config: Mapping[str, object],
+    *, probe_hash: str | None = None, rules_hash: str | None = None,
+    executor_hash: str | None = None,
 ) -> tuple[list[dict[str, str]], dict[str, object]]:
     engine.validate_probe_result(payload, assets)
     by_asset = {str(item["资产编号"]): item for item in payload["结果"]}
     asset_by_id = {str(asset["资产编号"]): asset for asset in assets}
     rows: list[dict[str, str]] = []
+    probe_hash = probe_hash or _fingerprint(payload)
+    rules_hash = rules_hash or rules_fingerprint(config)
+    executor_hash = executor_hash or executor_fingerprint()
     for member in members:
         asset_id = member["资产编号"]
         probe = by_asset[asset_id]
@@ -206,6 +233,22 @@ def build_rows(
         metadata_state = str(probe["复核状态"])
         prior_state = "拒绝" if str(member.get("状态", "")) == "拒绝" else "无法判定"
         final_state = "拒绝" if prior_state == "拒绝" or metadata_state == "拒绝" else "无法判定"
+        if prior_state == "拒绝":
+            reason_code = "INPUT_MEMBER_REJECTED"
+        elif metadata_state == "拒绝":
+            reason_code = "METADATA_REJECTED"
+        elif metadata_state == "失败":
+            reason_code = "METADATA_PROBE_FAILED"
+        elif metadata_state == "未成熟":
+            reason_code = "METADATA_NOT_MATURE"
+        elif metadata_state == "失效":
+            reason_code = "METADATA_INVALIDATED"
+        elif metadata_state == "已观察":
+            reason_code = "METADATA_OBSERVED_IDENTITY_UNPROVEN"
+        else:
+            reason_code = "METADATA_UNDETERMINED"
+        metadata_hash = str(probe["元数据SHA-256"] or "未知")
+        schema_hash = str(probe["SchemaSHA-256"] or "未知")
         row = {
             "来源身份批次": str(member["来源身份批次"]),
             "成员编号": str(member["成员编号"]),
@@ -213,16 +256,25 @@ def build_rows(
             "资产类型": DB_ASSET_TYPE,
             "标的": str(member["标的"]),
             "输入成员SHA-256": str(member["输入成员SHA-256"]),
-            "数据库Schema": str(asset["数据库Schema"]),
-            "数据库表": str(asset["数据库表"]),
+            "数据库Schema": "sha256:" + _fingerprint({"数据库Schema": str(asset["数据库Schema"])}),
+            "数据库表": "sha256:" + _fingerprint({"数据库表": str(asset["数据库表"])}),
             "状态": final_state,
             "元数据状态": metadata_state,
+            "原因代码": reason_code,
+            "证据定位": (
+                "固定探针:information_schema.TABLES;information_schema.COLUMNS;"
+                f"资产编号={asset_id};成员编号={member['成员编号']};"
+                f"元数据SHA-256={metadata_hash};SchemaSHA-256={schema_hash}"
+            ),
             "结构证据": str(probe["证据"]),
             "限制": "只读取information_schema元数据；结构观察不证明来源、市场、合约或时间",
             "解除条件": "补齐当前版本来源提供者、交易场所、市场类型、精确合约、数据对象、Schema和授权证据后重新发布不可变批次",
-            "元数据SHA-256": str(probe["元数据SHA-256"] or "未知"),
-            "SchemaSHA-256": str(probe["SchemaSHA-256"] or "未知"),
+            "元数据SHA-256": metadata_hash,
+            "SchemaSHA-256": schema_hash,
             "授权边界快照SHA-256": _authorization_fingerprint(asset_id, config),
+            "探针SHA-256": probe_hash,
+            "规则SHA-256": rules_hash,
+            "执行器SHA-256": executor_hash,
         }
         row["成员记录SHA-256"] = _fingerprint(row)
         rows.append(row)
@@ -289,6 +341,9 @@ def execute_batch(
         raise ValueError("冻结时间必须带时区")
     config_hash = engine.file_fingerprint(config_path)
     task_hash = engine.file_fingerprint(repo_root / "docs/研发中心/任务/任务-000077.md")
+    snapshot_hash = engine.file_fingerprint(TASK_CONTRACT_SNAPSHOT_PATH)
+    rules_hash = rules_fingerprint(config)
+    executor_hash = executor_fingerprint()
     members_hash = _fingerprint(members)
     assets_hash = _fingerprint(assets)
     probe_hash = _fingerprint(payload)
@@ -298,7 +353,10 @@ def execute_batch(
         "任务文件SHA-256": task_hash,
     }
     batch_id = "database-metadata-identity-evidence-" + frozen.strftime("%Y%m%dT%H%M%S%z") + "-" + _fingerprint(batch_payload)[:12]
-    rows, summary = build_rows(members, assets, payload, batch_id, config)
+    rows, summary = build_rows(
+        members, assets, payload, batch_id, config,
+        probe_hash=probe_hash, rules_hash=rules_hash, executor_hash=executor_hash,
+    )
     csv_text = _render_csv(rows)
     manifest = {
         "合同版本": CONTRACT_VERSION, "任务编号": TASK_ID,
@@ -307,6 +365,8 @@ def execute_batch(
         "冻结时间": frozen.isoformat(timespec="microseconds"), "SSH逻辑目标": "ubuntu",
         "探针版本": PROBE_VERSION, "探针SHA-256": probe_hash, "配置SHA-256": config_hash,
         "成员SHA-256": members_hash, "资产清单SHA-256": assets_hash, "任务文件SHA-256": task_hash,
+        "执行器SHA-256": executor_hash, "规则SHA-256": rules_hash,
+        "任务合同快照路径": "任务-000077执行合同快照.md", "任务合同快照SHA-256": snapshot_hash,
         "结果摘要": summary,
         "数据库元数据范围": config["数据库元数据范围"],
         "授权边界": {"SSH逻辑目标": "ubuntu", "只读": True, "范围": config["数据库元数据范围"]},
@@ -327,7 +387,11 @@ def execute_batch(
         staging.mkdir()
         (staging / "数据库元数据身份证据清单.csv").write_text(csv_text, encoding="utf-8", newline="")
         (staging / "批次清单.json").write_text(json_text, encoding="utf-8")
-        engine._scan_outputs([staging / "数据库元数据身份证据清单.csv", staging / "批次清单.json"])
+        (staging / "任务-000077执行合同快照.md").write_bytes(_read(TASK_CONTRACT_SNAPSHOT_PATH, "任务合同快照"))
+        engine._scan_outputs([
+            staging / "数据库元数据身份证据清单.csv", staging / "批次清单.json",
+            staging / "任务-000077执行合同快照.md",
+        ])
         engine.atomic_publish_directory_no_replace(staging, target)
     print(json.dumps({"状态": "成功", "任务-000077数据库元数据身份证据批次": batch_id, "结果摘要": summary}, ensure_ascii=False, sort_keys=True))
     return target
