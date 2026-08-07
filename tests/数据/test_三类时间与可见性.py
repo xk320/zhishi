@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -93,6 +94,13 @@ class TimeVisibilityRecaptureTests(unittest.TestCase):
         self.assertNotIn("15分钟", module.SCALES)
         self.assertNotIn("1小时", module.SCALES)
         self.assertEqual(module.OBSERVATION_WINDOWS, ("15分钟", "1小时"))
+
+    def test_probe_rejects_output_over_bound(self) -> None:
+        def oversized_runner(_command: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess([], 0, "x" * 4097, "")
+
+        with self.assertRaises(RuntimeError):
+            module._probe("ubuntu", 10, runner=oversized_runner)
 
 
 if __name__ == "__main__":

@@ -227,11 +227,17 @@ def _counts(rows: Sequence[Mapping[str, Any]], target: str | None = None, scale:
     }
 
 
-def _probe(ssh_target: str, timeout: int, *, ssh_bin: str = "ssh") -> dict[str, Any]:
+def _probe(ssh_target: str, timeout: int, *, ssh_bin: str = "ssh", runner: Any | None = None) -> dict[str, Any]:
     probe_code = "import json; print(json.dumps({'探针版本':'time-visibility-recapture-probe-1.0','状态':'可执行','读取业务正文':False,'读取数据库业务记录':False,'远端写入':False},ensure_ascii=False))"
     remote_command = "python3 -c " + shlex.quote(probe_code)
     command = [ssh_bin, "-o", "BatchMode=yes", "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes", "-o", "ConnectTimeout=5", ssh_target, remote_command]
-    completed = subprocess.run(command, input="", capture_output=True, text=True, timeout=timeout, check=False)
+    completed = runner(command) if runner is not None else engine.run_bounded_process(
+        command,
+        input_text="",
+        timeout=timeout,
+        maximum_stdout=4096,
+        maximum_stderr=4096,
+    )
     if completed.returncode != 0 or len(completed.stdout.encode()) > 4096 or len(completed.stderr.encode()) > 4096:
         raise RuntimeError("白名单只读元数据探针失败，未发布批次")
     try:
