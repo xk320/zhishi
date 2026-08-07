@@ -20,6 +20,13 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+if __package__ in {None, ""}:
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts.数据 import 冻结数据来源身份 as engine
+
 
 ROOT = Path(__file__).resolve().parents[2]
 FINAL_BATCH = (
@@ -196,7 +203,7 @@ def execute(batch: str, output_root: Path = ROOT / "artifacts/数据/来源身�
         )
         if target.exists() or target.is_symlink():
             raise ValueError("历史批次目录在发布前已存在")
-        os.replace(temp_dir, target)
+        engine.atomic_publish_directory_no_replace(temp_dir, target)
         return target
     except Exception:
         for path in temp_dir.glob("*"):
