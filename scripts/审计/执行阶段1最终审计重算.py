@@ -12,11 +12,14 @@ import csv
 import hashlib
 import importlib.util
 import json
+import os
 import re
+import shutil
+import subprocess
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, mkdtemp
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -53,6 +56,8 @@ UPSTREAM = {
 
 LOOP_CSV = LEGACY.LOOP_CSV
 LEGACY_FINAL_MANIFEST = "artifacts/审计/阶段1最终审计/final-20260807T082700Z-v4/验证清单.json"
+TASK_CHAIN_RANGE = range(29, 78)
+_ACTIVE_TEMP_BATCHES: set[Path] = set()
 
 
 def sha256(path: Path) -> str:
@@ -89,6 +94,57 @@ def task_fact(task_id: str, expected_sha: str) -> dict[str, str]:
     if merge.group(1) != expected_sha:
         raise ValueError(f"{task_id}合并提交SHA漂移")
     return {"任务文件SHA-256": sha256(path), "合并提交SHA": expected_sha}
+
+
+def latest_main_and_task_chain() -> dict[str, object]:
+    """冻结最新main及任务-000029至任务-000077的完整祖先证据。"""
+
+    try:
+        main_sha = subprocess.run(
+            ["git", "rev-parse", "refs/remotes/origin/main"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise ValueError("无法读取最新origin/main精确SHA") from error
+    if not re.fullmatch(r"[0-9a-f]{40}", main_sha):
+        raise ValueError("origin/main精确SHA格式无效")
+
+    chain: dict[str, dict[str, object]] = {}
+    for number in TASK_CHAIN_RANGE:
+        task_id = f"任务-{number:06d}"
+        path = ROOT / "docs/研发中心/任务" / f"{task_id}.md"
+        text = path.read_text(encoding="utf-8")
+        status = re.search(r"^- 状态：(.+)$", text, re.MULTILINE)
+        merge = re.search(r"^- 合并提交SHA：`([0-9a-f]{40})`$", text, re.MULTILINE)
+        if status is None:
+            raise ValueError(f"{task_id}缺少状态")
+        if status.group(1).strip() == "已取消":
+            if task_id != "任务-000050":
+                raise ValueError(f"非任务-000050不得从完整任务链排除：{task_id}")
+            chain[task_id] = {"状态": "已取消", "任务文件SHA-256": sha256(path)}
+            continue
+        if status.group(1).strip() != "已完成" or merge is None:
+            raise ValueError(f"{task_id}不是可验证的已完成任务")
+        merge_sha = merge.group(1)
+        result = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", merge_sha, main_sha],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise ValueError(f"{task_id}合并提交不是最新main祖先")
+        chain[task_id] = {
+            "状态": "已完成",
+            "合并提交SHA": merge_sha,
+            "合并提交为最新main祖先": True,
+            "任务文件SHA-256": sha256(path),
+        }
+    return {"最新main提交SHA": main_sha, "任务链": chain}
 
 
 def _summary_counts(rows: list[dict[str, str]], *, status_key: str = "状态") -> dict[str, int]:
@@ -161,17 +217,22 @@ def verify_new_upstream() -> dict:
     identity_076 = {(row["标的"], row["资产编号"]): row["状态"] for row in field_rows}
     if identity_075 != identity_076:
         raise ValueError("任务-000075与任务-000076身份状态不能绑定到同一成员")
-    metadata = {
+    metadata_final = {
         (row["标的"], row["资产编号"]): row["状态"]
         for row in read_csv(ROOT / UPSTREAM["任务-000077"]["成员清单"])
     }
-    if not set(metadata).issubset(identity_076):
+    metadata_observed = {
+        (row["标的"], row["资产编号"]): row["元数据状态"]
+        for row in read_csv(ROOT / UPSTREAM["任务-000077"]["成员清单"])
+    }
+    if not set(metadata_final).issubset(identity_076):
         raise ValueError("任务-000077元数据成员不属于任务-000076身份成员")
     return {
         "历史阶段1输入": base,
         "任务-000075至任务-000077": additions,
         "身份状态": identity_076,
-        "元数据状态": metadata,
+        "元数据最终身份状态": metadata_final,
+        "元数据观察状态": metadata_observed,
     }
 
 
@@ -185,7 +246,8 @@ def gate_from_identity(status: str) -> str:
 
 def build_recomputed_leaves(rows: list[dict[str, str]], evidence: dict) -> tuple[list[dict[str, str]], dict[str, int]]:
     identity = evidence["身份状态"]
-    metadata = evidence["元数据状态"]
+    metadata_final = evidence["元数据最终身份状态"]
+    metadata_observed = evidence["元数据观察状态"]
     by_leaf: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
     for row in rows:
         key = (row["标的"], row["资产编号"])
@@ -194,8 +256,9 @@ def build_recomputed_leaves(rows: list[dict[str, str]], evidence: dict) -> tuple
         item = dict(row)
         item["门1来源身份"] = gate_from_identity(identity[key])
         item["最新来源身份状态"] = identity[key]
-        item["数据库元数据状态"] = metadata.get(key, "未覆盖")
-        item["数据库元数据证据范围"] = "任务-000077" if key in metadata else "未覆盖"
+        item["数据库元数据最终身份状态"] = metadata_final.get(key, "未覆盖")
+        item["数据库元数据观察状态"] = metadata_observed.get(key, "未覆盖")
+        item["数据库元数据证据范围"] = "任务-000077" if key in metadata_final else "未覆盖"
         gates = [
             item["门1来源身份"], item["门2时间与质量合同"], item["门3质量审计"],
             item["门4历史重放"], item["门5成本与执行"], item["门6血缘"], "无法判定", "无法判定",
@@ -239,7 +302,8 @@ def build_recomputed_leaves(rows: list[dict[str, str]], evidence: dict) -> tuple
                 "容量门": "无法判定", "恢复门": "无法判定", "最终裁决": "阻塞",
                 "最新来源身份拒绝": str(sum(row["最新来源身份状态"] == "拒绝" for row in members)),
                 "最新来源身份无法判定": str(sum(row["最新来源身份状态"] == "无法判定" for row in members)),
-                "数据库元数据已观察": str(sum(row["数据库元数据状态"] == "无法判定" for row in members)),
+                "数据库元数据已观察": str(sum(row["数据库元数据观察状态"] == "已观察" for row in members)),
+                "数据库元数据最终无法判定": str(sum(row["数据库元数据最终身份状态"] == "无法判定" for row in members)),
                 "证据": "任务-000075/000076来源身份批次；任务-000077数据库元数据批次；历史闭环成员.csv",
                 "解除条件": "分别补齐来源身份、三类时间、质量、重放、成本、容量和恢复硬门证据后重新生成不可变批次",
             })
@@ -262,16 +326,39 @@ def write_csv(path: Path, rows: list[dict[str, str]]) -> None:
     temp_path.replace(path)
 
 
+def _fsync_tree(root: Path) -> None:
+    """在临时目录内完成文件和目录落盘，再进行目录级发布。"""
+
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            with path.open("rb") as stream:
+                os.fsync(stream.fileno())
+    directory_fd = os.open(root, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _cleanup_temp_batches() -> None:
+    for path in tuple(_ACTIVE_TEMP_BATCHES):
+        shutil.rmtree(path, ignore_errors=True)
+        _ACTIVE_TEMP_BATCHES.discard(path)
+
+
 def run(batch: str) -> Path:
     if not re.fullmatch(r"final-recompute-[0-9]{8}T[0-9]{6}Z-v[0-9]+", batch):
         raise ValueError("批次必须为final-recompute-YYYYMMDDTHHMMSSZ-vN")
     evidence = verify_new_upstream()
+    chain = latest_main_and_task_chain()
     rows = LEGACY.read_loop_rows(ROOT / LOOP_CSV)
     leaves, aggregate = build_recomputed_leaves(rows, evidence)
-    out_root = ROOT / "artifacts/审计/阶段1最终审计" / batch
-    if out_root.exists():
-        raise FileExistsError(f"不可覆盖已有批次：{out_root}")
-    out_root.mkdir(parents=True)
+    final_root = ROOT / "artifacts/审计/阶段1最终审计" / batch
+    if final_root.exists():
+        raise FileExistsError(f"不可覆盖已有批次：{final_root}")
+    final_root.parent.mkdir(parents=True, exist_ok=True)
+    out_root = Path(mkdtemp(prefix=f".{batch}.tmp-", dir=final_root.parent))
+    _ACTIVE_TEMP_BATCHES.add(out_root)
     leaf_path = out_root / "叶子裁决.csv"
     gap_path = out_root / "缺口清单.csv"
     summary_path = out_root / "统计摘要.json"
@@ -300,6 +387,7 @@ def run(batch: str) -> Path:
         "批次": batch, "任务编号": "任务-000078", "合同版本": "stage1-final-audit-recompute-1.0",
         "输入范围": {"标的": list(ASSETS), "主研究尺度": list(SCALES), "事后结果观察窗口": list(POST_WINDOWS), "叶子维度": ["标的", "交易场所", "市场类型", "精确合约", "数据对象", "主研究尺度", "时间范围"]},
         "历史最终审计输入": {"路径": LEGACY_FINAL_MANIFEST, "SHA-256": sha256(ROOT / LEGACY_FINAL_MANIFEST)},
+        "最新main提交SHA": chain["最新main提交SHA"], "任务链": chain["任务链"],
         "上游": upstream, "最终叶子数": len(leaves), "成员顺序": "BTC后ETH；各标的内按4小时、8小时、24小时、48小时升序；叶内按资产编号和来源成员编号升序",
         "输入指纹": {"历史阶段1验证清单SHA-256": sha256(ROOT / LEGACY_FINAL_MANIFEST), "任务合同快照SHA-256": sha256(snapshot_path), "规则设计合同SHA-256": sha256(design_path)},
         "规则SHA-256": sha256(design_path), "执行器SHA-256": sha256(Path(__file__)), "任务快照SHA-256": sha256(snapshot_path),
@@ -312,7 +400,12 @@ def run(batch: str) -> Path:
         "安全边界": {"访问服务器": False, "访问数据库业务正文": False, "读取真实市场数据": False, "修改原始数据": False, "生成模型回测或交易结论": False},
         "输出文件指纹": output_hashes,
     })
-    return out_root
+    _fsync_tree(out_root)
+    if final_root.exists():
+        raise FileExistsError(f"发布前发现同名批次，拒绝覆盖：{final_root}")
+    os.rename(out_root, final_root)
+    _ACTIVE_TEMP_BATCHES.discard(out_root)
+    return final_root
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -322,6 +415,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         print(run(args.batch))
     except (FileExistsError, OSError, ValueError, KeyError) as error:
+        _cleanup_temp_batches()
         print(f"阶段1最终审计重算失败安全停止：{error}", file=sys.stderr)
         return 2
     return 0

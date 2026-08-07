@@ -15,7 +15,7 @@ SPEC.loader.exec_module(MODULE)
 
 class Stage1FinalAuditRecomputeTests(unittest.TestCase):
     def setUp(self):
-        self.batch = ROOT / "artifacts/审计/阶段1最终审计/final-recompute-20260807T195200Z-v2"
+        self.batch = ROOT / "artifacts/审计/阶段1最终审计/final-recompute-20260808T042000Z-v3"
 
     def test_新证据提交与状态计数可复算(self):
         evidence = MODULE.verify_new_upstream()
@@ -23,7 +23,8 @@ class Stage1FinalAuditRecomputeTests(unittest.TestCase):
         self.assertEqual(evidence["任务-000075至任务-000077"]["任务-000076"]["状态计数"]["无法判定"], 618)
         self.assertEqual(evidence["任务-000075至任务-000077"]["任务-000077"]["状态计数"]["无法判定"], 184)
         self.assertEqual(len(evidence["身份状态"]), 630)
-        self.assertEqual(len(evidence["元数据状态"]), 184)
+        self.assertEqual(len(evidence["元数据最终身份状态"]), 184)
+        self.assertEqual(len(evidence["元数据观察状态"]), 184)
 
     def test_八个叶子与尺度边界及状态守恒(self):
         with (self.batch / "叶子裁决.csv").open(encoding="utf-8-sig") as stream:
@@ -40,6 +41,8 @@ class Stage1FinalAuditRecomputeTests(unittest.TestCase):
         manifest = json.loads((self.batch / "验证清单.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["任务编号"], "任务-000078")
         self.assertEqual(manifest["最终叶子数"], 8)
+        self.assertEqual(len(manifest["任务链"]), 49)
+        self.assertRegex(manifest["最新main提交SHA"], r"^[0-9a-f]{40}$")
         self.assertEqual(manifest["阶段1结论"], "阻塞")
         self.assertEqual(manifest["阶段2结论"], "阻塞")
         self.assertEqual(manifest["输入范围"]["主研究尺度"], ["4小时", "8小时", "24小时", "48小时"])
