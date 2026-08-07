@@ -11,7 +11,7 @@
     {"用途": "任务-000076来源身份成员", "路径": "artifacts/数据/来源身份字段级证据复采/source-identity-field-evidence-20260808T020108+0800-7634991794d9/来源身份字段级证据清单.csv", "SHA-256": "f5ffe57b7df7ca1bd979d456a38326247a297fbeb22f2414f9544780860c18e1"},
     {"用途": "任务-000077数据库元数据成员", "路径": "artifacts/数据/数据库元数据身份证据复采/database-metadata-identity-evidence-20260808T030243+0800-c3cb2624d197/数据库元数据身份证据清单.csv", "SHA-256": "424fb75257929ff85451cd7458b71c84625d0a5cc88ef86da5363c1601718d1f"},
     {"用途": "资产清单", "路径": "artifacts/审计/数据源清单.csv", "SHA-256": "019010d64fe47d89c81bfaedafd458f1d886025bb34292c0c32eafcfa4392657"},
-    {"用途": "任务合同", "路径": "docs/研发中心/任务/任务-000079.md", "SHA-256": "4da346d5704c7b985e360f2ebe876459c7eda06f23167ef9e19700e7acea8203"},
+    {"用途": "任务合同", "路径": "docs/研发中心/任务/任务-000079.md", "SHA-256": "06f19745a9b24c0365b28274ee55ef0c4c97fd9acb1c86130289b62bc7f98d49"},
     {"用途": "设计合同", "路径": "docs/superpowers/specs/task-000079-source-identity-declaration-design.md", "SHA-256": "eb0142f4de4ac5ebdf760043c4e0b8450908abdcc0edc9287f47f5cc61e0a2ec"},
     {"用途": "来源身份总合同", "路径": "config/数据/数据来源与资产身份.json", "SHA-256": "a3009bdae0af5ccc5b019d2aee4b012322047faf2c5627c7619c441a281017da"}
   ],
