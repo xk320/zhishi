@@ -1427,8 +1427,17 @@ def build_ssh_command(ssh_bin: str, target: str, timeout: int) -> list[str]:
     connect_timeout = min(30, max(1, timeout // 4))
     return [
         ssh_bin,
+        "-T",
         "-o",
         "BatchMode=yes",
+        "-o",
+        "PasswordAuthentication=no",
+        "-o",
+        "KbdInteractiveAuthentication=no",
+        "-o",
+        "ForwardAgent=no",
+        "-o",
+        "ClearAllForwardings=yes",
         "-o",
         f"ConnectTimeout={connect_timeout}",
         "-o",

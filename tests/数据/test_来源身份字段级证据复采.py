@@ -24,6 +24,18 @@ class 来源身份字段级证据测试(unittest.TestCase):
         self.assertNotIn("SELECT *", script)
         self.assertNotIn("price", script.lower())
 
+    def test_SSH命令显式关闭交互密码代理和转发(self):
+        command = module.engine.build_ssh_command("ssh", "ubuntu", 60)
+        self.assertIn("-T", command)
+        for option in (
+            "BatchMode=yes",
+            "PasswordAuthentication=no",
+            "KbdInteractiveAuthentication=no",
+            "ForwardAgent=no",
+            "ClearAllForwardings=yes",
+        ):
+            self.assertIn(option, command)
+
     def test_探针响应越界被拒绝(self):
         payload = {
             "探针版本": module.PROBE_VERSION,
