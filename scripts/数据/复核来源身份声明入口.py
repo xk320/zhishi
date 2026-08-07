@@ -122,7 +122,7 @@ def execute(batch: str, output_root: Path = ROOT / "artifacts/数据/来源身�
     if BATCH_PATTERN.fullmatch(batch) is None:
         raise ValueError("批次必须为source-identity-entry-review-YYYYMMDDTHHMMSS±HHMM-标识")
     target = output_root / batch
-    if target.exists():
+    if target.exists() or target.is_symlink():
         raise ValueError("历史批次目录已存在，不覆盖")
     entries, config_fingerprints = load_declaration_entries()
     source_manifest, rows = load_final_members()
@@ -155,7 +155,7 @@ def execute(batch: str, output_root: Path = ROOT / "artifacts/数据/来源身�
             )
         fieldnames = list(output_rows[0])
         with output_csv.open("w", encoding="utf-8", newline="") as stream:
-            writer = csv.DictWriter(stream, fieldnames=fieldnames)
+            writer = csv.DictWriter(stream, fieldnames=fieldnames, lineterminator="\n")
             writer.writeheader()
             writer.writerows(output_rows)
         summary = {
@@ -194,7 +194,7 @@ def execute(batch: str, output_root: Path = ROOT / "artifacts/数据/来源身�
         (temp_dir / "批次清单.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
-        if target.exists():
+        if target.exists() or target.is_symlink():
             raise ValueError("历史批次目录在发布前已存在")
         os.replace(temp_dir, target)
         return target

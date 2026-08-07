@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -44,6 +45,14 @@ class ReviewSourceIdentityEntryTests(unittest.TestCase):
                     "source-identity-entry-review-20260808T055500+0800-test",
                     Path(directory),
                 )
+
+    def test_dangling_symlink_is_not_a_publish_target(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_root = Path(directory)
+            target = output_root / "source-identity-entry-review-20260808T055501+0800-link"
+            os.symlink(output_root / "missing-target", target)
+            with self.assertRaises(ValueError):
+                MODULE.execute(target.name, output_root)
 
 
 if __name__ == "__main__":
