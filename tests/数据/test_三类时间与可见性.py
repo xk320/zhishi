@@ -80,6 +80,13 @@ class TimeVisibilityRecaptureTests(unittest.TestCase):
                 self.assertEqual(manifest["分组成员数"], 2)
                 self.assertTrue(manifest["安全声明"]["未读取业务正文"])
                 self.assertTrue((target / "三类时间与可见性清单.csv").is_file())
+                tampered = json.loads(json.dumps(manifest, ensure_ascii=False))
+                tampered["按标的状态计数"]["BTC"]["候选总体"] += 1
+                (target / "三类时间与可见性清单.json").write_text(
+                    json.dumps(tampered, ensure_ascii=False), encoding="utf-8"
+                )
+                with self.assertRaises(ValueError):
+                    module.validate_manifest(target / "三类时间与可见性清单.json")
                 with self.assertRaises(FileExistsError):
                     module.execute_batch(
                         module.DEFAULT_CONTRACT,

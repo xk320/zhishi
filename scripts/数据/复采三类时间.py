@@ -273,6 +273,12 @@ def validate_manifest(path: Path) -> dict[str, Any]:
             raise ValueError("批次成员内容指纹不一致")
     if manifest.get("清单内容SHA-256") != _object_sha(rows):
         raise ValueError("批次清单指纹不一致")
+    expected_by_target = {target: _counts(rows, target=target) for target in TARGETS}
+    expected_by_scale = {scale: _counts(rows, scale=scale) for scale in SCALES}
+    if manifest.get("按标的状态计数") != expected_by_target:
+        raise ValueError("按标的统计不守恒")
+    if manifest.get("按主研究尺度状态计数") != expected_by_scale:
+        raise ValueError("按主研究尺度统计不守恒")
     if manifest.get("结果摘要") != _counts(rows):
         raise ValueError("批次主统计不守恒")
     payload = manifest.get("批次载荷")
@@ -347,6 +353,8 @@ def execute_batch(
         "远端探针摘要": probe_result,
         "成员SHA-256": contract["来源身份输入"]["成员SHA-256"],
         "清单内容SHA-256": rows_sha,
+        "按标的状态计数": by_target,
+        "按主研究尺度状态计数": by_scale,
     }
     manifest: dict[str, Any] = {
         "合同版本": CONTRACT_VERSION,
