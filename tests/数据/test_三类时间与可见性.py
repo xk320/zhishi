@@ -26,19 +26,11 @@ class TimeVisibilityRecaptureTests(unittest.TestCase):
         identity = module._load_identity(contract, ROOT)
         self.assertEqual(len(identity["成员顺序"]), 630)
         self.assertEqual({row["标的"] for row in identity["成员顺序"]}, {"BTC", "ETH"})
-        rows_a = [
-            module._build_row(member, scale, "pending", identity["来源身份批次"])
-            for member in identity["成员顺序"]
-            for scale in module.SCALES
-        ]
-        rows_b = [
-            module._build_row(member, scale, "pending", identity["来源身份批次"])
-            for member in identity["成员顺序"]
-            for scale in module.SCALES
-        ]
+        rows_a = [module._build_row(member, "pending", identity["来源身份批次"]) for member in identity["成员顺序"]]
+        rows_b = [module._build_row(member, "pending", identity["来源身份批次"]) for member in identity["成员顺序"]]
         self.assertEqual(rows_a, rows_b)
-        self.assertEqual(len(rows_a), 2520)
-        self.assertEqual({row["主研究尺度"] for row in rows_a}, set(module.SCALES))
+        self.assertEqual(len(rows_a), 630)
+        self.assertTrue(all(row["主研究尺度"] == list(module.SCALES) for row in rows_a))
         self.assertEqual({row["结果观察窗口"][0] for row in rows_a}, {"15分钟"})
         self.assertEqual({row["结果观察窗口"][1] for row in rows_a}, {"1小时"})
         self.assertTrue(all(row["三类时间"]["事件时间"]["状态"] in {"失败", "无法判定"} for row in rows_a))
@@ -46,18 +38,14 @@ class TimeVisibilityRecaptureTests(unittest.TestCase):
     def test_counts_keep_btc_eth_and_all_failure_safe_states(self) -> None:
         contract = module.load_contract()
         identity = module._load_identity(contract, ROOT)
-        rows = [
-            module._build_row(member, scale, "pending", identity["来源身份批次"])
-            for member in identity["成员顺序"]
-            for scale in module.SCALES
-        ]
+        rows = [module._build_row(member, "pending", identity["来源身份批次"]) for member in identity["成员顺序"]]
         summary = module._counts(rows)
-        self.assertEqual(summary["候选总体"], 2520)
-        self.assertEqual(summary["分母"], 2520)
-        self.assertEqual(summary["已观察"], 2520)
-        self.assertEqual(summary["拒绝"], 48)
-        self.assertEqual(summary["失败"], 48)
-        self.assertEqual(summary["无法判定"], 2472)
+        self.assertEqual(summary["候选总体"], 630)
+        self.assertEqual(summary["分母"], 630)
+        self.assertEqual(summary["已观察"], 630)
+        self.assertEqual(summary["拒绝"], 12)
+        self.assertEqual(summary["失败"], 12)
+        self.assertEqual(summary["无法判定"], 618)
         self.assertEqual(summary["未成熟"], 0)
         self.assertEqual(summary["失效"], 0)
         self.assertEqual(module._counts(rows, target="BTC"), module._counts(rows, target="ETH"))
@@ -88,7 +76,7 @@ class TimeVisibilityRecaptureTests(unittest.TestCase):
                 manifest = json.loads((target / "三类时间与可见性清单.json").read_text(encoding="utf-8"))
                 self.assertEqual(manifest["任务编号"], "任务-000073")
                 self.assertEqual(manifest["成员总数"], 2)
-                self.assertEqual(manifest["分组行数"], 8)
+                self.assertEqual(manifest["分组成员数"], 2)
                 self.assertTrue(manifest["安全声明"]["未读取业务正文"])
                 self.assertTrue((target / "三类时间与可见性清单.csv").is_file())
                 with self.assertRaises(FileExistsError):

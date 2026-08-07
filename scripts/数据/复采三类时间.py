@@ -162,7 +162,7 @@ def _status_reason(identity_status: str) -> tuple[str, str, str]:
     return "无法判定", "未读取业务正文，缺少三类时间、时区、精度、截止点和规则证据", "提供当前版本字段级时间与可见性证据后新建批次"
 
 
-def _build_row(member: Mapping[str, Any], scale: str, batch_id: str, source_batch: str) -> dict[str, Any]:
+def _build_row(member: Mapping[str, Any], batch_id: str, source_batch: str) -> dict[str, Any]:
     visibility, reason, release = _status_reason(str(member["状态"]))
     time_records = {
         field: {
@@ -186,7 +186,7 @@ def _build_row(member: Mapping[str, Any], scale: str, batch_id: str, source_batc
         "精确合约": member.get("精确合约", "未知"),
         "数据对象": member.get("数据对象", "未知"),
         "事件类型": "未知（未读取业务记录）",
-        "主研究尺度": scale,
+        "主研究尺度": list(SCALES),
         "结果观察窗口": list(OBSERVATION_WINDOWS),
         "来源身份批次": source_batch,
         "来源身份合同版本": SOURCE_CONTRACT_VERSION,
@@ -213,7 +213,7 @@ def _build_row(member: Mapping[str, Any], scale: str, batch_id: str, source_batc
 
 
 def _counts(rows: Sequence[Mapping[str, Any]], target: str | None = None, scale: str | None = None) -> dict[str, int]:
-    selected = [row for row in rows if (target is None or row["标的"] == target) and (scale is None or row["主研究尺度"] == scale)]
+    selected = [row for row in rows if (target is None or row["标的"] == target) and (scale is None or scale in row["主研究尺度"])]
     source_rejected = sum(1 for row in selected if row["来源身份状态"] == "拒绝")
     return {
         "候选总体": len(selected),
@@ -254,12 +254,12 @@ def validate_manifest(path: Path) -> dict[str, Any]:
     if manifest.get("合同版本") != CONTRACT_VERSION or manifest.get("任务编号") != TASK_ID:
         raise ValueError("批次版本或任务编号漂移")
     rows = manifest.get("成员顺序")
-    if not isinstance(rows, list) or manifest.get("分组行数") != len(rows):
+    if not isinstance(rows, list) or manifest.get("分组成员数") != len(rows):
         raise ValueError("批次成员清单计数不一致")
-    if rows != sorted(rows, key=lambda row: (str(row["标的"]), str(row["资产编号"]), str(row["成员编号"]), str(row["主研究尺度"]))):
+    if rows != sorted(rows, key=lambda row: (str(row["标的"]), str(row["资产编号"]), str(row["成员编号"]))):
         raise ValueError("批次成员顺序不确定")
     for row in rows:
-        if row.get("标的") not in TARGETS or row.get("主研究尺度") not in SCALES or row.get("结果观察窗口") != list(OBSERVATION_WINDOWS):
+        if row.get("标的") not in TARGETS or row.get("主研究尺度") != list(SCALES) or row.get("结果观察窗口") != list(OBSERVATION_WINDOWS):
             raise ValueError("批次出现越权标的或尺度")
         content = dict(row)
         fingerprint = content.pop("内容指纹", None)
@@ -302,8 +302,8 @@ def execute_batch(
     task_path = _resolve(TASK_PATH, repo_root)
     contract_bytes = _read(contract_path, "三类时间与可见性复采合同")
     executor_path = Path(__file__).resolve()
-    rows_seed = [_build_row(member, scale, "pending", identity["来源身份批次"]) for member in identity["成员顺序"] for scale in SCALES]
-    rows_seed = sorted(rows_seed, key=lambda row: (row["标的"], row["资产编号"], row["成员编号"], row["主研究尺度"]))
+    rows_seed = [_build_row(member, "pending", identity["来源身份批次"]) for member in identity["成员顺序"]]
+    rows_seed = sorted(rows_seed, key=lambda row: (row["标的"], row["资产编号"], row["成员编号"]))
     # 批次身份只依赖冻结输入和规则，不依赖生成时间；pending行中的批次字段在载荷前统一替换。
     payload_seed = {
         "合同版本": CONTRACT_VERSION,
@@ -358,7 +358,7 @@ def execute_batch(
         "主研究尺度": list(SCALES),
         "事后结果观察窗口": list(OBSERVATION_WINDOWS),
         "成员总数": len(identity["成员顺序"]),
-        "分组行数": len(rows),
+        "分组成员数": len(rows),
         "成员顺序": rows,
         "清单内容SHA-256": rows_sha,
         "按标的状态计数": by_target,
@@ -404,7 +404,7 @@ def execute_batch(
         (staging / "三类时间与可见性清单.csv").write_text(csv_text, encoding="utf-8", newline="")
         engine._scan_outputs([staging / "三类时间与可见性清单.json", staging / "三类时间与可见性清单.csv"])
         engine.atomic_publish_directory_no_replace(staging, target)
-    print(json.dumps({"状态": "成功", "批次": batch_id, "成员总数": len(identity["成员顺序"]), "分组行数": len(rows), "结果摘要": manifest["结果摘要"]}, ensure_ascii=False, sort_keys=True))
+    print(json.dumps({"状态": "成功", "批次": batch_id, "成员总数": len(identity["成员顺序"]), "分组成员数": len(rows), "结果摘要": manifest["结果摘要"]}, ensure_ascii=False, sort_keys=True))
     return target
 
 
