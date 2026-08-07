@@ -1,0 +1,46 @@
+{
+  "任务-000069": {
+    "合并提交SHA": "7c3a09cbae3d6040ca8a975e88baa1a3608a86e0",
+    "任务文件SHA-256": "72141a90fd0e465d01b77c00ddf0039186e6492232fef90ac6ecc66d6bdd512b",
+    "批次文件SHA-256": {
+      "artifacts/审计/远程只读身份/remote-ro-identity-20260806T092200Z-v10/批次元数据.json": "4cfb2f17b7c657032662bbbaa6674aad37fa58cd909872fc619a4905dad7184e",
+      "artifacts/审计/远程只读身份/remote-ro-identity-20260806T092200Z-v10/账户授权事实.json": "74407fdecc0f885e56970483304b570e1b7d07da2e6d6fe4c1171fa0fbd6097b",
+      "artifacts/审计/远程只读身份/remote-ro-identity-20260806T092200Z-v10/wrapper-stat.json": "14868633001fd7e37c3749a2becbe0dc9888360d243ae29a4d84e83e9570cc1a"
+    }
+  },
+  "任务-000070": {
+    "合并提交SHA": "3363b3a55d841470c574d6d3bfa8d53e81ce01ba",
+    "任务文件SHA-256": "6aea700f5daef0ea978f742fabbed6e40fff225b99d87d3292f6ba65b0ac3e2c",
+    "批次文件SHA-256": {
+      "artifacts/审计/Ubuntu未完整扫描对象正文质量复验/批次-20260806T131956Z-v3/批次元数据.json": "f5447f41084eb88162d671249d0d9d5539f8111856e9a8292dfa60ffab8a2535",
+      "artifacts/审计/Ubuntu未完整扫描对象正文质量复验/批次-20260806T131956Z-v3/对象结果.json": "52dc11174852b69cda065afbe7dbe19ad80d36b5b1f5b4340a4eeb954ebc1485",
+      "artifacts/审计/Ubuntu未完整扫描对象正文质量复验/批次-20260806T131956Z-v3/状态摘要.json": "03f8448d6dd8424450d92ac65796da502b2fb17db975f3325c935f1afea665a3"
+    }
+  },
+  "任务-000071": {
+    "合并提交SHA": "fd8fafab8d71dd94b575c3a4b5f679a9f654b959",
+    "任务文件SHA-256": "f7576c6eaeecd23658872b698878b79ad2a92e30d7dadaa3b947e65c4c9bdaf7",
+    "批次文件SHA-256": {
+      "artifacts/审计/订单簿共享对象映射/批次-20260806T154636Z-v5/批次元数据.json": "b6261c07ace98fc735ed5e581cf1f470b85dc8525ad3acda04f5a8fb69460e07",
+      "artifacts/审计/订单簿共享对象映射/批次-20260806T154636Z-v5/对象结果.json": "730ad2f599fbf1f9cbd2610efbf4c236a62e84a5e07039cd1c1d36187f2d3725",
+      "artifacts/审计/订单簿共享对象映射/批次-20260806T154636Z-v5/状态摘要.json": "dd5a13b053b53ac01216d3f63c909113c1808df4a499989d4ea18c53169aa5a1",
+      "artifacts/审计/订单簿共享对象映射/源代码合同.json": "817be170438d94193e91146b1f73b4fff1d295b3f98c6448cf02240a5d15a158"
+    }
+  },
+  "任务-000072": {
+    "合并提交SHA": "42243b61f773ff90f204d418f59ad216c9b64f09",
+    "任务文件SHA-256": "4cebe471fe54163fcd5397060258c7f73ccad5a790f7211953730a6b0523f880",
+    "批次文件SHA-256": {
+      "artifacts/数据/来源身份复采/source-identity-recapture-20260807T132937+0800-bc866b5c5cdb/身份清单.json": "ae28fb6d3a499eabd1e6f52fea1b2283307fdea4b16e3fc1db91346517f1d225",
+      "artifacts/数据/来源身份复采/source-identity-recapture-20260807T132937+0800-bc866b5c5cdb/来源身份清单.csv": "63d0a2446a4348c53245827865b804477da8037a77adaf1bc68e1980c4619a07"
+    }
+  },
+  "任务-000073": {
+    "合并提交SHA": "3320d3f688bad346fd158bc3989996040cb4f3d5",
+    "任务文件SHA-256": "402760d4eadd03aced30d19931e94b021e28db513e9eed74d4df3e223f59a8e2",
+    "批次文件SHA-256": {
+      "artifacts/数据/三类时间与可见性/time-visibility-recapture-20260807T145215+0800-81d077ed7db5/三类时间与可见性清单.json": "6d639dd1c04123d4d537add662b20e7bc01a7528136923851e90daf907a19ce0",
+      "artifacts/数据/三类时间与可见性/time-visibility-recapture-20260807T145215+0800-81d077ed7db5/三类时间与可见性清单.csv": "855ca9a21f2a81bc4d7229c0673c715c31e9037d8d6c5d4ac332d597fe7a4d4f"
+    }
+  }
+}
