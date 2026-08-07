@@ -13,7 +13,7 @@
     {"用途": "资产清单", "路径": "artifacts/审计/数据源清单.csv", "SHA-256": "019010d64fe47d89c81bfaedafd458f1d886025bb34292c0c32eafcfa4392657"},
     {"用途": "任务合同", "路径": "docs/研发中心/任务/任务-000079.md", "SHA-256": "ed921623f03317d35dfa469a324269f30d1c29bd9aa970c1498719dec502460c"},
     {"用途": "设计合同", "路径": "docs/superpowers/specs/task-000079-source-identity-declaration-design.md", "SHA-256": "eb0142f4de4ac5ebdf760043c4e0b8450908abdcc0edc9287f47f5cc61e0a2ec"},
-    {"用途": "来源身份总合同", "路径": "config/数据/数据来源与资产身份.json", "SHA-256": "a3009bdae0af5ccc5b019d2aee4b012322047faf2c5627c7619c441a281017da"}
+    {"用途": "来源身份总合同", "路径": "config/数据/数据来源与资产身份.json", "SHA-256": "06de1be65448cff836aed748b7a0546b927c321e087e355824ab55c92d79f646"}
   ],
   "安全边界": {
     "远端写入": false,
