@@ -62,7 +62,7 @@
       "路径": "artifacts/审计/数据源清单.csv"
     },
     {
-      "SHA-256": "812f89853e5921d5f415b698f339aa1a8b984af8408bd334d279e2c70cabaf38",
+      "SHA-256": "7f4df93c8ef55b8cd072397afaa7148371bdfeeae4a77d9f78d5c3b53c576b13",
       "用途": "历史来源身份合同",
       "路径": "config/数据/数据来源与资产身份.json"
     },
