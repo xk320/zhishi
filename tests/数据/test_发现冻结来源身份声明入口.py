@@ -104,13 +104,14 @@ class DiscoverSourceIdentityEntryTests(unittest.TestCase):
 
     def test_execute_empty_probe_is_append_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            target = MODULE.execute_batch(batch_root=Path(directory), runner=lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=json.dumps(empty_probe(), ensure_ascii=False), stderr=""))
+            frozen = MODULE.dt.datetime(2026, 1, 1, tzinfo=MODULE.dt.timezone.utc)
+            target = MODULE.execute_batch(batch_root=Path(directory), now=frozen, runner=lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=json.dumps(empty_probe(), ensure_ascii=False), stderr=""))
             manifest = json.loads((target / "批次清单.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["结果摘要"]["候选成员总体"], 630)
             self.assertEqual(manifest["结果摘要"]["已证明"], 0)
             self.assertEqual(manifest["结果摘要"]["分标的"]["BTC"]["最终状态计数"]["拒绝"], 6)
             with self.assertRaises(FileExistsError):
-                MODULE.execute_batch(batch_root=Path(directory), runner=lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=json.dumps(empty_probe(), ensure_ascii=False), stderr=""))
+                MODULE.execute_batch(batch_root=Path(directory), now=frozen, runner=lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=json.dumps(empty_probe(), ensure_ascii=False), stderr=""))
 
     def test_sensitive_candidate_is_rejected(self) -> None:
         _manifest, members = MODULE.load_members()
