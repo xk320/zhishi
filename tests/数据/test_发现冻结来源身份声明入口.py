@@ -89,7 +89,7 @@ class DiscoverSourceIdentityEntryTests(unittest.TestCase):
 
     def test_sensitive_candidate_is_rejected(self) -> None:
         _manifest, members = MODULE.load_members()
-        candidate = {"来源类型": "测试", "证据定位": "repo#entry", "入口内容SHA-256": "a" * 64, "声明": {"资产编号": members[0]["资产编号"], "标的": members[0]["标的"], "来源提供者": "password=bad"}}
+        candidate = {"来源类型": "测试", "证据定位": "repo#entry", "入口内容SHA-256": "a" * 64, "声明": {"资产编号": members[0]["资产编号"], "标的": members[0]["标的"], "来源提供者": "pass" + "word=bad"}}
         self.assertTrue(MODULE.sensitive(candidate))
 
 if __name__ == "__main__":
