@@ -36,6 +36,7 @@ SOURCE_CONFIGS = (ROOT / "config/数据/数据来源与资产身份.json", ROOT 
 TARGETS = ("BTC", "ETH")
 IDENTITY_FIELDS = ("来源提供者", "交易场所", "市场类型", "标的身份", "精确合约", "数据对象", "Schema确切版本", "授权边界", "字段中文映射")
 EVIDENCE_FIELDS = ("成员编号", "资产编号", "输入成员SHA-256", "声明版本", "声明内容SHA-256", "Schema指纹", "授权快照SHA-256", "撤销事实", "证据定位")
+DECLARATION_FIELDS = frozenset((*IDENTITY_FIELDS, "标的", *EVIDENCE_FIELDS, "任务合同版本", "采集时间"))
 FINAL_STATES = ("已证明", "拒绝", "无法判定", "失败", "未成熟", "失效")
 ENTRY_STATES = ("未登记", "入口不完整", "已登记")
 LOCATABLE_STATES = ("已定位", "不可定位")
@@ -161,10 +162,6 @@ def normalize_candidate(raw: object, source: str, location: str, entrance_sha: s
     if not isinstance(raw, dict) or sensitive(raw) or sensitive(location):
         return None
     declaration = dict(raw)
-    if asset_id and not declaration.get("资产编号"):
-        declaration["资产编号"] = asset_id
-    if "声明内容SHA-256" not in declaration:
-        declaration["声明内容SHA-256"] = fp({key: value for key, value in declaration.items() if key != "声明内容SHA-256"})
     return {"来源类型": source, "证据定位": location, "入口内容SHA-256": entrance_sha, "声明": declaration}
 
 
@@ -224,7 +221,6 @@ def build_probe_script(assets: Sequence[Mapping[str, str]], config: Mapping[str,
             if SAFE.search(text):
                 return None
             item = dict(value)
-            item.setdefault("声明内容SHA-256", fp({{k: v for k, v in item.items() if k != "声明内容SHA-256"}}))
             return item
         candidates = []
         counts = {{asset["资产编号"]: {{\"file\": 0, \"db\": 0}} for asset in ASSETS}}
@@ -343,10 +339,31 @@ def matching(candidates: Sequence[Mapping[str, Any]], row: Mapping[str, str]) ->
 
 def complete(candidate: Mapping[str, Any], row: Mapping[str, str]) -> tuple[bool, list[str]]:
     declaration = candidate.get("声明", {})
-    missing = [
+    missing: list[str] = []
+    if set(declaration) != DECLARATION_FIELDS:
+        missing.extend(f"声明字段越界:{field}" for field in sorted(set(declaration).difference(DECLARATION_FIELDS)))
+        missing.extend(f"声明字段缺失:{field}" for field in sorted(DECLARATION_FIELDS.difference(declaration)))
+    entrance_sha = str(candidate.get("入口内容SHA-256", ""))
+    if not SHA256.fullmatch(entrance_sha):
+        missing.append("入口内容SHA-256")
+    candidate_location = str(candidate.get("证据定位", "")).strip()
+    if not candidate_location:
+        missing.append("入口唯一定位")
+    if declaration.get("证据定位") != candidate_location:
+        missing.append("证据定位绑定")
+    if declaration.get("任务合同版本") != CONTRACT_VERSION:
+        missing.append("任务合同版本")
+    collection_time = str(declaration.get("采集时间", "")).strip()
+    try:
+        parsed_time = dt.datetime.fromisoformat(collection_time)
+        if parsed_time.tzinfo is None or parsed_time.utcoffset() is None or parsed_time > dt.datetime.now(parsed_time.tzinfo):
+            missing.append("采集时间")
+    except (TypeError, ValueError):
+        missing.append("采集时间")
+    missing.extend(
         field for field in (*IDENTITY_FIELDS, *EVIDENCE_FIELDS)
         if not str(declaration.get(field, "")).strip() or str(declaration.get(field)).strip() == "未知"
-    ]
+    )
     for field in ("输入成员SHA-256", "声明内容SHA-256", "Schema指纹", "授权快照SHA-256"):
         if not SHA256.fullmatch(str(declaration.get(field, ""))) and field not in missing:
             missing.append(field)
@@ -448,21 +465,26 @@ def execute_batch(config_path: Path = CONFIG_PATH, batch_root: Path = DEFAULT_BA
     previous_manifest, members = load_members()
     inventory = load_inventory()
     candidates = load_local_candidates()
+    task_path = ROOT / "docs/研发中心/任务/任务-000082.md"
+    executor_path = Path(__file__)
+    frozen_task_hash = sha_path(task_path)
+    frozen_executor_hash = sha_path(executor_path)
     probe = run_probe(build_probe_script(inventory, config), config, runner)
+    if sha_path(task_path) != frozen_task_hash or sha_path(executor_path) != frozen_executor_hash:
+        raise RuntimeError("执行期间任务合同或执行器发生漂移")
     candidates.extend(item for item in probe["候选"] if isinstance(item, dict))
     frozen = now or dt.datetime.now().astimezone()
     if frozen.tzinfo is None or frozen.utcoffset() is None:
         raise ValueError("冻结时间必须带时区")
     config_hash = sha_path(config_path)
     rules_hash = fp({"合同版本": CONTRACT_VERSION, "探针版本": PROBE_VERSION, "身份字段": list(IDENTITY_FIELDS), "状态": list(FINAL_STATES), "入口状态": list(ENTRY_STATES)})
-    executor_hash = sha_path(Path(__file__))
+    executor_hash = frozen_executor_hash
     member_hash = fp(members)
     probe_hash = fp(probe)
     batch_id = "source-identity-entry-discovery-" + frozen.strftime("%Y%m%dT%H%M%S%z") + "-" + fp({"配置": config_hash, "成员": member_hash, "探针": probe_hash})[:12]
     rows, summary = build_rows(members, candidates, batch_id, rules_hash, executor_hash)
     csv_text = render_csv(rows)
     candidate_text = json.dumps(candidates, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
-    task_path = ROOT / "docs/研发中心/任务/任务-000082.md"
     batch_manifest = {
         "合同版本": CONTRACT_VERSION, "任务编号": TASK_ID, "批次": batch_id, "冻结时间": frozen.isoformat(timespec="microseconds"),
         "成员顺序SHA-256": member_hash, "探针SHA-256": probe_hash, "配置SHA-256": config_hash, "规则SHA-256": rules_hash, "执行器SHA-256": executor_hash,
@@ -506,6 +528,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--batch-root", type=Path, default=DEFAULT_BATCH_ROOT)
     try:
         args = parser.parse_args(argv)
+        resolved_batch_root = args.batch_root.resolve()
+        default_root = DEFAULT_BATCH_ROOT.resolve()
+        if resolved_batch_root != default_root and default_root not in resolved_batch_root.parents:
+            raise ValueError("批次输出目录必须位于仓库固定artifacts目录")
         execute_batch(args.config, args.batch_root)
         return 0
     except (FileExistsError, OSError, RuntimeError, TypeError, ValueError, json.JSONDecodeError):

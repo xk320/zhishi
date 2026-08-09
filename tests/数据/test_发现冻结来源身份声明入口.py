@@ -77,6 +77,31 @@ class DiscoverSourceIdentityEntryTests(unittest.TestCase):
         self.assertEqual(result["入口状态"], "入口不完整")
         self.assertEqual(result["最终身份状态"], "拒绝")
 
+    def test_complete_requires_strict_binding_fields(self) -> None:
+        _manifest, members = MODULE.load_members()
+        row = members[0]
+        declaration = {field: "value" for field in MODULE.DECLARATION_FIELDS}
+        declaration.update({
+            "标的": row["标的"],
+            "资产编号": row["资产编号"],
+            "成员编号": row["成员编号"],
+            "输入成员SHA-256": row["输入成员SHA-256"],
+            "任务合同版本": MODULE.CONTRACT_VERSION,
+            "采集时间": "2020-01-01T00:00:00+00:00",
+            "证据定位": "repo#entry",
+            "撤销事实": "有效",
+            "Schema指纹": "b" * 64,
+            "授权快照SHA-256": "c" * 64,
+        })
+        declaration["声明内容SHA-256"] = MODULE.fp({key: value for key, value in declaration.items() if key != "声明内容SHA-256"})
+        candidate = {"来源类型": "测试", "证据定位": "repo#entry", "入口内容SHA-256": "a" * 64, "声明": declaration}
+        ok, missing = MODULE.complete(candidate, row)
+        self.assertTrue(ok, missing)
+        declaration["未登记字段"] = "不应被接受"
+        ok, missing = MODULE.complete(candidate, row)
+        self.assertFalse(ok)
+        self.assertIn("声明字段越界:未登记字段", missing)
+
     def test_execute_empty_probe_is_append_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target = MODULE.execute_batch(batch_root=Path(directory), runner=lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=json.dumps(empty_probe(), ensure_ascii=False), stderr=""))
