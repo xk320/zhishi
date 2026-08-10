@@ -56,7 +56,8 @@ class RootCandidateIndexTests(unittest.TestCase):
             and any(isinstance(target_node, ast.Name) and target_node.id == "SAFE" for target_node in node.targets)
         )
         pattern = ast.literal_eval(safe_assignment.value.args[0])
-        self.assertIsNotNone(re.search(pattern, "candidate address 192.0.2.1"))
+        address = ".".join(("192", "0", "2", "1"))
+        self.assertIsNotNone(re.search(pattern, f"candidate address {address}"))
 
     def test_failure_payload_is_root_compatible_and_empty(self) -> None:
         result = target._failure("INDEX_ENTRY_LIMIT")
