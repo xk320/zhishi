@@ -3636,6 +3636,75 @@ class GitPathFactIntegrationTests(unittest.TestCase):
             conflict_check.call_args.kwargs["task_id"],
         )
 
+    def test_cliroot合同修复按固定映射加载目标任务(self):
+        metadata_path = self.repo / "root-target-load.json"
+        metadata_path.write_text(
+            json.dumps(
+                {
+                    "body": (
+                        "## 关联任务\n\n- 任务-000086\n\n"
+                        "## 变更类型\n\n- 阻塞任务合同修复\n"
+                    ),
+                    "base_ref": "main",
+                    "repository": "xk320/zhishi",
+                    "head_repository": "xk320/zhishi",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        arguments = SimpleNamespace(
+            repo_root=self.repo,
+            base_ref="base",
+            head_ref="head",
+            metadata=metadata_path,
+        )
+        facts = (
+            self.policy.PathFact(
+                path="docs/研发中心/任务/任务-000086.md",
+                status="M",
+                mode="100644",
+                object_type="blob",
+                size=4,
+                text="safe",
+            ),
+        )
+        loaded_ids = []
+
+        def load_tasks(_repo, _ref, task_ids):
+            loaded_ids.append(tuple(task_ids))
+            return {}
+
+        output = io.StringIO()
+        with (
+            mock.patch.object(self.policy, "_parse_arguments", return_value=arguments),
+            mock.patch.object(self.policy, "_load_path_facts", return_value=facts),
+            mock.patch.object(
+                self.policy,
+                "_load_ref_task_ids",
+                return_value=("000086",),
+            ),
+            mock.patch.object(self.policy, "_load_ref_tasks", side_effect=load_tasks),
+            mock.patch.object(
+                self.policy,
+                "evaluate_eligibility",
+                return_value=self.policy.EligibilityResult(True, ()),
+            ),
+            mock.patch.object(
+                self.policy,
+                "_cross_carrier_conflict_reasons",
+                return_value=(),
+            ),
+            redirect_stdout(output),
+        ):
+            return_code = self.policy.main()
+
+        self.assertEqual(0, return_code)
+        self.assertEqual(
+            [("000084", "000086"), ("000084", "000086")],
+            loaded_ids,
+        )
+
     def test_cli任务合同冲突修复将执行任务传给跨载体检查(self):
         metadata_path = self.repo / "contract-conflict-repair.json"
         metadata_path.write_text(
