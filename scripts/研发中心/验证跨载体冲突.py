@@ -62,9 +62,12 @@ ROOT_READONLY_CONTRACT_REPAIR_TARGET = "000084"
 ROOT_READONLY_COMPAT_SECTION = """## Ubuntu root只读兼容模式（受控合同修复）
 
 - 适用条件：仅当逻辑别名`ubuntu`实际UID为0且专用只读UID=1001不可用时启用；root与专用只读身份不等价，必须在批次证据中记录uid=0和访问模式。
-- 固定目标：只允许逻辑别名`ubuntu`和任务-000085白名单根目录；只允许固定候选文件名、合同登记字段和版本化固定探针协议。
+- 固定目标：只允许逻辑别名`ubuntu`；固定根目录为`/opt/binance-event`、`/opt/celueqing`、`/opt/crypto-radar`、`/opt/event-prob-lab`、`/opt/orderbook-intelligence-service`、`/var/lib/mysql`。
+- 固定候选文件名：`contracts.sqlite3`、`contracts.db`、`contracts.csv`、`contracts_hand.csv`、`contract.csv`、`contract_metadata.csv`、`exchangeInfo.json`、`exchange_info.json`；允许格式仅为`csv`、`json`、`sqlite3`、`db`，不跟随符号链接并排除`/proc`、`/sys`、`/dev`、`/run`、`/tmp`、`/var/tmp`。
+- 固定探针：协议`zhishi-binance-contract-probe/1`；SSH参数和标准输入命令固定为`ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=5 -o ServerAliveCountMax=1 ubuntu python3 -`，禁止任意shell、参数或命令替换。
 - 只读边界：远端命令必须由固定探针生成；禁止任意shell/参数、远端写入、追加、临时文件、DDL、chmod/chown、权限/服务/防火墙变更。
 - 数据边界：禁止凭据、环境变量、原始业务记录、价格、成交、订单簿、账户和未登记路径；只保留脱敏元数据、字段、计数、指纹、退出码和资源事实。
+- 固定资源上限：批次总超时=900秒、SSH连接超时=15秒、最大候选文件数=4096、最大候选文件字节=16777216、最大API响应字节=16777216、最大输出字节=33554432、最大日志字节=65536；证据字段固定为`uid`、`gid`、`访问模式`、`协议`、`扫描完整`、`失败安全`、`失败原因代码`、`失败原因指纹`、`扫描文件数`、`候选文件数`、`候选路径指纹`、`候选字段摘要`、`Schema指纹`、`退出码`、`资源事实`。
 - 失败安全：身份、路径、协议、权限、计数、指纹、超时或资源超限任一异常时清空候选并记录失败原因指纹，不将root结果标记为专用只读证明。
 - 资源与回滚：沿用任务-000085资源上限；本模式不允许远端追加，批次仅本地追加式发布；撤销本合同修复不会修改Ubuntu、数据库、原始数据或历史批次。"""
 DEPENDENCY_PATTERN = re.compile(r"任务-(\d{6})")
@@ -1168,6 +1171,58 @@ def _check_task_execution_metadata(
     task_branch = _field(BRANCH_PATTERN, text)
     task_started = _field(START_PATTERN, text)
     head_branch = metadata.get("head_ref")
+    if (
+        change_type == "阻塞任务合同修复"
+        and task_id == ROOT_READONLY_CONTRACT_REPAIR_EXECUTOR
+    ):
+        # 任务-000086是已完成的授权执行任务。后续PR只修复任务-000084
+        # 合同，不能把源任务的历史执行分支/PR错误绑定到新的修复PR；
+        # 源任务的逐字不变和已完成状态由自动合并资格校验器另行复算。
+        if status != "已完成":
+            conflicts.append(
+                _conflict(
+                    "TASK_CONTRACT_CONFLICT",
+                    path,
+                    authority="root兼容合同修复源任务",
+                    decision="失败关闭",
+                    repair_mode="禁止使用未完成授权任务",
+                    release_condition="先完成任务-000086并保持其历史合同不变",
+                )
+            )
+        if not task_branch:
+            conflicts.append(
+                _conflict(
+                    "TASK_CONTRACT_CONFLICT",
+                    path,
+                    authority="任务文件执行元数据",
+                    decision="失败关闭",
+                    repair_mode="禁止缺少源任务执行分支",
+                    release_condition="补齐任务-000086历史执行分支",
+                )
+            )
+        if not task_started:
+            conflicts.append(
+                _conflict(
+                    "TASK_CONTRACT_CONFLICT",
+                    path,
+                    authority="任务文件执行元数据",
+                    decision="失败关闭",
+                    repair_mode="禁止缺少源任务开始时间",
+                    release_condition="补齐任务-000086历史开始时间",
+                )
+            )
+        if not _field(PR_PATTERN, text):
+            conflicts.append(
+                _conflict(
+                    "TASK_CONTRACT_CONFLICT",
+                    path,
+                    authority="任务文件Pull Request元数据",
+                    decision="失败关闭",
+                    repair_mode="禁止缺少源任务PR证据",
+                    release_condition="补齐任务-000086历史PR引用",
+                )
+            )
+        return
     if status in {"执行中", "待评审", "需修复", "已完成"} and not task_branch:
         conflicts.append(
             _conflict(

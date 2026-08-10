@@ -168,11 +168,21 @@ NUL/控制字符、私钥、令牌、明文密码、真实账户标识、未经�
    在基线和头部保持`阻塞`，且只能把可信规则固定的完整“Ubuntu root只读兼容模式”段落追加
    到合同末尾；看板必须逐字不变，不允许用空提交制造状态变化。
 
-第二条段落必须明确UID=0不等于专用只读UID=1001、固定逻辑目标/路径/候选/协议、禁止任意
-shell/参数、远端写入/追加/DDL/chmod/chown、凭据/环境变量/业务正文读取、资源上限和失败
-安全；root兼容不授予数据库、生产或交易能力。任何错目标、多字段、状态迁移、段落内容漂移、
-看板漂移、生产/数据路径或未知变更类型均失败关闭；普通任务交付、状态闭环和任务登记规则不
-受该入口放宽影响。
+第二条段落必须明确UID=0不等于专用只读UID=1001。固定目标仅为逻辑别名`ubuntu`；固定根目录为
+`/opt/binance-event`、`/opt/celueqing`、`/opt/crypto-radar`、`/opt/event-prob-lab`、
+`/opt/orderbook-intelligence-service`、`/var/lib/mysql`；固定候选文件名为
+`contracts.sqlite3`、`contracts.db`、`contracts.csv`、`contracts_hand.csv`、`contract.csv`、
+`contract_metadata.csv`、`exchangeInfo.json`、`exchange_info.json`，格式仅为`csv`、`json`、
+`sqlite3`、`db`。固定探针协议为`zhishi-binance-contract-probe/1`，命令为
+`ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=5 -o ServerAliveCountMax=1`
+`ubuntu python3 -`；
+固定资源为900秒批次、15秒SSH连接、4096个候选文件、16777216字节候选文件、16777216字节API响应、
+33554432字节输出和65536字节日志。证据字段固定为uid、gid、访问模式、协议、扫描完整、失败安全、
+失败原因代码/指纹、扫描/候选计数、候选路径指纹、候选字段摘要、Schema指纹、退出码和资源事实。
+必须禁止任意shell/参数、远端写入/追加/DDL/chmod/chown、凭据/环境变量/业务正文读取，并不跟随符号
+链接、排除`/proc`、`/sys`、`/dev`、`/run`、`/tmp`、`/var/tmp`；异常清空候选并保留失败原因指纹。
+root兼容不授予数据库、生产或交易能力。任何错目标、多字段、状态迁移、段落内容漂移、看板漂移、
+生产/数据路径或未知变更类型均失败关闭；普通任务交付、状态闭环和任务登记规则不受该入口放宽影响。
 
 ### 任务合同冲突修复
 

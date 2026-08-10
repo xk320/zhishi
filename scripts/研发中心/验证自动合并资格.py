@@ -196,9 +196,12 @@ ROOT_READONLY_CONTRACT_REPAIR_TARGET = "000084"
 ROOT_READONLY_COMPAT_SECTION = """## Ubuntu root只读兼容模式（受控合同修复）
 
 - 适用条件：仅当逻辑别名`ubuntu`实际UID为0且专用只读UID=1001不可用时启用；root与专用只读身份不等价，必须在批次证据中记录uid=0和访问模式。
-- 固定目标：只允许逻辑别名`ubuntu`和任务-000085白名单根目录；只允许固定候选文件名、合同登记字段和版本化固定探针协议。
+- 固定目标：只允许逻辑别名`ubuntu`；固定根目录为`/opt/binance-event`、`/opt/celueqing`、`/opt/crypto-radar`、`/opt/event-prob-lab`、`/opt/orderbook-intelligence-service`、`/var/lib/mysql`。
+- 固定候选文件名：`contracts.sqlite3`、`contracts.db`、`contracts.csv`、`contracts_hand.csv`、`contract.csv`、`contract_metadata.csv`、`exchangeInfo.json`、`exchange_info.json`；允许格式仅为`csv`、`json`、`sqlite3`、`db`，不跟随符号链接并排除`/proc`、`/sys`、`/dev`、`/run`、`/tmp`、`/var/tmp`。
+- 固定探针：协议`zhishi-binance-contract-probe/1`；SSH参数和标准输入命令固定为`ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=5 -o ServerAliveCountMax=1 ubuntu python3 -`，禁止任意shell、参数或命令替换。
 - 只读边界：远端命令必须由固定探针生成；禁止任意shell/参数、远端写入、追加、临时文件、DDL、chmod/chown、权限/服务/防火墙变更。
 - 数据边界：禁止凭据、环境变量、原始业务记录、价格、成交、订单簿、账户和未登记路径；只保留脱敏元数据、字段、计数、指纹、退出码和资源事实。
+- 固定资源上限：批次总超时=900秒、SSH连接超时=15秒、最大候选文件数=4096、最大候选文件字节=16777216、最大API响应字节=16777216、最大输出字节=33554432、最大日志字节=65536；证据字段固定为`uid`、`gid`、`访问模式`、`协议`、`扫描完整`、`失败安全`、`失败原因代码`、`失败原因指纹`、`扫描文件数`、`候选文件数`、`候选路径指纹`、`候选字段摘要`、`Schema指纹`、`退出码`、`资源事实`。
 - 失败安全：身份、路径、协议、权限、计数、指纹、超时或资源超限任一异常时清空候选并记录失败原因指纹，不将root结果标记为专用只读证明。
 - 资源与回滚：沿用任务-000085资源上限；本模式不允许远端追加，批次仅本地追加式发布；撤销本合同修复不会修改Ubuntu、数据库、原始数据或历史批次。"""
 BLOCKED_CONTRACT_REPAIR_ALLOWED_PATHS = frozenset(
@@ -1770,7 +1773,9 @@ def _validate_blocked_contract_repair(
             "阻塞任务合同修复必须同时修改执行任务、目标任务和看板",
         )
     for path in changed_paths:
-        if path in required_paths or path in BLOCKED_CONTRACT_REPAIR_ALLOWED_PATHS:
+        if path in required_paths:
+            continue
+        if not root_compat and path in BLOCKED_CONTRACT_REPAIR_ALLOWED_PATHS:
             continue
         pure_path = PurePosixPath(path)
         if (
@@ -3152,7 +3157,18 @@ def main() -> int:
         },
         changed_paths=changed_paths,
         task_id=(
-            BLOCKED_CONTRACT_REPAIR_EXECUTOR
+            next(
+                (
+                    candidate
+                    for candidate in ordered_ids
+                    if candidate
+                    in {
+                        BLOCKED_CONTRACT_REPAIR_EXECUTOR,
+                        ROOT_READONLY_CONTRACT_REPAIR_EXECUTOR,
+                    }
+                ),
+                "",
+            )
             if change_type == BLOCKED_CONTRACT_REPAIR_TYPE
             else CONTRACT_CONFLICT_REPAIR_EXECUTOR
             if change_type == CONTRACT_CONFLICT_REPAIR_TYPE
