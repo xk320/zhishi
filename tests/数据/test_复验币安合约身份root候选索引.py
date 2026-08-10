@@ -286,6 +286,18 @@ class RootCandidateIndexTests(unittest.TestCase):
         }
         self.assertFalse(target._validate_summary(summary, self.config["资源上限"]))
 
+    def test_summary_rejects_unbound_sqlite_schema(self) -> None:
+        summary = {
+            "格式": "sqlite",
+            "表": [{
+                "表名指纹": "not-a-fingerprint",
+                "字段指纹": "b" * 64,
+                "字段映射": {"标的": "symbol"},
+            }],
+            "行": [],
+        }
+        self.assertFalse(target._validate_summary(summary, self.config["资源上限"]))
+
     def _valid_roots(self):
         return [
             {

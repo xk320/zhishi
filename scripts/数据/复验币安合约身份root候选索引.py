@@ -318,6 +318,20 @@ def _validate_summary(summary: object, limits: Mapping[str, int]) -> bool:
         for table in tables:
             if not isinstance(table, dict) or set(table) != {"表名指纹", "字段指纹", "字段映射"}:
                 return False
+            if (
+                not isinstance(table["表名指纹"], str)
+                or not re.fullmatch(r"[0-9a-f]{64}", table["表名指纹"])
+                or not isinstance(table["字段指纹"], str)
+                or not re.fullmatch(r"[0-9a-f]{64}", table["字段指纹"])
+                or not isinstance(table["字段映射"], dict)
+                or set(table["字段映射"]) != set(legacy.CANDIDATE_FIELDS)
+                or any(
+                    not isinstance(value, str) or not value.strip()
+                    for value in table["字段映射"].values()
+                )
+                or len(set(table["字段映射"].values())) != len(legacy.CANDIDATE_FIELDS)
+            ):
+                return False
     for row in rows:
         if not isinstance(row, dict) or set(row) != set(legacy.CANDIDATE_FIELDS) or legacy.sensitive(row):
             return False

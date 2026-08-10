@@ -282,6 +282,14 @@ def run_root_remote_probe(config: Mapping[str, Any]) -> dict[str, Any]:
                         return _root_failure("PROBE_SQLITE_SCHEMA_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
                     if any(not isinstance(table[key], str) or not re.fullmatch(r"[0-9a-f]{64}", table[key]) for key in ("表名指纹", "字段指纹")):
                         return _root_failure("PROBE_SQLITE_FINGERPRINT_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+                    mapping = table["字段映射"]
+                    if (
+                        not isinstance(mapping, dict)
+                        or set(mapping) != set(legacy.CANDIDATE_FIELDS)
+                        or any(not isinstance(value, str) or not value.strip() for value in mapping.values())
+                        or len(set(mapping.values())) != len(legacy.CANDIDATE_FIELDS)
+                    ):
+                        return _root_failure("PROBE_SQLITE_FIELD_MAPPING_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
             elif set(summary) - {"格式", "字段映射", "行", "Schema指纹", "原因代码"}:
                 return _root_failure("PROBE_CONTENT_SCHEMA_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
     except (AttributeError, TypeError, ValueError):
