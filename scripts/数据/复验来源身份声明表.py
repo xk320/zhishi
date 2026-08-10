@@ -286,12 +286,14 @@ def build_probe_script(members: Sequence[Mapping[str, str]], inventory: Sequence
                         raise RuntimeError("候选声明行超过630条上限")
                     declaration = {{field: values[index] for index, field in enumerate(FIELDS)}}
                     member_id = declaration["成员编号"]
-                    if member_id not in member_index or not safe(declaration):
+                    if member_id not in member_index:
                         continue
+                    if not safe(declaration):
+                        raise RuntimeError("候选声明行包含敏感内容")
                     location = "MySQL/" + schema + "/" + table + "#成员编号=" + member_id
                     declaration["证据定位"] = location
                     if not safe(declaration):
-                        continue
+                        raise RuntimeError("候选声明行包含敏感内容")
                     table_entry["候选行数"] += 1
                     candidates.append({{"来源类型": "数据库候选BASE TABLE", "证据定位": location, "入口内容SHA-256": fp({{"表": candidate_table["表"], "Schema指纹": schema_fp}}), "候选Schema指纹": schema_fp, "声明": declaration}})
             except (OSError, subprocess.SubprocessError) as error:

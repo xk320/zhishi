@@ -51,6 +51,8 @@ class VerifySourceIdentityTableTests(unittest.TestCase):
         self.assertIn("LIMIT 631", script)
         self.assertIn("元数据探针返回失败", script)
         self.assertIn("候选声明列探针返回失败", script)
+        self.assertIn("候选声明行包含敏感内容", script)
+        self.assertNotIn("not safe(declaration):\\n                        continue", script)
 
     def test_empty_probe_is_failure_safe_and_append_only(self) -> None:
         config = MODULE.load_config()
