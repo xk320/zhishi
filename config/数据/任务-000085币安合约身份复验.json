@@ -2,6 +2,7 @@
   "合同版本": "binance-contract-identity-recheck-1.0",
   "任务编号": "任务-000085",
   "允许SSH目标": ["ubuntu"],
+  "专用只读UID": 1001,
   "远端候选根目录": [
     "/opt/binance-event",
     "/opt/celueqing",

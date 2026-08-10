@@ -48,9 +48,9 @@ class TestBinanceContractIdentity(unittest.TestCase):
             returncode = 0
             stdout = json.dumps(payload).encode()
 
-        endpoint = {"市场类型": "USDⓈ-M合约", "端点": "https://example.invalid/exchangeInfo"}
+        api_spec = {"市场类型": "USDⓈ-M合约", "端点": "https://fapi.binance.com/fapi/v1/exchangeInfo"}
         with patch.object(module.subprocess, "run", return_value=Response()):
-            snapshot = module.fetch_exchange_info(endpoint, {"最大API响应字节": 16 * 1024 * 1024}, dt.datetime.now(dt.timezone.utc))
+            snapshot = module.fetch_exchange_info(api_spec, {"最大API响应字节": 16 * 1024 * 1024}, dt.datetime.now(dt.timezone.utc))
         self.assertEqual(snapshot["状态"], "通过")
         self.assertEqual([row["symbol"] for row in snapshot["合约"]], ["BTCUSDT"])
         self.assertEqual(snapshot["HTTP状态"], 200)

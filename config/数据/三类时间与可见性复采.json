@@ -22,12 +22,12 @@
     {
       "用途": "阶段1最终审计报告",
       "路径": "docs/审计/阶段1最终审计报告.md",
-      "SHA-256": "d5797c1436c41eab39c75ab77c5aa20d7aa50e7f5c77cf55f89829e7996a252d"
+      "SHA-256": "9ddb9f3589ae108d2b44554ca31005f5c101679bac39729b8a0a669180b91cf9"
     },
     {
       "用途": "ZS-DATA-GAP-002台账基线",
       "路径": "docs/审计/数据缺口与补采清单.md",
-      "SHA-256": "b6de9ae85f6ad79fd449532e32bd7bcf6818ce90ef9e0f3b4f3c6a28b8c96423"
+      "SHA-256": "a732fbbab71cae2501642cdb09abeeefa29b40da1ae0a17bd716285eddad351b"
     },
     {
       "用途": "任务-000072",

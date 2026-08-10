@@ -20,6 +20,7 @@ import sys
 import tempfile
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -64,6 +65,10 @@ FIELD_ALIASES = {
     "授权边界": ("authorization_scope", "access_scope", "授权边界"),
     "字段中文映射": ("field_mapping", "column_mapping", "字段中文映射"),
 }
+FIXED_ENDPOINTS = {
+    "https://fapi.binance.com/fapi/v1/exchangeInfo": "USDⓈ-M合约",
+    "https://dapi.binance.com/dapi/v1/exchangeInfo": "币本位合约",
+}
 
 
 def canonical(value: object) -> str:
@@ -98,7 +103,7 @@ def read_json(path: Path) -> dict[str, Any]:
 def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
     value = read_json(path)
     required = {
-        "合同版本", "任务编号", "允许SSH目标", "远端候选根目录", "Binance公开接口",
+        "合同版本", "任务编号", "允许SSH目标", "专用只读UID", "远端候选根目录", "Binance公开接口",
         "标的", "主研究尺度", "事后结果观察窗口", "候选文件名", "身份字段",
         "资源上限", "安全边界", "远端扫描规则",
     }
@@ -106,6 +111,8 @@ def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
         raise ValueError("任务配置字段或版本漂移")
     if value["允许SSH目标"] != ["ubuntu"] or value["标的"] != list(TARGETS):
         raise ValueError("SSH或标的白名单漂移")
+    if value["专用只读UID"] != 1001:
+        raise ValueError("专用只读身份UID漂移")
     if value["主研究尺度"] != ["4小时", "8小时", "24小时", "48小时"] or value["事后结果观察窗口"] != ["15分钟", "1小时"]:
         raise ValueError("研究尺度漂移")
     if set(value["安全边界"]) != {"远端写入", "远端临时文件", "数据库业务记录读取", "读取环境变量或凭据", "读取价格成交订单簿", "原始业务记录落盘", "修改原始数据", "修改生产系统", "权限或DDL变更"} or any(value["安全边界"].values()):
@@ -120,6 +127,11 @@ def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
         "允许读取候选格式": ["csv", "json", "sqlite3", "db"],
     }:
         raise ValueError("远端扫描规则漂移")
+    endpoints = value["Binance公开接口"]
+    if not isinstance(endpoints, list) or [item.get("端点") for item in endpoints] != list(FIXED_ENDPOINTS):
+        raise ValueError("Binance公开接口端点漂移")
+    if any(item.get("市场类型") != FIXED_ENDPOINTS.get(item.get("端点")) for item in endpoints):
+        raise ValueError("Binance公开接口市场类型漂移")
     return value
 
 
@@ -137,25 +149,28 @@ def load_members(path: Path = MEMBERS_PATH) -> list[dict[str, str]]:
     return rows
 
 
-def fetch_exchange_info(endpoint: Mapping[str, str], limits: Mapping[str, int], now: dt.datetime) -> dict[str, Any]:
-    url = str(endpoint["端点"])
-    command = ["curl", "--http1.1", "--silent", "--show-error", "--fail", "--location", "--connect-timeout", "10", "--max-time", "30", "--user-agent", "zhishi-contract-identity/1.0", url]
+def fetch_exchange_info(api_spec: Mapping[str, str], limits: Mapping[str, int], now: dt.datetime) -> dict[str, Any]:
+    target_uri = str(api_spec["端点"])
+    parsed = urlparse(target_uri)
+    if parsed.scheme != "https" or parsed.netloc not in {"fapi.binance.com", "dapi.binance.com"} or parsed.path not in {"/fapi/v1/exchangeInfo", "/dapi/v1/exchangeInfo"} or parsed.query or parsed.fragment or target_uri not in FIXED_ENDPOINTS:
+        return {"市场类型": api_spec.get("市场类型"), "端点": target_uri, "状态": "失败", "原因代码": "ENDPOINT_NOT_ALLOWLISTED", "观察时间": now.isoformat(), "HTTP状态": None, "响应SHA-256": None, "响应Schema指纹": None, "合约": []}
+    command = ["curl", "--http1.1", "--silent", "--show-error", "--fail", "--location", "--connect-timeout", "10", "--max-time", "30", "--user-agent", "zhishi-contract-identity/1.0", target_uri]
     try:
         completed = subprocess.run(command, capture_output=True, timeout=35, check=False, env={"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "LANG": "C", "LC_ALL": "C"})
         raw = completed.stdout
         status = 200 if completed.returncode == 0 else None
     except (OSError, subprocess.SubprocessError) as error:
-        return {"市场类型": endpoint["市场类型"], "端点": url, "状态": "失败", "原因代码": type(error).__name__, "观察时间": now.isoformat(), "HTTP状态": None, "响应SHA-256": None, "响应Schema指纹": None, "合约": []}
+        return {"市场类型": api_spec["市场类型"], "端点": target_uri, "状态": "失败", "原因代码": type(error).__name__, "观察时间": now.isoformat(), "HTTP状态": None, "响应SHA-256": None, "响应Schema指纹": None, "合约": []}
     if len(raw) > int(limits["最大API响应字节"]):
-        return {"市场类型": endpoint["市场类型"], "端点": url, "状态": "失败", "原因代码": "API_RESPONSE_TOO_LARGE", "观察时间": now.isoformat(), "HTTP状态": status, "响应SHA-256": hashlib.sha256(raw).hexdigest(), "响应Schema指纹": None, "合约": []}
+        return {"市场类型": api_spec["市场类型"], "端点": target_uri, "状态": "失败", "原因代码": "API_RESPONSE_TOO_LARGE", "观察时间": now.isoformat(), "HTTP状态": status, "响应SHA-256": hashlib.sha256(raw).hexdigest(), "响应Schema指纹": None, "合约": []}
     response_sha = hashlib.sha256(raw).hexdigest()
     try:
         payload = json.loads(raw.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError):
-        return {"市场类型": endpoint["市场类型"], "端点": url, "状态": "失败", "原因代码": "API_JSON_INVALID", "观察时间": now.isoformat(), "HTTP状态": status, "响应SHA-256": response_sha, "响应Schema指纹": None, "合约": []}
+        return {"市场类型": api_spec["市场类型"], "端点": target_uri, "状态": "失败", "原因代码": "API_JSON_INVALID", "观察时间": now.isoformat(), "HTTP状态": status, "响应SHA-256": response_sha, "响应Schema指纹": None, "合约": []}
     symbols = payload.get("symbols") if isinstance(payload, dict) else None
     if not isinstance(symbols, list):
-        return {"市场类型": endpoint["市场类型"], "端点": url, "状态": "失败", "原因代码": "API_SYMBOLS_MISSING", "观察时间": now.isoformat(), "HTTP状态": status, "响应SHA-256": response_sha, "响应Schema指纹": fingerprint(payload) if isinstance(payload, dict) else None, "合约": []}
+        return {"市场类型": api_spec["市场类型"], "端点": target_uri, "状态": "失败", "原因代码": "API_SYMBOLS_MISSING", "观察时间": now.isoformat(), "HTTP状态": status, "响应SHA-256": response_sha, "响应Schema指纹": fingerprint(payload) if isinstance(payload, dict) else None, "合约": []}
     selected: list[dict[str, Any]] = []
     for item in symbols:
         if not isinstance(item, dict) or item.get("baseAsset") not in TARGETS:
@@ -168,7 +183,7 @@ def fetch_exchange_info(endpoint: Mapping[str, str], limits: Mapping[str, int], 
         selected.append(allowed)
     selected.sort(key=lambda item: (str(item.get("baseAsset")), str(item.get("symbol"))))
     schema_fingerprint = fingerprint({"顶层字段": sorted(payload), "symbol字段集合": sorted({key for item in symbols if isinstance(item, dict) for key in item})})
-    return {"市场类型": endpoint["市场类型"], "端点": url, "状态": "通过", "原因代码": "", "观察时间": now.isoformat(), "HTTP状态": status, "响应SHA-256": response_sha, "响应Schema指纹": schema_fingerprint, "合约": selected}
+    return {"市场类型": api_spec["市场类型"], "端点": target_uri, "状态": "通过", "原因代码": "", "观察时间": now.isoformat(), "HTTP状态": status, "响应SHA-256": response_sha, "响应Schema指纹": schema_fingerprint, "合约": selected}
 
 
 def _remote_probe_source(config: Mapping[str, Any], deadline_seconds: int) -> str:
@@ -177,10 +192,14 @@ def _remote_probe_source(config: Mapping[str, Any], deadline_seconds: int) -> st
     excluded = json.dumps(config["远端扫描规则"]["排除文件系统"], ensure_ascii=False)
     max_files = int(config["资源上限"]["最大候选文件数"])
     max_size = int(config["资源上限"]["最大候选文件字节"])
+    expected_uid = int(config["专用只读UID"])
+    identity_fields = json.dumps(list(IDENTITY_FIELDS), ensure_ascii=False)
     return f'''import csv, hashlib, io, json, os, pathlib, re, sqlite3, stat, time
 ROOTS={roots}
 NAMES=set({names})
 EXCLUDED=tuple({excluded})
+IDENTITY_FIELDS=tuple({identity_fields})
+EXPECTED_UID={expected_uid}
 MAX_FILES={max_files}
 MAX_SIZE={max_size}
 DEADLINE=time.monotonic()+{int(deadline_seconds)}
@@ -198,6 +217,11 @@ def fields_from_header(header):
         matches=[item for item in header if item in options]
         if len(matches)==1: mapping[logical]=matches[0]
     return mapping
+def failure(reason):
+    print(json.dumps({{"协议":"zhishi-binance-contract-probe/1","扫描UID":os.geteuid(),"扫描GID":os.getegid(),"扫描是否专用只读":False,"扫描完整":False,"失败安全":True,"失败原因代码":reason,"扫描文件数":0,"候选文件数":0,"候选":[],"存储根目录":[],"远端追加":False,"远端临时文件":False,"数据库写入":False,"订单簿读取":False}},ensure_ascii=False,sort_keys=True))
+    raise SystemExit(0)
+if os.geteuid()!=EXPECTED_UID:
+    failure("REMOTE_IDENTITY_NOT_DEDICATED")
 def read_csv_candidate(path):
     result={{"格式":"csv","字段映射":{{}},"行":[]}}
     try:
@@ -207,9 +231,11 @@ def read_csv_candidate(path):
         reader=csv.DictReader(io.StringIO(text))
         header=[str(item) for item in (reader.fieldnames or [])]
         result["字段映射"]=fields_from_header(header)
+        if not set(IDENTITY_FIELDS).issubset(result["字段映射"]):
+            return result|{{"原因代码":"INCOMPLETE_IDENTITY_SCHEMA"}}
         for index,row in enumerate(reader):
             if index>=630: break
-            selected={{key:row.get(value) for key,value in result["字段映射"].items()}}
+            selected={{key:row.get(result["字段映射"][key]) for key in IDENTITY_FIELDS}}
             if not SAFE.search(json.dumps(selected,ensure_ascii=False,sort_keys=True)):
                 result["行"].append(selected)
         result["Schema指纹"]=fp(header)
@@ -225,8 +251,13 @@ def read_json_candidate(path):
         items=payload.get("symbols",payload if isinstance(payload,list) else []) if isinstance(payload,(dict,list)) else []
         if isinstance(items,dict): items=[items]
         for item in items[:630]:
-            if isinstance(item,dict) and not SAFE.search(json.dumps(item,ensure_ascii=False,sort_keys=True)):
-                result["行"].append({{key:item.get(key) for key in ("symbol","pair","contractType","status","baseAsset","quoteAsset","marginAsset") if key in item}})
+            if not isinstance(item,dict): continue
+            mapping=fields_from_header([str(key) for key in item])
+            if not set(IDENTITY_FIELDS).issubset(mapping):
+                continue
+            selected={{key:item.get(mapping[key]) for key in IDENTITY_FIELDS}}
+            if not SAFE.search(json.dumps(selected,ensure_ascii=False,sort_keys=True)):
+                result["行"].append(selected)
         result["Schema指纹"]=fp(sorted(payload) if isinstance(payload,dict) else "list")
     except Exception:
         result["原因代码"]="CANDIDATE_READ_FAILED"
@@ -242,10 +273,10 @@ def read_sqlite_candidate(path):
                 columns=[row[1] for row in connection.execute("PRAGMA table_info(\\\""+table.replace("\\\"","\\\"\\\"")+"\\\")")]
                 mapping=fields_from_header(columns)
                 result["表"].append({{"表名指纹":fp(table),"字段指纹":fp(columns),"字段映射":mapping}})
-                if not mapping or not {{"标的身份","精确合约"}}.issubset(mapping): continue
-                query="SELECT "+",".join("\\\""+mapping[key].replace("\\\"","\\\"\\\"")+"\\\"" for key in mapping)+" FROM \\\""+table.replace("\\\"","\\\"\\\"")+"\\\" LIMIT 630"
+                if not set(IDENTITY_FIELDS).issubset(mapping): continue
+                query="SELECT "+",".join("\\\""+mapping[key].replace("\\\"","\\\"\\\"")+"\\\"" for key in IDENTITY_FIELDS)+" FROM \\\""+table.replace("\\\"","\\\"\\\"")+"\\\" LIMIT 630"
                 for row in connection.execute(query):
-                    result["行"].append({{key:row[index] for index,key in enumerate(mapping)}})
+                    result["行"].append({{key:row[index] for index,key in enumerate(IDENTITY_FIELDS)}})
         finally: connection.close()
     except Exception:
         result["原因代码"]="CANDIDATE_READ_FAILED"
@@ -276,7 +307,9 @@ for root in ROOTS:
             except (OSError,PermissionError): continue
         if time.monotonic()>DEADLINE or visited>=MAX_FILES: break
     if time.monotonic()>DEADLINE or visited>=MAX_FILES: break
-print(json.dumps({{"协议":"zhishi-binance-contract-probe/1","扫描UID":os.geteuid(),"扫描GID":os.getegid(),"扫描是否专用只读":os.geteuid()!=0,"扫描文件数":visited,"候选文件数":len(candidates),"候选":candidates,"存储根目录":roots_seen,"远端追加":False,"远端临时文件":False,"数据库写入":False,"订单簿读取":False}},ensure_ascii=False,sort_keys=True))
+scan_complete=visited<MAX_FILES and time.monotonic()<=DEADLINE
+failure_code="" if scan_complete else ("MAX_CANDIDATE_FILES_REACHED" if visited>=MAX_FILES else "SCAN_TIMEOUT")
+print(json.dumps({{"协议":"zhishi-binance-contract-probe/1","扫描UID":os.geteuid(),"扫描GID":os.getegid(),"扫描是否专用只读":True,"扫描完整":scan_complete,"失败安全":not scan_complete,"失败原因代码":failure_code,"扫描文件数":visited,"候选文件数":len(candidates),"候选":candidates,"存储根目录":roots_seen,"远端追加":False,"远端临时文件":False,"数据库写入":False,"订单簿读取":False}},ensure_ascii=False,sort_keys=True))
 '''
 
 
@@ -300,13 +333,20 @@ def run_remote_probe(config: Mapping[str, Any]) -> dict[str, Any]:
         payload = json.loads(completed.stdout)
     except (TypeError, json.JSONDecodeError) as error:
         raise RuntimeError("Ubuntu候选探针响应非法") from error
-    required = {"协议", "扫描UID", "扫描GID", "扫描是否专用只读", "扫描文件数", "候选文件数", "候选", "存储根目录", "远端追加", "远端临时文件", "数据库写入", "订单簿读取"}
+    required = {"协议", "扫描UID", "扫描GID", "扫描是否专用只读", "扫描完整", "失败安全", "失败原因代码", "扫描文件数", "候选文件数", "候选", "存储根目录", "远端追加", "远端临时文件", "数据库写入", "订单簿读取"}
     if set(payload) != required or payload["协议"] != "zhishi-binance-contract-probe/1":
         raise ValueError("Ubuntu候选探针协议漂移")
     if any(payload[key] is not False for key in ("远端追加", "远端临时文件", "数据库写入", "订单簿读取")):
         raise ValueError("Ubuntu探针越过安全边界")
     if not isinstance(payload["候选"], list) or not isinstance(payload["存储根目录"], list):
         raise ValueError("Ubuntu探针结果类型非法")
+    if payload["扫描是否专用只读"] is not True:
+        if payload["候选"] or payload["扫描文件数"] != 0:
+            raise ValueError("非专用只读身份不得产生候选结果")
+    elif payload["扫描UID"] != int(config["专用只读UID"]):
+        raise ValueError("专用只读身份UID不匹配")
+    if payload["扫描完整"] is not True and payload["失败安全"] is not True:
+        raise ValueError("扫描不完整时必须失败安全")
     if sensitive(payload):
         raise ValueError("Ubuntu探针结果包含敏感信息")
     return payload
@@ -374,18 +414,23 @@ def build_evidence(members: Sequence[Mapping[str, str]], candidates: Sequence[Ma
     return evidence, [{"资产编号": asset_id, "标的": symbol, "成员SHA-256": by_asset[(symbol, asset_id)]["输入成员SHA-256"], "证据记录数": sum(item["资产编号"] == asset_id and item["标的"] == symbol for item in records)} for symbol, asset_id in sorted(verified_members)]
 
 
-def summarize(members: Sequence[Mapping[str, str]], verified: Sequence[Mapping[str, Any]], remote: Mapping[str, Any], api_snapshots: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def summarize(members: Sequence[Mapping[str, str]], verified: Sequence[Mapping[str, Any]], remote: Mapping[str, Any], api_snapshots: Sequence[Mapping[str, Any]], candidates: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
     verified_ids = {(row["标的"], row["资产编号"]) for row in verified}
-    summary: dict[str, Any] = {"候选总体": len(members), "已观察": int(remote.get("候选文件数", 0)), "已证明": len(verified_ids), "拒绝": 0, "无法判定": len(members) - len(verified_ids), "失败": 0, "未成熟": 0, "失效": 0}
+    member_ids = {(str(row["标的"]), str(row["资产编号"])) for row in members}
+    observed_ids = {(str(item.get("字段", {}).get("标的", item.get("字段", {}).get("标的身份", ""))), str(item.get("字段", {}).get("资产编号", ""))) for item in candidates if isinstance(item.get("字段"), Mapping)} & member_ids
+    summary: dict[str, Any] = {"候选总体": len(members), "已观察": len(observed_ids), "已证明": len(verified_ids), "拒绝": 0, "无法判定": len(members) - len(verified_ids), "失败": 0, "未成熟": 0, "失效": 0}
     per_target: dict[str, Any] = {}
     for target in TARGETS:
         rows = [row for row in members if row["标的"] == target]
         count = sum((row["标的"], row["资产编号"]) in verified_ids for row in rows)
-        per_target[target] = {"候选总体": len(rows), "已观察": int(remote.get("候选文件数", 0)), "已证明": count, "拒绝": 0, "无法判定": len(rows) - count, "失败": 0, "未成熟": 0, "失效": 0}
+        per_target[target] = {"候选总体": len(rows), "已观察": sum(1 for item in observed_ids if item[0] == target), "已证明": count, "拒绝": 0, "无法判定": len(rows) - count, "失败": 0, "未成熟": 0, "失效": 0}
     summary["分标的"] = per_target
     summary["计数守恒"] = sum(summary[state] for state in FINAL_STATES) == len(members) and all(sum(item[state] for state in FINAL_STATES) == 315 for item in per_target.values())
     summary["远端扫描UID"] = remote.get("扫描UID")
     summary["远端专用只读"] = remote.get("扫描是否专用只读")
+    summary["扫描完整"] = remote.get("扫描完整")
+    summary["失败安全"] = remote.get("失败安全")
+    summary["失败原因代码"] = remote.get("失败原因代码")
     summary["公开接口成功数"] = sum(item.get("状态") == "通过" for item in api_snapshots)
     summary["ZS-DATA-GAP-001"] = "继续阻塞；仅有精确九字段证据的成员可进入声明输入" if len(verified_ids) < 630 else "按精确成员范围复算"
     return summary
@@ -395,7 +440,7 @@ def render_batch(config: Mapping[str, Any], members: Sequence[Mapping[str, str]]
     contracts = api_contracts(api_snapshots)
     candidates = flatten_candidates(remote)
     evidence, verified = build_evidence(members, candidates, contracts)
-    summary = summarize(members, verified, remote, api_snapshots)
+    summary = summarize(members, verified, remote, api_snapshots, candidates=candidates)
     batch_id = "binance-contract-identity-" + batch_start.strftime("%Y%m%dT%H%M%S%z") + "-" + fingerprint({"任务": TASK_ID, "API": api_snapshots, "远端": remote, "成员": sha_path(MEMBERS_PATH)})[:12]
     target = batch_root / batch_id
     if target.exists() or target.is_symlink():
@@ -409,7 +454,7 @@ def render_batch(config: Mapping[str, Any], members: Sequence[Mapping[str, str]]
         "任务合同SHA-256": sha_path(TASK_PATH),
         "配置SHA-256": sha_path(CONFIG_PATH),
         "公开接口摘要": api_snapshots,
-        "Ubuntu扫描摘要": {key: remote.get(key) for key in ("扫描UID", "扫描GID", "扫描是否专用只读", "扫描文件数", "候选文件数", "存储根目录", "远端追加", "数据库写入", "订单簿读取")},
+        "Ubuntu扫描摘要": {key: remote.get(key) for key in ("扫描UID", "扫描GID", "扫描是否专用只读", "扫描完整", "失败安全", "失败原因代码", "扫描文件数", "候选文件数", "存储根目录", "远端追加", "数据库写入", "订单簿读取")},
         "候选文件摘要": remote.get("候选", []),
         "结果摘要": summary,
         "证据记录数": len(evidence["记录"]),
@@ -445,7 +490,7 @@ def execute(config_path: Path = CONFIG_PATH, batch_root: Path = DEFAULT_BATCH_RO
     start = now or dt.datetime.now().astimezone()
     if start.tzinfo is None or start.utcoffset() is None:
         raise ValueError("冻结时间必须带时区")
-    api_snapshots = [fetch_exchange_info(endpoint, config["资源上限"], start) for endpoint in config["Binance公开接口"]]
+    api_snapshots = [fetch_exchange_info(api_spec, config["资源上限"], start) for api_spec in config["Binance公开接口"]]
     remote = run_remote_probe(config)
     return render_batch(config, members, api_snapshots, remote, start, batch_root)
 
