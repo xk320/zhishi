@@ -312,6 +312,11 @@ class CrossCarrierConflictTests(unittest.TestCase):
     def testroot只读兼容合同修复目标允许追加固定段落(self):
         path = "docs/研发中心/任务/任务-000084.md"
         base_text = (ROOT / path).read_text(encoding="utf-8")
+        # 测试夹具固定为合同修复前基线，避免当前工作树中的待验证段落
+        # 被重复追加后触发“基线已存在”冲突。
+        root_section = CONFLICT.ROOT_READONLY_COMPAT_SECTION.strip()
+        if root_section in base_text:
+            base_text = base_text.split(root_section, 1)[0].rstrip("\n") + "\n"
         head_text = base_text.rstrip("\n") + "\n\n" + CONFLICT.ROOT_READONLY_COMPAT_SECTION.strip() + "\n"
 
         def paths(_repo, _ref):

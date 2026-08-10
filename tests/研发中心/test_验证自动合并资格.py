@@ -1083,6 +1083,11 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         target_base = (
             REPO_ROOT / "docs/研发中心/任务/任务-000084.md"
         ).read_text(encoding="utf-8")
+        # 测试夹具固定为合同修复前的基线；当前工作树可能已包含待验证的
+        # root兼容段落，不能把头部合同误当作基线输入。
+        root_section = self.policy.ROOT_READONLY_COMPAT_SECTION.strip()
+        if root_section in target_base:
+            target_base = target_base.split(root_section, 1)[0].rstrip("\n") + "\n"
         target_head = target_base.rstrip("\n") + "\n\n" + self.policy.ROOT_READONLY_COMPAT_SECTION.strip() + "\n"
         if mutate_target == "status":
             target_head = target_head.replace("- 状态：阻塞", "- 状态：待执行", 1)
