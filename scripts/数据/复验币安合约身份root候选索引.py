@@ -156,6 +156,7 @@ def read_csv_candidate(path):
         for index,row in enumerate(reader):
             if index>=630: return result|{"行":[],"原因代码":"CANDIDATE_ROW_LIMIT_EXCEEDED"}
             selected={key:row.get(result["字段映射"][key]) for key in CANDIDATE_FIELDS}
+            if any(not isinstance(value,str) or not value.strip() for value in selected.values()): return result|{"行":[],"原因代码":"INCOMPLETE_IDENTITY_SCHEMA"}
             if SAFE.search(json.dumps(selected,ensure_ascii=False,sort_keys=True)): return result|{"行":[],"原因代码":"SENSITIVE_CANDIDATE_FIELD"}
             result["行"].append(selected)
         if not result["行"]: return result|{"原因代码":"INCOMPLETE_IDENTITY_SCHEMA"}
@@ -181,6 +182,7 @@ def read_json_candidate(path):
             if first_mapping is None: first_mapping=mapping
             if mapping != first_mapping: missing_schema=True; continue
             selected={key:item.get(mapping[key]) for key in CANDIDATE_FIELDS}
+            if any(not isinstance(value,str) or not value.strip() for value in selected.values()): return result|{"行":[],"原因代码":"INCOMPLETE_IDENTITY_SCHEMA"}
             if SAFE.search(json.dumps(selected,ensure_ascii=False,sort_keys=True)): return result|{"行":[],"原因代码":"SENSITIVE_CANDIDATE_FIELD"}
             result["行"].append(selected)
         if missing_schema or (items and not result["行"]): return result|{"行":[],"原因代码":"INCOMPLETE_IDENTITY_SCHEMA"}
@@ -208,6 +210,7 @@ def read_sqlite_candidate(path):
                 for row in connection.execute(query):
                     if len(result["行"])>=630: return result|{"行":[],"原因代码":"CANDIDATE_ROW_LIMIT_EXCEEDED"}
                     selected={key:row[index] for index,key in enumerate(CANDIDATE_FIELDS)}
+                    if any(not isinstance(value,str) or not value.strip() for value in selected.values()): return result|{"行":[],"原因代码":"INCOMPLETE_IDENTITY_SCHEMA"}
                     if SAFE.search(json.dumps(selected,ensure_ascii=False,sort_keys=True)): return result|{"行":[],"原因代码":"SENSITIVE_CANDIDATE_FIELD"}
                     result["行"].append(selected)
         finally: connection.close()
@@ -316,6 +319,8 @@ def _validate_summary(summary: object, limits: Mapping[str, int]) -> bool:
                 return False
     for row in rows:
         if not isinstance(row, dict) or set(row) != set(legacy.CANDIDATE_FIELDS) or legacy.sensitive(row):
+            return False
+        if any(not isinstance(value, str) or not value.strip() for value in row.values()):
             return False
     return True
 

@@ -258,6 +258,17 @@ class RootCandidateIndexTests(unittest.TestCase):
         self.assertEqual(result[0]["文件"]["上级目录指纹"], legacy.fingerprint("secret-parent"))
         self.assertNotIn("上级目录名", result[0]["文件"])
 
+    def test_summary_rejects_missing_identity_field_values(self) -> None:
+        row = {field: "value" for field in legacy.CANDIDATE_FIELDS}
+        row["精确合约"] = None
+        summary = {
+            "格式": "csv",
+            "字段映射": {field: field for field in legacy.CANDIDATE_FIELDS},
+            "行": [row],
+            "Schema指纹": "b" * 64,
+        }
+        self.assertFalse(target._validate_summary(summary, self.config["资源上限"]))
+
     def _valid_roots(self):
         return [
             {
