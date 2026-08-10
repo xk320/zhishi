@@ -16,7 +16,28 @@
 
 ## 候选表资格
 
-候选表或视图首先只能通过`information_schema.TABLES`和`information_schema.COLUMNS`进行元数据筛选。只有同时具备以下逻辑字段的对象，才允许读取对应声明列；逻辑字段可使用配置中固定的中文或英文别名，别名映射必须冻结并计算Schema指纹：
+候选对象只能是`information_schema.TABLES`中`TABLE_TYPE=BASE TABLE`的表；不接受视图、物化视图、同义词、外部表或无法确认对象类型的对象。候选表首先只能通过`information_schema.TABLES`和`information_schema.COLUMNS`进行元数据筛选。逻辑字段与物理列的映射在本登记PR中冻结，唯一配置来源是本设计文档下表（UTF-8精确匹配；英文别名区分大小写）：
+
+| 逻辑字段 | 允许的物理列别名（仅限以下集合） |
+| --- | --- |
+| 成员编号 | `member_id`、`member_no`、`成员编号`、`成员ID` |
+| 标的身份 | `symbol`、`asset_symbol`、`标的身份`、`标的` |
+| 来源提供者 | `source_provider`、`provider`、`来源提供者` |
+| 交易场所 | `venue`、`exchange`、`交易场所` |
+| 市场类型 | `market_type`、`market`、`市场类型` |
+| 精确合约 | `contract`、`instrument`、`精确合约` |
+| 数据对象 | `data_object`、`dataset`、`数据对象` |
+| Schema确切版本 | `schema_version`、`schema_revision`、`Schema确切版本` |
+| 授权边界 | `authorization_scope`、`access_scope`、`授权边界` |
+| 字段中文映射 | `field_mapping`、`column_mapping`、`字段中文映射` |
+| 声明内容指纹 | `declaration_sha256`、`content_sha256`、`声明内容指纹` |
+| 成员输入指纹 | `member_sha256`、`member_input_sha256`、`成员输入指纹` |
+| Schema指纹 | `schema_sha256`、`schema_fingerprint`、`Schema指纹` |
+| 授权指纹 | `authorization_sha256`、`authorization_fingerprint`、`授权指纹` |
+| 可撤销事实或撤销时间 | `revoked_at`、`revocation_fact`、`撤销时间` |
+| 声明版本或生效版本 | `declaration_version`、`version`、`声明版本` |
+
+每个逻辑字段必须且只能匹配一个物理列；同一物理列不得映射多个逻辑字段，别名冲突、缺失、多重匹配或未知列均失败安全。执行配置必须原样记录上述映射、逻辑字段顺序及其SHA-256；不得在读取元数据或看到结果后新增、删除、重排或择优选择别名。严格签名通过后才允许读取对应声明列，且查询只能使用这16列的固定白名单。
 
 1. 成员编号；
 2. 标的身份；
@@ -35,7 +56,7 @@
 15. 可撤销事实或撤销时间；
 16. 声明版本或生效版本。
 
-上述字段之外的列不得读取、保存或解释。查询必须使用固定列白名单、参数化成员编号和串行资源上限。
+上述字段之外的列不得读取、保存或解释；允许读取的对象仍仅限`BASE TABLE`，不得读取视图定义或底层表。权限不足、对象类型不符、列白名单无法固定或任何`GRANT`需求出现时，Codex不得执行授权变更，必须发布失败安全结果并记录解除条件。查询必须使用固定列白名单、参数化成员编号和串行资源上限。
 
 ## 证据与状态
 
