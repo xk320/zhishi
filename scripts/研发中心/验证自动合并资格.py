@@ -191,6 +191,16 @@ BLOCKED_CONTRACT_REPAIR_TYPE = "阻塞任务合同修复"
 BLOCKED_CONTRACT_REPAIR_EXECUTOR = "000056"
 BLOCKED_CONTRACT_REPAIR_TARGET = "000055"
 BLOCKED_CONTRACT_REPAIR_FIELD = "- 自动合并范围：治理自动化"
+ROOT_READONLY_CONTRACT_REPAIR_EXECUTOR = "000086"
+ROOT_READONLY_CONTRACT_REPAIR_TARGET = "000084"
+ROOT_READONLY_COMPAT_SECTION = """## Ubuntu root只读兼容模式（受控合同修复）
+
+- 适用条件：仅当逻辑别名`ubuntu`实际UID为0且专用只读UID=1001不可用时启用；root与专用只读身份不等价，必须在批次证据中记录uid=0和访问模式。
+- 固定目标：只允许逻辑别名`ubuntu`和任务-000085白名单根目录；只允许固定候选文件名、合同登记字段和版本化固定探针协议。
+- 只读边界：远端命令必须由固定探针生成；禁止任意shell/参数、远端写入、追加、临时文件、DDL、chmod/chown、权限/服务/防火墙变更。
+- 数据边界：禁止凭据、环境变量、原始业务记录、价格、成交、订单簿、账户和未登记路径；只保留脱敏元数据、字段、计数、指纹、退出码和资源事实。
+- 失败安全：身份、路径、协议、权限、计数、指纹、超时或资源超限任一异常时清空候选并记录失败原因指纹，不将root结果标记为专用只读证明。
+- 资源与回滚：沿用任务-000085资源上限；本模式不允许远端追加，批次仅本地追加式发布；撤销本合同修复不会修改Ubuntu、数据库、原始数据或历史批次。"""
 BLOCKED_CONTRACT_REPAIR_ALLOWED_PATHS = frozenset(
     {
         "docs/研发中心/看板.md",
@@ -1730,21 +1740,30 @@ def _validate_blocked_contract_repair(
     head_board: str | None,
     reasons: list[str],
 ) -> set[str]:
-    """验证任务-000056对任务-000055的唯一单字段合同修复。"""
+    """验证受控阻塞合同修复映射。"""
 
-    executor_id = BLOCKED_CONTRACT_REPAIR_EXECUTOR
-    target_id = BLOCKED_CONTRACT_REPAIR_TARGET
+    mapping = {
+        BLOCKED_CONTRACT_REPAIR_EXECUTOR: BLOCKED_CONTRACT_REPAIR_TARGET,
+        ROOT_READONLY_CONTRACT_REPAIR_EXECUTOR: ROOT_READONLY_CONTRACT_REPAIR_TARGET,
+    }
     allowed_unreferenced: set[str] = set()
-    if tuple(task_ids) != (executor_id,):
+    if len(task_ids) != 1 or task_ids[0] not in mapping:
         _append_reason(
             reasons,
-            "阻塞任务合同修复必须且只能关联任务-000056",
+            "阻塞任务合同修复必须且只能关联已登记的执行任务",
         )
         return allowed_unreferenced
+    executor_id = task_ids[0]
+    target_id = mapping[executor_id]
+    root_compat = executor_id == ROOT_READONLY_CONTRACT_REPAIR_EXECUTOR
 
     executor_path = f"docs/研发中心/任务/任务-{executor_id}.md"
     target_path = f"docs/研发中心/任务/任务-{target_id}.md"
-    required_paths = {executor_path, target_path, "docs/研发中心/看板.md"}
+    required_paths = {target_path}
+    if not root_compat:
+        required_paths.add("docs/研发中心/看板.md")
+    if not root_compat:
+        required_paths.add(executor_path)
     if not required_paths.issubset(set(changed_paths)):
         _append_reason(
             reasons,
@@ -1774,41 +1793,79 @@ def _validate_blocked_contract_repair(
     assert target_base is not None
     assert target_head is not None
 
-    # 合同修复PR本身仍是一次受控任务交付；任务-000056必须先由独立
-    # 状态闭环从阻塞恢复为待执行（或需修复），不能在阻塞/执行中直接改合同。
-    _validate_delivery_tasks(
-        task_ids=(executor_id,),
-        base_tasks=base_tasks,
-        head_tasks=head_tasks,
-        reasons=reasons,
-    )
+    if root_compat:
+        if _task_field(TASK_TYPE_PATTERN, executor_base) != "治理":
+            _append_reason(reasons, "任务-000086类型不是治理")
+        if _task_field(AUTOMATION_SCOPE_PATTERN, executor_base) != AUTOMATION_SCOPE:
+            _append_reason(reasons, "任务-000086未声明治理自动化授权")
+        if _task_field(TASK_STATUS_PATTERN, executor_base) != "已完成":
+            _append_reason(reasons, "任务-000086基线状态必须为已完成")
+        if executor_base != executor_head:
+            _append_reason(reasons, "任务-000086已完成合同在root兼容修复中不得改写")
+    else:
+        # 旧映射仍是一次受控任务交付；任务-000056必须先由独立状态闭环
+        # 从阻塞恢复为待执行（或需修复），不能在阻塞/执行中直接改合同。
+        _validate_delivery_tasks(
+            task_ids=(executor_id,),
+            base_tasks=base_tasks,
+            head_tasks=head_tasks,
+            reasons=reasons,
+        )
 
     # 任务-000056的输出合同和固定方案必须在基线中明确证明唯一目标，
     # 不能由PR正文、Issue或执行者自行指定另一个阻塞任务。
     required_contract_evidence = (
-        "更新后的`docs/研发中心/任务/任务-000055.md`",
-        "只在任务-000055任务文件中增加唯一的`自动合并范围：治理自动化`字段",
+        (
+            "更新后的`docs/研发中心/任务/任务-000055.md`",
+            "只在任务-000055任务文件中增加唯一的`自动合并范围：治理自动化`字段",
+        )
+        if not root_compat
+        else (
+            "任务-000084的单一“Ubuntu root只读兼容模式”合同段落修复PR",
+            "目标任务其他字段、状态、执行记录和看板语义保持不变",
+        )
     )
-    blocker_evidence = "任务-000055最新阻塞状态"
+    blocker_evidence = (
+        "任务-000055最新阻塞状态"
+        if not root_compat
+        else "任务-000084仍为阻塞"
+    )
     if (
         any(item not in executor_base for item in required_contract_evidence)
         or blocker_evidence not in executor_base
     ):
-        _append_reason(reasons, "任务-000056合同未证明任务-000055唯一目标")
-    if _task_field(TASK_TYPE_PATTERN, executor_base) != "治理":
-        _append_reason(reasons, "任务-000056类型不是治理")
-    if _task_field(AUTOMATION_SCOPE_PATTERN, executor_base) != AUTOMATION_SCOPE:
-        _append_reason(reasons, "任务-000056未声明治理自动化授权")
+        _append_reason(
+            reasons,
+            "任务-000056合同未证明任务-000055唯一目标"
+            if not root_compat
+            else "任务-000086合同未证明任务-000084唯一root兼容目标",
+        )
+    if not root_compat:
+        if _task_field(TASK_TYPE_PATTERN, executor_base) != "治理":
+            _append_reason(reasons, "任务-000056类型不是治理")
+        if _task_field(AUTOMATION_SCOPE_PATTERN, executor_base) != AUTOMATION_SCOPE:
+            _append_reason(reasons, "任务-000056未声明治理自动化授权")
     if _task_field(TASK_STATUS_PATTERN, target_base) != "阻塞":
-        _append_reason(reasons, "目标任务-000055基线状态不是阻塞")
+        _append_reason(reasons, f"目标任务-{target_id}基线状态不是阻塞")
     if _task_field(TASK_STATUS_PATTERN, target_head) != "阻塞":
-        _append_reason(reasons, "目标任务-000055状态不得在合同修复中迁移")
+        _append_reason(reasons, f"目标任务-{target_id}状态不得在合同修复中迁移")
 
-    # 执行任务可以按普通任务交付更新状态和执行事实，但合同章节逐行不变。
-    if _delivery_contract_without_metadata(executor_base) != _delivery_contract_without_metadata(
+    # 旧执行任务可以按普通任务交付更新状态和执行事实，但合同章节逐行不变。
+    if not root_compat and _delivery_contract_without_metadata(executor_base) != _delivery_contract_without_metadata(
         executor_head
     ):
         _append_reason(reasons, "任务-000056阻塞合同修复夹带执行任务合同改写")
+
+    if root_compat:
+        expected_head = target_base.rstrip("\n") + "\n\n" + ROOT_READONLY_COMPAT_SECTION.strip() + "\n"
+        if ROOT_READONLY_COMPAT_SECTION.strip() in target_base:
+            _append_reason(reasons, "任务-000084基线已存在root兼容段落")
+        if target_head != expected_head:
+            _append_reason(reasons, "任务-000084只能追加固定root兼容合同段落")
+        allowed_unreferenced.update({executor_id, target_id})
+        if base_board != head_board:
+            _append_reason(reasons, "任务-000084 root兼容合同修复不得改写看板")
+        return allowed_unreferenced
 
     base_scope_lines = [
         line
@@ -2792,6 +2849,8 @@ def evaluate_eligibility(
                 is_allowed_task = task_match is not None and task_match.group(1) in {
                     BLOCKED_CONTRACT_REPAIR_EXECUTOR,
                     BLOCKED_CONTRACT_REPAIR_TARGET,
+                    ROOT_READONLY_CONTRACT_REPAIR_EXECUTOR,
+                    ROOT_READONLY_CONTRACT_REPAIR_TARGET,
                 }
                 is_allowed_test = (
                     len(PurePosixPath(path).parts) == 3
@@ -2822,7 +2881,7 @@ def evaluate_eligibility(
                 )
 
     for task_id in task_ids:
-        if task_id not in changed_task_ids:
+        if task_id not in changed_task_ids and task_id not in allowed_unreferenced_task_ids:
             _append_reason(reasons, f"任务-{task_id}的任务文件未在PR中更新")
 
     return EligibilityResult(eligible=not reasons, reasons=tuple(reasons))

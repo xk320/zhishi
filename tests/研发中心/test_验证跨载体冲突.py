@@ -279,6 +279,31 @@ class CrossCarrierConflictTests(unittest.TestCase):
             )
         self.assertEqual([], conflicts)
 
+    def testroot只读兼容合同修复目标允许追加固定段落(self):
+        path = "docs/研发中心/任务/任务-000084.md"
+        base_text = (ROOT / path).read_text(encoding="utf-8")
+        head_text = base_text.rstrip("\n") + "\n\n" + CONFLICT.ROOT_READONLY_COMPAT_SECTION.strip() + "\n"
+
+        def paths(_repo, _ref):
+            return (path,)
+
+        def read(_repo, ref, requested):
+            self.assertEqual(path, requested)
+            return base_text if ref == "base" else head_text
+
+        conflicts = []
+        with mock.patch.object(CONFLICT, "_list_task_paths", side_effect=paths), mock.patch.object(
+            CONFLICT, "_read_at_ref", side_effect=read
+        ):
+            CONFLICT._check_task_contract_drift(
+                ROOT,
+                "base",
+                "head",
+                conflicts,
+                root_readonly_contract_repair_target="000084",
+            )
+        self.assertEqual([], conflicts)
+
     def test阻塞原因在依赖区段允许状态闭环(self):
         base_text = (
             "# 任务-000049：示例\n\n- 状态：阻塞\n\n"

@@ -55,6 +55,18 @@ CHANGE_TYPE_PATTERN = re.compile(
 CONTRACT_CONFLICT_REPAIR_TYPE = "任务合同冲突修复"
 CONTRACT_CONFLICT_REPAIR_EXECUTOR = "000068"
 CONTRACT_CONFLICT_REPAIR_TARGET = "000066"
+BLOCKED_CONTRACT_REPAIR_EXECUTOR = "000056"
+BLOCKED_CONTRACT_REPAIR_TARGET = "000055"
+ROOT_READONLY_CONTRACT_REPAIR_EXECUTOR = "000086"
+ROOT_READONLY_CONTRACT_REPAIR_TARGET = "000084"
+ROOT_READONLY_COMPAT_SECTION = """## Ubuntu root只读兼容模式（受控合同修复）
+
+- 适用条件：仅当逻辑别名`ubuntu`实际UID为0且专用只读UID=1001不可用时启用；root与专用只读身份不等价，必须在批次证据中记录uid=0和访问模式。
+- 固定目标：只允许逻辑别名`ubuntu`和任务-000085白名单根目录；只允许固定候选文件名、合同登记字段和版本化固定探针协议。
+- 只读边界：远端命令必须由固定探针生成；禁止任意shell/参数、远端写入、追加、临时文件、DDL、chmod/chown、权限/服务/防火墙变更。
+- 数据边界：禁止凭据、环境变量、原始业务记录、价格、成交、订单簿、账户和未登记路径；只保留脱敏元数据、字段、计数、指纹、退出码和资源事实。
+- 失败安全：身份、路径、协议、权限、计数、指纹、超时或资源超限任一异常时清空候选并记录失败原因指纹，不将root结果标记为专用只读证明。
+- 资源与回滚：沿用任务-000085资源上限；本模式不允许远端追加，批次仅本地追加式发布；撤销本合同修复不会修改Ubuntu、数据库、原始数据或历史批次。"""
 DEPENDENCY_PATTERN = re.compile(r"任务-(\d{6})")
 STANDARD_STATUSES = frozenset(
     {"待执行", "执行中", "阻塞", "待评审", "需修复", "已完成", "已取消"}
@@ -855,12 +867,35 @@ CANCELLATION_MUTABLE_TASK_PREFIXES = (
 )
 
 
+def _root_readonly_section_bounds(lines: Sequence[str]) -> tuple[int, int] | None:
+    """返回root只读兼容段落的唯一范围。"""
+
+    starts = [
+        index
+        for index, line in enumerate(lines)
+        if line == "## Ubuntu root只读兼容模式（受控合同修复）"
+    ]
+    if len(starts) != 1:
+        return None
+    start = starts[0]
+    end = next(
+        (
+            index
+            for index in range(start + 1, len(lines))
+            if lines[index].startswith("## ")
+        ),
+        len(lines),
+    )
+    return start, end
+
+
 def _immutable_task_contract(
     text: str,
     *,
     allow_dependency_mutation: bool = False,
     allow_cancellation_mutation: bool = False,
     allow_blocked_contract_repair: bool = False,
+    allow_root_readonly_contract_repair: bool = False,
     allow_contract_conflict_repair: bool = False,
 ) -> str:
     """保留任务合同，排除状态和执行/合并证据记录。"""
@@ -906,6 +941,7 @@ def _immutable_task_contract(
         ),
         record_start,
     ) if completion_start >= 0 else -1
+    root_section = _root_readonly_section_bounds(lines)
     mutable_prefixes = MUTABLE_TASK_PREFIXES + (
         CANCELLATION_MUTABLE_TASK_PREFIXES
         if allow_cancellation_mutation
@@ -930,6 +966,11 @@ def _immutable_task_contract(
                 and line == "- 自动合并范围：治理自动化"
             )
             or (
+                allow_root_readonly_contract_repair
+                and root_section is not None
+                and root_section[0] <= index < root_section[1]
+            )
+            or (
                 allow_contract_conflict_repair
                 and completion_start <= index < completion_end
             )
@@ -950,6 +991,7 @@ def _check_task_contract_drift(
     allow_dependency_mutation: bool = False,
     allow_cancellation_mutation: bool = False,
     blocked_contract_repair_target: str | None = None,
+    root_readonly_contract_repair_target: str | None = None,
     contract_conflict_repair_target: str | None = None,
 ) -> None:
     """阻止交付或状态PR静默改写目标、范围、输入输出和安全边界。"""
@@ -981,6 +1023,11 @@ def _check_task_contract_drift(
                 and path
                 == f"{TASK_DIR}/任务-{blocked_contract_repair_target}.md"
             ),
+            allow_root_readonly_contract_repair=(
+                root_readonly_contract_repair_target is not None
+                and path
+                == f"{TASK_DIR}/任务-{root_readonly_contract_repair_target}.md"
+            ),
             allow_contract_conflict_repair=(
                 contract_conflict_repair_target is not None
                 and path
@@ -994,6 +1041,11 @@ def _check_task_contract_drift(
                 blocked_contract_repair_target is not None
                 and path
                 == f"{TASK_DIR}/任务-{blocked_contract_repair_target}.md"
+            ),
+            allow_root_readonly_contract_repair=(
+                root_readonly_contract_repair_target is not None
+                and path
+                == f"{TASK_DIR}/任务-{root_readonly_contract_repair_target}.md"
             ),
             allow_contract_conflict_repair=(
                 contract_conflict_repair_target is not None
@@ -1387,7 +1439,15 @@ def check_refs(
             )
             or change_type == "合并后状态闭环",
             blocked_contract_repair_target=(
-                "000055" if change_type == "阻塞任务合同修复" else None
+                BLOCKED_CONTRACT_REPAIR_TARGET
+                if change_type == "阻塞任务合同修复" and task_id == BLOCKED_CONTRACT_REPAIR_EXECUTOR
+                else None
+            ),
+            root_readonly_contract_repair_target=(
+                ROOT_READONLY_CONTRACT_REPAIR_TARGET
+                if change_type == "阻塞任务合同修复"
+                and task_id == ROOT_READONLY_CONTRACT_REPAIR_EXECUTOR
+                else None
             ),
             contract_conflict_repair_target=(
                 CONTRACT_CONFLICT_REPAIR_TARGET
@@ -1507,6 +1567,7 @@ def _compute_rule_fingerprint() -> str:
         "_check_dependencies",
         "_check_scope",
         "_check_historical_immutability",
+        "_root_readonly_section_bounds",
         "_immutable_task_contract",
         "_check_task_contract_drift",
         "_check_metadata",
@@ -1547,6 +1608,9 @@ def _compute_rule_fingerprint() -> str:
         str(MAX_TREE_BYTES),
         repr(MUTABLE_TASK_PREFIXES),
         repr(CANCELLATION_MUTABLE_TASK_PREFIXES),
+        ROOT_READONLY_COMPAT_SECTION,
+        ROOT_READONLY_CONTRACT_REPAIR_EXECUTOR,
+        ROOT_READONLY_CONTRACT_REPAIR_TARGET,
     ]
     for name in names:
         try:
