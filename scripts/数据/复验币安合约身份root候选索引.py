@@ -133,7 +133,7 @@ MAX_SUMMARY_BYTES=__MAX_SUMMARY_BYTES__
 MAX_CANDIDATES=__MAX_CANDIDATES__
 MAX_SIZE=__MAX_SIZE__
 DEADLINE=time.monotonic()+__DEADLINE__
-SAFE=re.compile(r"(?i)(password|passwd|secret|token\s*=|authorization:|gh[pousr]_[A-Za-z0-9]|-----BEGIN)")
+SAFE=re.compile(r"(?i)(password|passwd|secret|token\s*=|authorization:|gh[pousr]_[A-Za-z0-9]|-----BEGIN|\\b(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)(?:\\.(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)){3}\\b)")
 def fp(value): return hashlib.sha256(json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(",",":")).encode()).hexdigest()
 def skip(path):
     text=str(path)
@@ -179,6 +179,7 @@ def read_json_candidate(path):
             shape=sorted(str(key) for key in item)
             schema_shapes.append(shape)
             if not set(CANDIDATE_FIELDS).issubset(mapping): missing_schema=True; continue
+            if set(str(key) for key in item) != set(mapping.values()): missing_schema=True; continue
             if first_mapping is None: first_mapping=mapping
             if mapping != first_mapping: missing_schema=True; continue
             selected={key:item.get(mapping[key]) for key in CANDIDATE_FIELDS}
@@ -217,9 +218,9 @@ def read_sqlite_candidate(path):
         if not complete_table or not result["行"]: result["原因代码"]="INCOMPLETE_IDENTITY_SCHEMA"
     except Exception: result["原因代码"]="CANDIDATE_READ_FAILED"
     return result
-def root_info(base):
+def root_info(base,ordinal):
     st=base.stat()
-    return {"根目录":base.name,"路径指纹":fp(str(base)),"模式":oct(st.st_mode&0o777),"属主UID":st.st_uid,"属组GID":st.st_gid,"可读":os.access(base,os.R_OK),"可写":os.access(base,os.W_OK)}
+    return {"根目录":f"固定根目录-{ordinal}","路径指纹":fp(str(base)),"模式":oct(st.st_mode&0o777),"属主UID":st.st_uid,"属组GID":st.st_gid,"可读":os.access(base,os.R_OK),"可写":os.access(base,os.W_OK)}
 def candidate_info(path,base):
     st=path.stat(); readable=os.access(path,os.R_OK)
     row={"路径指纹":fp(str(path)),"文件名":path.name,"上级目录指纹":fp(str(path.parent)),"候选根目录指纹":fp(str(base)),"大小":st.st_size,"修改时间_ns":st.st_mtime_ns,"模式":oct(st.st_mode&0o777),"属主UID":st.st_uid,"属组GID":st.st_gid,"可读":readable,"父目录可写":os.access(path.parent,os.W_OK)}
@@ -233,11 +234,11 @@ def emit(reason,uid=None,gid=None,roots=None,files=0,dirs=0,entries=0,queue=0,su
     raise SystemExit(0)
 if os.geteuid()!=0: emit("REMOTE_IDENTITY_NOT_ROOT")
 candidates=[]; roots_seen=[]; file_count=0; directory_count=0; entry_count=0; summary_bytes=0; scan_failed=False; failure_code=""
-for root in ROOTS:
+for root_index, root in enumerate(ROOTS,1):
     base=pathlib.Path(root)
     try:
         if base.is_symlink(): emit("ROOT_SYMLINK",os.geteuid(),os.getegid(),roots_seen,file_count,directory_count,entry_count,0,summary_bytes)
-        info=root_info(base); roots_seen.append(info)
+        info=root_info(base,root_index); roots_seen.append(info)
         if not base.is_dir() or not info["可读"]: scan_failed=True; continue
     except Exception: scan_failed=True; continue
     queue=[base]
@@ -245,7 +246,7 @@ for root in ROOTS:
         if time.monotonic()>DEADLINE: emit("INDEX_TIMEOUT",os.geteuid(),os.getegid(),roots_seen,file_count,directory_count,entry_count,len(queue),summary_bytes)
         if directory_count>=MAX_DIRS: emit("INDEX_DIRECTORY_LIMIT",os.geteuid(),os.getegid(),roots_seen,file_count,directory_count,entry_count,len(queue),summary_bytes)
         current=queue.pop(0); directory_count+=1
-        try: entries=list(os.scandir(current))
+        try: entries=sorted(os.scandir(current), key=lambda item: item.name)
         except Exception: scan_failed=True; continue
         for entry in entries:
             entry_count+=1
@@ -367,7 +368,7 @@ def run_remote_probe(config: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(payload["存储根目录"], list) or len(payload["存储根目录"]) > len(EXPECTED_ROOTS):
         return _failure("PROBE_ROOT_SCHEMA_INVALID", exit_code=completed.returncode, resource=resource)
     root_fingerprints = {legacy.fingerprint(path) for path in EXPECTED_ROOTS}
-    root_names = {legacy.fingerprint(path): Path(path).name for path in EXPECTED_ROOTS}
+    root_names = {legacy.fingerprint(path): f"固定根目录-{index}" for index, path in enumerate(EXPECTED_ROOTS, 1)}
     seen_root_fingerprints = set()
     for root in payload["存储根目录"]:
         if not isinstance(root, dict) or set(root) != {"根目录", "路径指纹", "模式", "属主UID", "属组GID", "可读", "可写"}:

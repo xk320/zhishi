@@ -39,6 +39,11 @@ class RootCandidateIndexTests(unittest.TestCase):
         self.assertNotIn("os.system", source)
         self.assertNotIn("subprocess", source)
 
+    def test_probe_source_sanitizes_addresses_and_orders_walk(self) -> None:
+        source = target._probe_source(self.config, 900)
+        self.assertIn("25[0-5]", source)
+        self.assertIn("entries=sorted(os.scandir(current), key=lambda item: item.name)", source)
+
     def test_failure_payload_is_root_compatible_and_empty(self) -> None:
         result = target._failure("INDEX_ENTRY_LIMIT")
         self.assertEqual(result["访问模式"], "root兼容只读")
@@ -85,10 +90,10 @@ class RootCandidateIndexTests(unittest.TestCase):
 
     def test_complete_empty_index_is_valid_but_not_identity_proof(self) -> None:
         roots = []
-        for path in target.EXPECTED_ROOTS:
+        for index, path in enumerate(target.EXPECTED_ROOTS, 1):
             roots.append(
                 {
-                    "根目录": path.rsplit("/", 1)[-1],
+                    "根目录": f"固定根目录-{index}",
                     "路径指纹": legacy.fingerprint(path),
                     "模式": "0o755",
                     "属主UID": 0,
@@ -135,7 +140,7 @@ class RootCandidateIndexTests(unittest.TestCase):
     def test_probe_rejects_duplicate_root_set(self) -> None:
         roots = []
         root = {
-            "根目录": "binance-event",
+            "根目录": "固定根目录-1",
             "路径指纹": legacy.fingerprint(target.EXPECTED_ROOTS[0]),
             "模式": "0o755",
             "属主UID": 0,
@@ -272,7 +277,7 @@ class RootCandidateIndexTests(unittest.TestCase):
     def _valid_roots(self):
         return [
             {
-                "根目录": path.rsplit("/", 1)[-1],
+                "根目录": f"固定根目录-{index}",
                 "路径指纹": legacy.fingerprint(path),
                 "模式": "0o755",
                 "属主UID": 0,
@@ -280,7 +285,7 @@ class RootCandidateIndexTests(unittest.TestCase):
                 "可读": True,
                 "可写": False,
             }
-            for path in target.EXPECTED_ROOTS
+            for index, path in enumerate(target.EXPECTED_ROOTS, 1)
         ]
 
     def _base_payload(self, **overrides):
