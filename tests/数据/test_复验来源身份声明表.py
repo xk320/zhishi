@@ -78,6 +78,14 @@ class VerifySourceIdentityTableTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             MODULE.run_probe("print(1)", config, runner=lambda *args, **kwargs: failed)
 
+    def test_sensitive_candidate_payload_fails_closed(self) -> None:
+        config = MODULE.load_config()
+        payload = empty_probe()
+        payload["候选行"] = [{"声明": {"来源提供者": "password=redacted"}}]
+        fake = SimpleNamespace(returncode=0, stdout=json.dumps(payload, ensure_ascii=False), stderr="")
+        with self.assertRaises(ValueError):
+            MODULE.run_probe("print(1)", config, runner=lambda *args, **kwargs: fake)
+
     def test_complete_requires_schema_and_binding_fields(self) -> None:
         row = MODULE.load_members()[0]
         location = "MySQL/schema/table#成员编号=" + row["成员编号"]
