@@ -34,10 +34,14 @@ class TestRootCompatibleContractIdentity(unittest.TestCase):
         self.assertNotIn("DROP TABLE", source)
 
     def test_probe_accepts_uid_zero_only_and_records_mode(self):
+        roots = [
+            {"根目录": Path(path).name, "路径指纹": module.legacy.fingerprint(path), "可读": True, "可写": False}
+            for path in module.load_config()["远端候选根目录"]
+        ]
         payload = {
             "协议": "zhishi-binance-contract-probe/1", "访问模式": "root兼容只读", "扫描UID": 0, "扫描GID": 0,
             "扫描是否专用只读": False, "扫描完整": True, "失败安全": False, "失败原因代码": "", "失败原因指纹": "",
-            "扫描文件数": 1, "候选文件数": 0, "候选": [], "存储根目录": [], "远端追加": False,
+            "扫描文件数": 1, "候选文件数": 0, "候选": [], "存储根目录": roots, "远端追加": False,
             "远端临时文件": False, "数据库写入": False, "订单簿读取": False,
         }
         with patch.object(module.legacy.engine, "run_bounded_process", return_value=_Completed(payload)):
@@ -57,6 +61,21 @@ class TestRootCompatibleContractIdentity(unittest.TestCase):
             result = module.run_root_remote_probe(module.load_config())
         self.assertTrue(result["失败安全"])
         self.assertEqual(result["失败原因代码"], "ROOT_IDENTITY_FACT_INVALID")
+        self.assertEqual(result["候选"], [])
+
+    def test_probe_rejects_unallowlisted_candidate_payload(self):
+        payload = {
+            "协议": "zhishi-binance-contract-probe/1", "访问模式": "root兼容只读", "扫描UID": 0, "扫描GID": 0,
+            "扫描是否专用只读": False, "扫描完整": True, "失败安全": False, "失败原因代码": "", "失败原因指纹": "",
+            "扫描文件数": 1, "候选文件数": 1,
+            "候选": [{"文件名": "evil.csv", "候选根目录指纹": module.legacy.fingerprint("/opt/binance-event"), "路径指纹": "a" * 64, "大小": 1}],
+            "存储根目录": [{"根目录": "binance-event", "路径指纹": module.legacy.fingerprint("/opt/binance-event"), "可读": True, "可写": False}],
+            "远端追加": False, "远端临时文件": False, "数据库写入": False, "订单簿读取": False,
+        }
+        with patch.object(module.legacy.engine, "run_bounded_process", return_value=_Completed(payload)):
+            result = module.run_root_remote_probe(module.load_config())
+        self.assertTrue(result["失败安全"])
+        self.assertEqual(result["失败原因代码"], "PROBE_CANDIDATE_NAME_INVALID")
         self.assertEqual(result["候选"], [])
 
     def test_partial_evidence_is_not_published(self):
@@ -86,6 +105,13 @@ class TestRootCompatibleContractIdentity(unittest.TestCase):
         evidence, _ = module.build_evidence(members, [candidate], contracts)
         self.assertTrue(evidence["记录"])
         self.assertTrue(all(item["证据记录编号"].startswith("E-000088-") for item in evidence["记录"]))
+
+    def test_duplicate_binding_is_failure_safe(self):
+        members = [{"资产编号": "DS-000001", "成员编号": "ZI-1", "标的": "BTC", "输入成员SHA-256": "a" * 64}]
+        candidate = {"字段": {"标的": "BTC", "资产编号": "DS-000001", "成员编号": "ZI-1", "输入成员SHA-256": "a" * 64}}
+        evidence, verified = module.build_evidence(members, [candidate, candidate], {"BTC": [], "ETH": []})
+        self.assertEqual(evidence["记录"], [])
+        self.assertEqual(verified, [])
 
 
 if __name__ == "__main__":

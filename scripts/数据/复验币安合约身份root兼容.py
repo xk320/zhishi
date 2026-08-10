@@ -86,7 +86,7 @@ def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
     return value
 
 
-def _root_failure(reason: str) -> dict[str, Any]:
+def _root_failure(reason: str, *, exit_code: int | None = None, resource_facts: Mapping[str, Any] | None = None) -> dict[str, Any]:
     safe_reason = reason if re.fullmatch(r"[A-Z0-9_]{1,64}", reason) else "PROBE_FAILED"
     return {
         "协议": "zhishi-binance-contract-probe/1",
@@ -106,6 +106,8 @@ def _root_failure(reason: str) -> dict[str, Any]:
         "远端临时文件": False,
         "数据库写入": False,
         "订单簿读取": False,
+        "退出码": exit_code,
+        "资源事实": dict(resource_facts or {}),
     }
 
 
@@ -119,6 +121,10 @@ def _root_probe_source(config: Mapping[str, Any], deadline_seconds: int) -> str:
         '"协议":"zhishi-binance-contract-probe/1","访问模式":"root兼容只读","扫描UID"',
     )
     source = source.replace('"扫描是否专用只读":True', '"扫描是否专用只读":False')
+    source = source.replace(
+        'return {"路径指纹":fp(str(path)),"文件名":path.name,"上级目录名":path.parent.name}',
+        'return {"路径指纹":fp(str(path)),"文件名":path.name,"上级目录名":path.parent.name,"候选根目录指纹":fp(str(base))}',
+    )
     return source
 
 
@@ -128,6 +134,13 @@ def run_root_remote_probe(config: Mapping[str, Any]) -> dict[str, Any]:
         "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
         "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=1", "ubuntu", "python3", "-",
     ]
+    limits = config["资源上限"]
+    resource_facts: dict[str, Any] = {
+        "批次总超时秒": int(limits["批次总超时秒"]),
+        "SSH连接超时秒": int(limits["SSH连接超时秒"]),
+        "最大输出字节": int(limits["最大输出字节"]),
+        "最大日志字节": int(limits["最大日志字节"]),
+    }
     try:
         completed = legacy.engine.run_bounded_process(
             command,
@@ -136,42 +149,91 @@ def run_root_remote_probe(config: Mapping[str, Any]) -> dict[str, Any]:
             maximum_stdout=int(config["资源上限"]["最大输出字节"]),
             maximum_stderr=int(config["资源上限"]["最大日志字节"]),
         )
+        resource_facts.update({
+            "标准输出字节": len(completed.stdout or b""),
+            "标准错误字节": len(completed.stderr or b""),
+        })
     except Exception:
-        return _root_failure("SSH_PROBE_RUNTIME_FAILURE")
+        return _root_failure("SSH_PROBE_RUNTIME_FAILURE", resource_facts=resource_facts)
     if completed.returncode != 0:
-        return _root_failure("SSH_PROBE_FAILED")
+        return _root_failure("SSH_PROBE_FAILED", exit_code=completed.returncode, resource_facts=resource_facts)
     try:
         payload = json.loads(completed.stdout)
     except (TypeError, json.JSONDecodeError):
-        return _root_failure("PROBE_RESPONSE_INVALID")
+        return _root_failure("PROBE_RESPONSE_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
     required = {
         "协议", "访问模式", "扫描UID", "扫描GID", "扫描是否专用只读", "扫描完整", "失败安全",
         "失败原因代码", "失败原因指纹", "扫描文件数", "候选文件数", "候选", "存储根目录",
         "远端追加", "远端临时文件", "数据库写入", "订单簿读取",
     }
     if set(payload) != required or payload.get("协议") != "zhishi-binance-contract-probe/1" or payload.get("访问模式") != ROOT_MODE:
-        return _root_failure("PROBE_PROTOCOL_DRIFT")
+        return _root_failure("PROBE_PROTOCOL_DRIFT", exit_code=completed.returncode, resource_facts=resource_facts)
     if payload.get("扫描UID") != ROOT_UID or payload.get("扫描是否专用只读") is not False:
-        return _root_failure("ROOT_IDENTITY_FACT_INVALID")
+        return _root_failure("ROOT_IDENTITY_FACT_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
     if any(payload.get(key) is not False for key in ("远端追加", "远端临时文件", "数据库写入", "订单簿读取")):
-        return _root_failure("PROBE_SECURITY_BOUNDARY")
+        return _root_failure("PROBE_SECURITY_BOUNDARY", exit_code=completed.returncode, resource_facts=resource_facts)
     if not isinstance(payload.get("候选"), list) or not isinstance(payload.get("存储根目录"), list):
-        return _root_failure("PROBE_PAYLOAD_INVALID")
+        return _root_failure("PROBE_PAYLOAD_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+    if not isinstance(payload.get("扫描文件数"), int) or not isinstance(payload.get("候选文件数"), int):
+        return _root_failure("PROBE_COUNT_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+    if not 0 <= payload["扫描文件数"] <= int(limits["最大候选文件数"]):
+        return _root_failure("PROBE_SCAN_COUNT_LIMIT", exit_code=completed.returncode, resource_facts=resource_facts)
+    if not 0 <= payload["候选文件数"] <= int(limits["最大候选文件数"]) or payload["候选文件数"] != len(payload["候选"]):
+        return _root_failure("PROBE_CANDIDATE_COUNT_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+    expected_root_fingerprints = {legacy.fingerprint(path) for path in config["远端候选根目录"]}
+    expected_root_names = {Path(path).name for path in config["远端候选根目录"]}
+    roots = payload["存储根目录"]
+    if len({item.get("路径指纹") for item in roots if isinstance(item, dict)}) != len(roots):
+        return _root_failure("PROBE_ROOT_DUPLICATE", exit_code=completed.returncode, resource_facts=resource_facts)
+    if any(
+        not isinstance(item, dict)
+        or item.get("根目录") not in expected_root_names
+        or item.get("路径指纹") not in expected_root_fingerprints
+        or not isinstance(item.get("可读"), bool)
+        or not isinstance(item.get("可写"), bool)
+        for item in roots
+    ):
+        return _root_failure("PROBE_ROOT_PATH_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+    for candidate in payload["候选"]:
+        if not isinstance(candidate, dict):
+            return _root_failure("PROBE_CANDIDATE_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+        if candidate.get("文件名", "").lower() not in {name.lower() for name in config["候选文件名"]}:
+            return _root_failure("PROBE_CANDIDATE_NAME_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+        if candidate.get("候选根目录指纹") not in expected_root_fingerprints:
+            return _root_failure("PROBE_CANDIDATE_ROOT_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+        if not isinstance(candidate.get("路径指纹"), str) or not re.fullmatch(r"[0-9a-f]{64}", candidate["路径指纹"]):
+            return _root_failure("PROBE_CANDIDATE_PATH_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+        if not isinstance(candidate.get("大小"), int) or candidate["大小"] < 0 or candidate["大小"] > int(limits["最大候选文件字节"]):
+            return _root_failure("PROBE_CANDIDATE_SIZE_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
     if payload.get("扫描完整") is not True and payload.get("失败安全") is not True:
-        return _root_failure("SCAN_FAILURE_SAFETY_INVALID")
+        return _root_failure("SCAN_FAILURE_SAFETY_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
     if payload.get("失败原因代码") and payload.get("失败原因指纹") != legacy.fingerprint(payload["失败原因代码"]):
-        return _root_failure("PROBE_FAILURE_FINGERPRINT_INVALID")
+        return _root_failure("PROBE_FAILURE_FINGERPRINT_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
     if not payload.get("失败原因代码") and payload.get("失败原因指纹") != "":
-        return _root_failure("PROBE_FAILURE_FINGERPRINT_INVALID")
+        return _root_failure("PROBE_FAILURE_FINGERPRINT_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
     if legacy.sensitive(payload):
-        return _root_failure("PROBE_SENSITIVE_OUTPUT")
+        return _root_failure("PROBE_SENSITIVE_OUTPUT", exit_code=completed.returncode, resource_facts=resource_facts)
     if payload.get("扫描完整") is not True or payload.get("失败安全") is not False:
         payload["候选"] = []
         payload["候选文件数"] = 0
+    elif len(roots) != len(config["远端候选根目录"]):
+        return _root_failure("PROBE_ROOT_COUNT_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+    payload["退出码"] = completed.returncode
+    payload["资源事实"] = resource_facts
     return payload
 
 
 def build_evidence(members: Sequence[Mapping[str, str]], candidates: Sequence[Mapping[str, Any]], contracts: Mapping[str, Sequence[Mapping[str, Any]]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    seen_bindings: set[tuple[str, str, str, str]] = set()
+    for candidate in candidates:
+        fields = candidate.get("字段", {})
+        if not isinstance(fields, Mapping):
+            continue
+        binding = tuple(str(fields.get(key, "")) for key in ("标的", "资产编号", "成员编号", "输入成员SHA-256"))
+        if all(binding) and binding in seen_bindings:
+            return {"证据版本": "source-identity-evidence-1.0", "记录": []}, []
+        if all(binding):
+            seen_bindings.add(binding)
     evidence, verified = legacy.build_evidence(members, candidates, contracts)
     for record in evidence["记录"]:
         record["证据记录编号"] = record["证据记录编号"].replace("E-000085-", "E-000088-", 1)
@@ -190,6 +252,7 @@ def render_root_batch(
     batch_start: dt.datetime,
     batch_root: Path,
     batch_id_override: str | None = None,
+    config_path: Path = CONFIG_PATH,
 ) -> Path:
     candidates = legacy.flatten_candidates(remote) if remote.get("扫描完整") is True and remote.get("失败安全") is False else []
     contracts = legacy.api_contracts(api_snapshots)
@@ -219,9 +282,9 @@ def render_root_batch(
         "任务合同SHA-256": _task_contract_fingerprint(),
         "任务文件SHA-256": legacy.sha_path(TASK_PATH),
         "任务合同指纹口径": "固定合同正文；排除执行/交付事实元数据",
-        "配置SHA-256": legacy.sha_path(CONFIG_PATH),
+        "配置SHA-256": legacy.sha_path(config_path),
         "公开接口摘要": api_snapshots,
-        "Ubuntu扫描摘要": {key: remote.get(key) for key in ("访问模式", "扫描UID", "扫描GID", "扫描是否专用只读", "扫描完整", "失败安全", "失败原因代码", "失败原因指纹", "扫描文件数", "候选文件数", "存储根目录", "远端追加", "数据库写入", "订单簿读取")},
+        "Ubuntu扫描摘要": {key: remote.get(key) for key in ("访问模式", "扫描UID", "扫描GID", "扫描是否专用只读", "扫描完整", "失败安全", "失败原因代码", "失败原因指纹", "扫描文件数", "候选文件数", "存储根目录", "远端追加", "数据库写入", "订单簿读取", "退出码", "资源事实")},
         "候选文件摘要": remote.get("候选", []),
         "结果摘要": summary,
         "证据记录数": len(evidence["记录"]),
@@ -253,6 +316,10 @@ def render_root_batch(
 
 
 def execute(config_path: Path = CONFIG_PATH, batch_root: Path = DEFAULT_BATCH_ROOT, now: dt.datetime | None = None, batch_id_override: str | None = None) -> Path:
+    config_path = config_path.resolve()
+    batch_root = batch_root.resolve()
+    if config_path != CONFIG_PATH.resolve() or batch_root != DEFAULT_BATCH_ROOT.resolve():
+        raise ValueError("执行路径必须固定在仓库配置和批次目录")
     config = load_config(config_path)
     members = legacy.load_members()
     start = now or dt.datetime.now().astimezone()
@@ -260,7 +327,7 @@ def execute(config_path: Path = CONFIG_PATH, batch_root: Path = DEFAULT_BATCH_RO
         raise ValueError("冻结时间必须带时区")
     api_snapshots = [legacy.fetch_exchange_info(api_spec, config["资源上限"], start) for api_spec in config["Binance公开接口"]]
     remote = run_root_remote_probe(config)
-    return render_root_batch(config, members, api_snapshots, remote, start, batch_root.resolve(), batch_id_override=batch_id_override)
+    return render_root_batch(config, members, api_snapshots, remote, start, batch_root, batch_id_override=batch_id_override, config_path=config_path)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
