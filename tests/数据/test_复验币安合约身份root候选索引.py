@@ -233,6 +233,31 @@ class RootCandidateIndexTests(unittest.TestCase):
         self.assertEqual(evidence, {"证据版本": "source-identity-evidence-1.0", "记录": []})
         self.assertEqual(verified, [])
 
+    def test_legacy_parent_name_fallback_is_hashed(self) -> None:
+        payload = {
+            "候选": [
+                {
+                    "路径指纹": "a" * 64,
+                    "文件名": "contracts.csv",
+                    "上级目录名": "secret-parent",
+                    "大小": 1,
+                    "修改时间_ns": 1,
+                    "模式": "0o644",
+                    "属主UID": 0,
+                    "属组GID": 0,
+                    "内容摘要": {
+                        "格式": "csv",
+                        "字段映射": {},
+                        "行": [{field: "value" for field in legacy.CANDIDATE_FIELDS}],
+                        "Schema指纹": "b" * 64,
+                    },
+                }
+            ]
+        }
+        result = legacy.flatten_candidates(payload)
+        self.assertEqual(result[0]["文件"]["上级目录指纹"], legacy.fingerprint("secret-parent"))
+        self.assertNotIn("上级目录名", result[0]["文件"])
+
     def _valid_roots(self):
         return [
             {
