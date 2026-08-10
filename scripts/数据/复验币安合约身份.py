@@ -496,12 +496,15 @@ def summarize(members: Sequence[Mapping[str, str]], verified: Sequence[Mapping[s
     return summary
 
 
-def render_batch(config: Mapping[str, Any], members: Sequence[Mapping[str, str]], api_snapshots: Sequence[Mapping[str, Any]], remote: Mapping[str, Any], batch_start: dt.datetime, batch_root: Path) -> Path:
+def render_batch(config: Mapping[str, Any], members: Sequence[Mapping[str, str]], api_snapshots: Sequence[Mapping[str, Any]], remote: Mapping[str, Any], batch_start: dt.datetime, batch_root: Path, batch_id_override: str | None = None) -> Path:
     contracts = api_contracts(api_snapshots)
     candidates = flatten_candidates(remote)
     evidence, verified = build_evidence(members, candidates, contracts)
     summary = summarize(members, verified, remote, api_snapshots, candidates=candidates)
-    batch_id = "binance-contract-identity-" + batch_start.strftime("%Y%m%dT%H%M%S%z") + "-" + fingerprint({"任务": TASK_ID, "API": api_snapshots, "远端": remote, "成员": sha_path(MEMBERS_PATH)})[:12]
+    generated_batch_id = "binance-contract-identity-" + batch_start.strftime("%Y%m%dT%H%M%S%z") + "-" + fingerprint({"任务": TASK_ID, "API": api_snapshots, "远端": remote, "成员": sha_path(MEMBERS_PATH)})[:12]
+    batch_id = batch_id_override or generated_batch_id
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+\-]{0,127}", batch_id):
+        raise ValueError("批次身份格式非法")
     target = batch_root / batch_id
     if target.exists() or target.is_symlink():
         raise FileExistsError("批次目录已存在")
@@ -552,7 +555,7 @@ def render_batch(config: Mapping[str, Any], members: Sequence[Mapping[str, str]]
     return target
 
 
-def execute(config_path: Path = CONFIG_PATH, batch_root: Path = DEFAULT_BATCH_ROOT, now: dt.datetime | None = None) -> Path:
+def execute(config_path: Path = CONFIG_PATH, batch_root: Path = DEFAULT_BATCH_ROOT, now: dt.datetime | None = None, batch_id_override: str | None = None) -> Path:
     config = load_config(config_path)
     members = load_members()
     config_path = config_path.resolve()
@@ -562,16 +565,17 @@ def execute(config_path: Path = CONFIG_PATH, batch_root: Path = DEFAULT_BATCH_RO
         raise ValueError("冻结时间必须带时区")
     api_snapshots = [fetch_exchange_info(api_spec, config["资源上限"], start) for api_spec in config["Binance公开接口"]]
     remote = run_remote_probe(config)
-    return render_batch(config, members, api_snapshots, remote, start, batch_root)
+    return render_batch(config, members, api_snapshots, remote, start, batch_root, batch_id_override=batch_id_override)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="任务-000085 Binance合约元数据身份复验")
     parser.add_argument("--config", type=Path, default=CONFIG_PATH)
     parser.add_argument("--batch-root", type=Path, default=DEFAULT_BATCH_ROOT)
+    parser.add_argument("--batch-id", default=None)
     args = parser.parse_args(argv)
     try:
-        target = execute(args.config, args.batch_root)
+        target = execute(args.config, args.batch_root, batch_id_override=args.batch_id)
     except Exception as error:
         print(f"任务-000085执行失败：{type(error).__name__}", file=sys.stderr)
         return 1
