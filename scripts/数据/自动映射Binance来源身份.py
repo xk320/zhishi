@@ -187,10 +187,10 @@ def schema_fingerprint(payload: Mapping[str, Any]) -> str:
     return "sha256:" + sha256_bytes(canonical(shape))
 
 
-def fetch_exchange_info(url: str, started: float) -> dict[str, Any]:
-    market = API_ENDPOINTS[url]
-    request = urllib.request.Request(url, headers={"User-Agent": "zhishi-task-000090/1"}, method="GET")
-    summary: dict[str, Any] = {"端点": url, "市场类型": market, "方法": "GET", "授权边界": "Binance公开无认证GET"}
+def fetch_exchange_info(uri: str, started: float) -> dict[str, Any]:
+    market = API_ENDPOINTS[uri]
+    request = urllib.request.Request(uri, headers={"User-Agent": "zhishi-task-000090/1"}, method="GET")
+    summary: dict[str, Any] = {"端点": uri, "市场类型": market, "方法": "GET", "授权边界": "Binance公开无认证GET"}
     try:
         with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
             status = int(response.getcode() or 0)
@@ -240,7 +240,7 @@ def build_batch(*, repo_root: Path = REPO_ROOT, batch_root: Path = DEFAULT_BATCH
     task_sha = sha256_file(task_path)
     rules_sha = sha256_bytes(canonical({"合同版本": CONTRACT_VERSION, "身份字段": IDENTITY_FIELDS, "接口": API_ENDPOINTS, "资源": {"总超时": TOTAL_TIMEOUT_SECONDS, "响应上限": MAX_RESPONSE_BYTES}, "匹配": config["匹配规则"]}))
     field_mapping_sha = "sha256:" + sha256_bytes(canonical(config["字段中文映射"]))
-    auth_fingerprints = {url: "sha256:" + sha256_bytes(f"Binance公开无认证GET|{url}|method=GET".encode("utf-8")) for url in API_ENDPOINTS}
+    auth_fingerprints = {uri: "sha256:" + sha256_bytes(f"Binance公开无认证GET|{uri}|method=GET".encode("utf-8")) for uri in API_ENDPOINTS}
     member_records = [member_status(member, manifest_stats=manifest_stats, api_summaries=api_summaries) for member in members]
     counts = {status: sum(row["状态"] == status for row in member_records) for status in STATUS_VALUES}
     counts.update({"候选总体": len(member_records), "计数守恒": sum(counts.values()) == len(member_records)})
