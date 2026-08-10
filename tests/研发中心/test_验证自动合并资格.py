@@ -1072,6 +1072,82 @@ class AutoMergeEligibilityTests(unittest.TestCase):
     def evaluate_blocked_repair(self, **overrides):
         return self.policy.evaluate_eligibility(**self.blocked_repair_inputs(**overrides))
 
+    def root_readonly_contract_repair_inputs(self, *, mutate_target: str = ""):
+        executor = re.sub(
+            r"^- 状态：[^\n]+$",
+            "- 状态：已完成",
+            (REPO_ROOT / "docs/研发中心/任务/任务-000086.md").read_text(encoding="utf-8"),
+            count=1,
+            flags=re.MULTILINE,
+        )
+        target_base = (
+            REPO_ROOT / "docs/研发中心/任务/任务-000084.md"
+        ).read_text(encoding="utf-8")
+        target_head = target_base.rstrip("\n") + "\n\n" + self.policy.ROOT_READONLY_COMPAT_SECTION.strip() + "\n"
+        if mutate_target == "status":
+            target_head = target_head.replace("- 状态：阻塞", "- 状态：待执行", 1)
+        elif mutate_target == "drift":
+            target_head = target_head.replace("UID为0", "UID为1001", 1)
+        changed_paths = [
+            "docs/研发中心/任务/任务-000084.md",
+            "tests/研发中心/test_验证自动合并资格.py",
+        ]
+        return {
+            "changed_paths": changed_paths,
+            "pr_body": (
+                "## 关联任务\n\n- 任务-000086\n\n"
+                "## 变更类型\n\n- 阻塞任务合同修复\n"
+            ),
+            "base_tasks": {"000086": executor, "000084": target_base},
+            "head_tasks": {"000086": executor, "000084": target_head},
+            "base_board": (
+                REPO_ROOT / "docs/研发中心/看板.md"
+            ).read_text(encoding="utf-8"),
+            "head_board": (
+                REPO_ROOT / "docs/研发中心/看板.md"
+            ).read_text(encoding="utf-8"),
+            "base_branch": "main",
+            "repository": "xk320/zhishi",
+            "head_repository": "xk320/zhishi",
+            "path_facts": [self.path_fact(path, text="安全治理文本") for path in changed_paths],
+        }
+
+    def evaluate_root_readonly_contract_repair(self, **overrides):
+        return self.policy.evaluate_eligibility(
+            **self.root_readonly_contract_repair_inputs(**overrides)
+        )
+
+    def test_root只读兼容合同修复固定映射允许且不改看板(self):
+        result = self.evaluate_root_readonly_contract_repair()
+        self.assertTrue(result.eligible, result.reasons)
+        self.assertEqual((), result.reasons)
+
+        migrated = self.evaluate_root_readonly_contract_repair(mutate_target="status")
+        self.assertFalse(migrated.eligible)
+        self.assertIn("目标任务-000084状态不得在合同修复中迁移", migrated.reasons)
+
+        drifted = self.evaluate_root_readonly_contract_repair(mutate_target="drift")
+        self.assertFalse(drifted.eligible)
+        self.assertIn("任务-000084只能追加固定root兼容合同段落", drifted.reasons)
+
+    def test_root合同修复禁止治理策略和看板路径(self):
+        inputs = self.root_readonly_contract_repair_inputs()
+        inputs["changed_paths"] = [
+            *inputs["changed_paths"],
+            "docs/治理/PR自动合并策略.md",
+            "docs/研发中心/看板.md",
+        ]
+        inputs["path_facts"] = [
+            self.path_fact(path, text="安全治理文本")
+            for path in inputs["changed_paths"]
+        ]
+        result = self.policy.evaluate_eligibility(**inputs)
+        self.assertFalse(result.eligible)
+        self.assertIn(
+            "阻塞任务合同修复包含不允许路径“docs/治理/PR自动合并策略.md”",
+            result.reasons,
+        )
+
     def contract_conflict_repair_inputs(self, *, mutate_target: str = ""):
         executor_title = "执行任务-000068合同冲突修复"
         executor_base = task_text(
@@ -3494,6 +3570,69 @@ class GitPathFactIntegrationTests(unittest.TestCase):
         self.assertNotIn("阻塞任务合同修复最多关联1个任务", payload["reasons"])
         self.assertEqual(
             "000056",
+            conflict_check.call_args.kwargs["task_id"],
+        )
+
+    def test_cliroot合同修复将执行任务传给跨载体检查(self):
+        metadata_path = self.repo / "root-blocked-repair.json"
+        metadata_path.write_text(
+            json.dumps(
+                {
+                    "body": (
+                        "## 关联任务\n\n- 任务-000086\n\n"
+                        "## 变更类型\n\n- 阻塞任务合同修复\n"
+                    ),
+                    "base_ref": "main",
+                    "repository": "xk320/zhishi",
+                    "head_repository": "xk320/zhishi",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        arguments = SimpleNamespace(
+            repo_root=self.repo,
+            base_ref="base",
+            head_ref="head",
+            metadata=metadata_path,
+        )
+        facts = (
+            self.policy.PathFact(
+                path="docs/研发中心/任务/任务-000084.md",
+                status="M",
+                mode="100644",
+                object_type="blob",
+                size=4,
+                text="safe",
+            ),
+        )
+        output = io.StringIO()
+        with (
+            mock.patch.object(self.policy, "_parse_arguments", return_value=arguments),
+            mock.patch.object(self.policy, "_load_path_facts", return_value=facts),
+            mock.patch.object(
+                self.policy,
+                "_load_ref_task_ids",
+                return_value=("000084", "000085", "000086"),
+            ),
+            mock.patch.object(
+                self.policy,
+                "_load_ref_tasks",
+                side_effect=({}, {}),
+            ),
+            mock.patch.object(self.policy, "_read_path_at_ref", return_value=None),
+            mock.patch.object(
+                self.policy,
+                "_cross_carrier_conflict_reasons",
+                return_value=(),
+            ) as conflict_check,
+            redirect_stdout(output),
+        ):
+            return_code = self.policy.main()
+
+        self.assertEqual(1, return_code)
+        self.assertEqual(
+            "000086",
             conflict_check.call_args.kwargs["task_id"],
         )
 

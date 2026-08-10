@@ -19,7 +19,24 @@
 
 ### root 只读兼容边界
 
-root模式只是执行身份事实，不是授权升级。远端命令必须由固定协议生成，禁止任意shell、任意参数、临时文件、追加、DDL、权限变更、数据库业务记录、凭据、环境变量、价格、成交、订单簿和账户读取。只保存脱敏摘要、指纹、计数、退出码和资源事实；任何异常清空候选并保留失败原因指纹。
+root模式只是执行身份事实，不是授权升级。固定目标仅为逻辑别名`ubuntu`，根目录为：
+
+- `/opt/binance-event`、`/opt/celueqing`、`/opt/crypto-radar`；
+- `/opt/event-prob-lab`、`/opt/orderbook-intelligence-service`、`/var/lib/mysql`。
+
+候选文件名固定为`contracts.sqlite3`、`contracts.db`、`contracts.csv`、`contracts_hand.csv`、
+`contract.csv`、`contract_metadata.csv`、`exchangeInfo.json`、`exchange_info.json`，格式仅为
+`csv`、`json`、`sqlite3`、`db`。固定探针协议为`zhishi-binance-contract-probe/1`，SSH命令为：
+
+```text
+ssh -o BatchMode=yes -o ConnectTimeout=15 \
+  -o ServerAliveInterval=5 -o ServerAliveCountMax=1 ubuntu python3 -
+```
+
+资源上限为900秒批次、15秒连接、4096个候选、16MiB候选文件、16MiB API响应、32MiB输出和64KiB日志。
+禁止任意shell/参数、临时文件、远端追加、DDL、权限变更、数据库业务记录、凭据、环境变量、价格、
+成交、订单簿和账户读取；只保存固定证据字段的脱敏摘要、指纹、计数、退出码和资源事实，异常清空候选
+并保留失败原因指纹。
 
 ### 可复算约束
 

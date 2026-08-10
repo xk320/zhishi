@@ -214,6 +214,36 @@ class CrossCarrierConflictTests(unittest.TestCase):
             conflicts,
         )
 
+    def test_root合同修复不把已完成源任务绑定到新PR分支(self):
+        task_text = (
+            "# 任务-000086：建立Ubuntu root只读兼容模式合同修复通道\n\n"
+            "- 状态：已完成\n"
+            "- 执行分支：`codex/task-000086-root-readonly-contract-governance-v1`\n"
+            "- 开始时间：`2026-08-10T20:50:25+08:00`\n"
+            "- Pull Request：[#227](https://github.com/xk320/zhishi/pull/227)\n"
+        )
+        conflicts = []
+        with mock.patch.object(
+            CONFLICT,
+            "_read_at_ref",
+            return_value=task_text,
+        ):
+            CONFLICT._check_task_execution_metadata(
+                ROOT,
+                "codex/task-000084-root-readonly-contract-repair-v1",
+                "000086",
+                {
+                    "body": (
+                        "## 关联任务\n- 任务-000086\n\n"
+                        "## 变更类型\n- 阻塞任务合同修复\n"
+                    ),
+                    "head_ref": "codex/task-000084-root-readonly-contract-repair-v1",
+                    "pr_number": 228,
+                },
+                conflicts,
+            )
+        self.assertEqual([], conflicts)
+
     def test空评审证据失败关闭(self):
         conflicts = []
         CONFLICT._check_review_evidence(
@@ -276,6 +306,31 @@ class CrossCarrierConflictTests(unittest.TestCase):
                 "head",
                 conflicts,
                 contract_conflict_repair_target="000066",
+            )
+        self.assertEqual([], conflicts)
+
+    def testroot只读兼容合同修复目标允许追加固定段落(self):
+        path = "docs/研发中心/任务/任务-000084.md"
+        base_text = (ROOT / path).read_text(encoding="utf-8")
+        head_text = base_text.rstrip("\n") + "\n\n" + CONFLICT.ROOT_READONLY_COMPAT_SECTION.strip() + "\n"
+
+        def paths(_repo, _ref):
+            return (path,)
+
+        def read(_repo, ref, requested):
+            self.assertEqual(path, requested)
+            return base_text if ref == "base" else head_text
+
+        conflicts = []
+        with mock.patch.object(CONFLICT, "_list_task_paths", side_effect=paths), mock.patch.object(
+            CONFLICT, "_read_at_ref", side_effect=read
+        ):
+            CONFLICT._check_task_contract_drift(
+                ROOT,
+                "base",
+                "head",
+                conflicts,
+                root_readonly_contract_repair_target="000084",
             )
         self.assertEqual([], conflicts)
 
