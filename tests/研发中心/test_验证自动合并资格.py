@@ -1073,10 +1073,12 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         return self.policy.evaluate_eligibility(**self.blocked_repair_inputs(**overrides))
 
     def root_readonly_contract_repair_inputs(self, *, mutate_target: str = ""):
-        executor = (
-            REPO_ROOT / "docs/研发中心/任务/任务-000086.md"
-        ).read_text(encoding="utf-8").replace(
-            "- 状态：执行中", "- 状态：已完成", 1
+        executor = re.sub(
+            r"^- 状态：[^\n]+$",
+            "- 状态：已完成",
+            (REPO_ROOT / "docs/研发中心/任务/任务-000086.md").read_text(encoding="utf-8"),
+            count=1,
+            flags=re.MULTILINE,
         )
         target_base = (
             REPO_ROOT / "docs/研发中心/任务/任务-000084.md"
