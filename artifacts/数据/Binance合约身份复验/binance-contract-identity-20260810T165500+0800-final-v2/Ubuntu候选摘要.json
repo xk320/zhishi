@@ -1,0 +1,18 @@
+{
+  "候选": [],
+  "候选文件数": 0,
+  "协议": "zhishi-binance-contract-probe/1",
+  "失败原因代码": "REMOTE_IDENTITY_NOT_DEDICATED",
+  "失败原因指纹": "992ce89895194e2b936ba0aeb4e35ef9ec2d12bb9997754fa37e02facbcf941c",
+  "失败安全": true,
+  "存储根目录": [],
+  "扫描GID": 0,
+  "扫描UID": 0,
+  "扫描完整": false,
+  "扫描文件数": 0,
+  "扫描是否专用只读": false,
+  "数据库写入": false,
+  "订单簿读取": false,
+  "远端临时文件": false,
+  "远端追加": false
+}
