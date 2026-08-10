@@ -59,17 +59,30 @@ class TestBinanceContractIdentity(unittest.TestCase):
     def test_evidence_requires_exact_member_and_contract(self):
         members = [{"资产编号": "DS-000001", "成员编号": "ZI-1", "标的": "BTC", "输入成员SHA-256": "a" * 64}]
         candidate = {"字段": {
-            "资产编号": "DS-000001", "成员编号": "ZI-1", "标的": "BTC", "标的身份": "BTC",
+            "资产编号": "DS-000001", "成员编号": "ZI-1", "标的": "BTC", "输入成员SHA-256": "a" * 64, "标的身份": "BTC",
             "来源提供者": "Binance", "交易场所": "Binance", "市场类型": "USDⓈ-M合约",
             "精确合约": "BTCUSDT", "数据对象": "exchangeInfo.symbols[BTCUSDT]",
-            "Schema确切版本": "exchangeInfo-v1", "授权边界": "公开匿名GET",
-            "字段中文映射": {"symbol": "精确合约"},
+            "Schema确切版本": "sha256:" + "b" * 64, "授权边界": "Binance公开无认证GET",
+            "字段中文映射": module.EXPECTED_FIELD_MAPPING,
         }}
-        contracts = {"BTC": [{"symbol": "BTCUSDT", "响应Schema指纹": "b" * 64}], "ETH": []}
+        contracts = {"BTC": [{"symbol": "BTCUSDT", "baseAsset": "BTC", "市场类型": "USDⓈ-M合约", "响应Schema指纹": "b" * 64}], "ETH": []}
         evidence, verified = module.build_evidence(members, [candidate], contracts)
         self.assertEqual(len(evidence["记录"]), 9)
         self.assertEqual(len(verified), 1)
         self.assertEqual({item["证明字段"] for item in evidence["记录"]}, set(module.IDENTITY_FIELDS))
+
+    def test_evidence_rejects_wrong_contract_mapping(self):
+        members = [{"资产编号": "DS-000001", "成员编号": "ZI-1", "标的": "BTC", "输入成员SHA-256": "a" * 64}]
+        candidate = {"字段": {
+            "资产编号": "DS-000001", "成员编号": "ZI-1", "标的": "BTC", "输入成员SHA-256": "a" * 64,
+            "来源提供者": "Binance", "交易场所": "Binance", "市场类型": "WRONG",
+            "标的身份": "BTC", "精确合约": "BTCUSDT", "数据对象": "WRONG",
+            "Schema确切版本": "WRONG", "授权边界": "WRONG", "字段中文映射": {},
+        }}
+        contracts = {"BTC": [{"symbol": "BTCUSDT", "baseAsset": "BTC", "市场类型": "USDⓈ-M合约", "响应Schema指纹": "b" * 64}], "ETH": []}
+        evidence, verified = module.build_evidence(members, [candidate], contracts)
+        self.assertEqual(evidence["记录"], [])
+        self.assertEqual(verified, [])
 
     def test_summary_preserves_btc_eth_denominators(self):
         members = [

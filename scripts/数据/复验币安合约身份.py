@@ -41,6 +41,8 @@ IDENTITY_FIELDS = (
     "来源提供者", "交易场所", "市场类型", "标的身份", "精确合约",
     "数据对象", "Schema确切版本", "授权边界", "字段中文映射",
 )
+CANDIDATE_BINDING_FIELDS = ("资产编号", "成员编号", "标的", "输入成员SHA-256")
+CANDIDATE_FIELDS = CANDIDATE_BINDING_FIELDS + IDENTITY_FIELDS
 FINAL_STATES = ("已证明", "拒绝", "无法判定", "失败", "未成熟", "失效")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 SAFE_TEXT = re.compile(
@@ -69,6 +71,17 @@ FIXED_ENDPOINTS = {
     "https://fapi.binance.com/fapi/v1/exchangeInfo": "USDⓈ-M合约",
     "https://dapi.binance.com/dapi/v1/exchangeInfo": "币本位合约",
 }
+EXPECTED_FIELD_MAPPING = {
+    "symbol": "精确合约",
+    "baseAsset": "标的身份",
+    "contractType": "合约类型",
+    "status": "合约状态",
+    "quoteAsset": "报价资产",
+    "marginAsset": "保证金资产",
+    "onboardDate": "上线时间",
+    "deliveryDate": "交割时间",
+}
+EXPECTED_AUTHORIZATION_SCOPE = "Binance公开无认证GET"
 
 
 def canonical(value: object) -> str:
@@ -85,6 +98,24 @@ def sha_path(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+TASK_MUTABLE_PREFIXES = (
+    "- 状态：", "- 执行分支：", "- 开始时间：", "- 实现提交SHA：", "- Pull Request：",
+    "- 完成实现时间：", "- 架构评审结论：", "- 合并完成时间：",
+)
+
+
+def task_contract_fingerprint(path: Path) -> str:
+    """只哈希不可变任务合同正文，排除执行/交付事实元数据。"""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    record_start = next((i for i, line in enumerate(lines) if line.strip() == "## 执行记录"), len(lines))
+    first_section = next((i for i, line in enumerate(lines[:record_start]) if line.startswith("## ")), record_start)
+    stable = [
+        line for i, line in enumerate(lines[:record_start])
+        if not (i < first_section and any(line.startswith(prefix) for prefix in TASK_MUTABLE_PREFIXES))
+    ]
+    return hashlib.sha256(("\n".join(stable) + "\n").encode("utf-8")).hexdigest()
 
 
 def sensitive(value: object) -> bool:
@@ -154,7 +185,7 @@ def fetch_exchange_info(api_spec: Mapping[str, str], limits: Mapping[str, int], 
     parsed = urlparse(target_uri)
     if parsed.scheme != "https" or parsed.netloc not in {"fapi.binance.com", "dapi.binance.com"} or parsed.path not in {"/fapi/v1/exchangeInfo", "/dapi/v1/exchangeInfo"} or parsed.query or parsed.fragment or target_uri not in FIXED_ENDPOINTS:
         return {"市场类型": api_spec.get("市场类型"), "端点": target_uri, "状态": "失败", "原因代码": "ENDPOINT_NOT_ALLOWLISTED", "观察时间": now.isoformat(), "HTTP状态": None, "响应SHA-256": None, "响应Schema指纹": None, "合约": []}
-    command = ["curl", "--http1.1", "--silent", "--show-error", "--fail", "--location", "--connect-timeout", "10", "--max-time", "30", "--user-agent", "zhishi-contract-identity/1.0", target_uri]
+    command = ["curl", "--http1.1", "--silent", "--show-error", "--fail", "--connect-timeout", "10", "--max-time", "30", "--user-agent", "zhishi-contract-identity/1.0", target_uri]
     try:
         completed = subprocess.run(command, capture_output=True, timeout=35, check=False, env={"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "LANG": "C", "LC_ALL": "C"})
         raw = completed.stdout
@@ -180,6 +211,11 @@ def fetch_exchange_info(api_spec: Mapping[str, str], limits: Mapping[str, int], 
             continue
         allowed["字段集合"] = sorted(item)
         allowed["字段集合指纹"] = fingerprint(sorted(item))
+        observed_ms = int(now.timestamp() * 1000)
+        allowed["未来日期字段"] = [
+            key for key in ("onboardDate", "deliveryDate")
+            if isinstance(item.get(key), (int, float)) and item[key] > observed_ms
+        ]
         selected.append(allowed)
     selected.sort(key=lambda item: (str(item.get("baseAsset")), str(item.get("symbol"))))
     schema_fingerprint = fingerprint({"顶层字段": sorted(payload), "symbol字段集合": sorted({key for item in symbols if isinstance(item, dict) for key in item})})
@@ -199,6 +235,7 @@ ROOTS={roots}
 NAMES=set({names})
 EXCLUDED=tuple({excluded})
 IDENTITY_FIELDS=tuple({identity_fields})
+CANDIDATE_FIELDS=("资产编号","成员编号","标的","输入成员SHA-256")+IDENTITY_FIELDS
 EXPECTED_UID={expected_uid}
 MAX_FILES={max_files}
 MAX_SIZE={max_size}
@@ -211,7 +248,7 @@ def skip(path):
 def label(path):
     return {{"路径指纹":fp(str(path)),"文件名":path.name,"上级目录名":path.parent.name}}
 def fields_from_header(header):
-    aliases={{"资产编号":{{"asset_id","asset_no","资产编号"}},"成员编号":{{"member_id","member_no","成员编号"}},"标的":{{"target","asset","标的"}},"标的身份":{{"symbol","asset_symbol","baseAsset","base_asset","标的身份"}},"来源提供者":{{"source_provider","provider","来源提供者"}},"交易场所":{{"venue","exchange","交易场所"}},"市场类型":{{"market_type","market","市场类型"}},"精确合约":{{"contract","instrument","symbol","精确合约"}},"数据对象":{{"data_object","dataset","数据对象"}},"Schema确切版本":{{"schema_version","schema_revision","Schema确切版本"}},"授权边界":{{"authorization_scope","access_scope","授权边界"}},"字段中文映射":{{"field_mapping","column_mapping","字段中文映射"}}}}
+    aliases={{"资产编号":{{"asset_id","asset_no","资产编号"}},"成员编号":{{"member_id","member_no","成员编号"}},"标的":{{"target","asset","标的"}},"输入成员SHA-256":{{"input_member_sha256","input_member_hash","输入成员SHA-256"}},"标的身份":{{"symbol","asset_symbol","baseAsset","base_asset","标的身份"}},"来源提供者":{{"source_provider","provider","来源提供者"}},"交易场所":{{"venue","exchange","交易场所"}},"市场类型":{{"market_type","market","市场类型"}},"精确合约":{{"contract","instrument","symbol","精确合约"}},"数据对象":{{"data_object","dataset","数据对象"}},"Schema确切版本":{{"schema_version","schema_revision","Schema确切版本"}},"授权边界":{{"authorization_scope","access_scope","授权边界"}},"字段中文映射":{{"field_mapping","column_mapping","字段中文映射"}}}}
     mapping={{}}
     for logical, options in aliases.items():
         matches=[item for item in header if item in options]
@@ -231,11 +268,12 @@ def read_csv_candidate(path):
         reader=csv.DictReader(io.StringIO(text))
         header=[str(item) for item in (reader.fieldnames or [])]
         result["字段映射"]=fields_from_header(header)
-        if not set(IDENTITY_FIELDS).issubset(result["字段映射"]):
+        if not set(CANDIDATE_FIELDS).issubset(result["字段映射"]):
             return result|{{"原因代码":"INCOMPLETE_IDENTITY_SCHEMA"}}
         for index,row in enumerate(reader):
-            if index>=630: break
-            selected={{key:row.get(result["字段映射"][key]) for key in IDENTITY_FIELDS}}
+            if index>=630:
+                result["行"]=[]; return result|{{"原因代码":"CANDIDATE_ROW_LIMIT_EXCEEDED"}}
+            selected={{key:row.get(result["字段映射"][key]) for key in CANDIDATE_FIELDS}}
             if not SAFE.search(json.dumps(selected,ensure_ascii=False,sort_keys=True)):
                 result["行"].append(selected)
         result["Schema指纹"]=fp(header)
@@ -250,12 +288,13 @@ def read_json_candidate(path):
         payload=json.loads(raw.decode("utf-8"))
         items=payload.get("symbols",payload if isinstance(payload,list) else []) if isinstance(payload,(dict,list)) else []
         if isinstance(items,dict): items=[items]
-        for item in items[:630]:
+        if len(items)>630: return result|{{"原因代码":"CANDIDATE_ROW_LIMIT_EXCEEDED"}}
+        for item in items:
             if not isinstance(item,dict): continue
             mapping=fields_from_header([str(key) for key in item])
-            if not set(IDENTITY_FIELDS).issubset(mapping):
+            if not set(CANDIDATE_FIELDS).issubset(mapping):
                 continue
-            selected={{key:item.get(mapping[key]) for key in IDENTITY_FIELDS}}
+            selected={{key:item.get(mapping[key]) for key in CANDIDATE_FIELDS}}
             if not SAFE.search(json.dumps(selected,ensure_ascii=False,sort_keys=True)):
                 result["行"].append(selected)
         result["Schema指纹"]=fp(sorted(payload) if isinstance(payload,dict) else "list")
@@ -273,22 +312,30 @@ def read_sqlite_candidate(path):
                 columns=[row[1] for row in connection.execute("PRAGMA table_info(\\\""+table.replace("\\\"","\\\"\\\"")+"\\\")")]
                 mapping=fields_from_header(columns)
                 result["表"].append({{"表名指纹":fp(table),"字段指纹":fp(columns),"字段映射":mapping}})
-                if not set(IDENTITY_FIELDS).issubset(mapping): continue
-                query="SELECT "+",".join("\\\""+mapping[key].replace("\\\"","\\\"\\\"")+"\\\"" for key in IDENTITY_FIELDS)+" FROM \\\""+table.replace("\\\"","\\\"\\\"")+"\\\" LIMIT 630"
+                if not set(CANDIDATE_FIELDS).issubset(mapping): continue
+                query="SELECT "+",".join("\\\""+mapping[key].replace("\\\"","\\\"\\\"")+"\\\"" for key in CANDIDATE_FIELDS)+" FROM \\\""+table.replace("\\\"","\\\"\\\"")+"\\\" LIMIT 631"
                 for row in connection.execute(query):
-                    result["行"].append({{key:row[index] for index,key in enumerate(IDENTITY_FIELDS)}})
+                    if len(result["行"]) >= 630:
+                        result["行"]=[]; return result|{{"原因代码":"CANDIDATE_ROW_LIMIT_EXCEEDED"}}
+                    result["行"].append({{key:row[index] for index,key in enumerate(CANDIDATE_FIELDS)}})
         finally: connection.close()
     except Exception:
         result["原因代码"]="CANDIDATE_READ_FAILED"
     return result
-candidates=[]; visited=0; roots_seen=[]; storage=[]
+candidates=[]; visited=0; roots_seen=[]; storage=[]; scan_failed=False
 for root in ROOTS:
     base=pathlib.Path(root)
     try:
-        st=base.stat(); roots_seen.append({{"根目录":base.name,"路径指纹":fp(str(base)),"模式":oct(st.st_mode&0o777),"属主UID":st.st_uid,"属组GID":st.st_gid,"可读":os.access(base,os.R_OK),"可写":os.access(base,os.W_OK)}})
-    except OSError: continue
-    if not base.exists(): continue
-    for current, dirs, files in os.walk(base,topdown=True,followlinks=False):
+        st=base.stat(); readable=base.is_dir() and os.access(base,os.R_OK)
+        roots_seen.append({{"根目录":base.name,"路径指纹":fp(str(base)),"模式":oct(st.st_mode&0o777),"属主UID":st.st_uid,"属组GID":st.st_gid,"可读":readable,"可写":os.access(base,os.W_OK)}})
+        if not readable:
+            scan_failed=True; continue
+    except OSError:
+        scan_failed=True; continue
+    walk_failed=[False]
+    def walk_error(error): walk_failed[0]=True
+    for current, dirs, files in os.walk(base,topdown=True,followlinks=False,onerror=walk_error):
+        if walk_failed[0]: scan_failed=True
         if time.monotonic()>DEADLINE or visited>=MAX_FILES: break
         dirs[:]=[name for name in dirs if not skip(pathlib.Path(current)/name) and not (pathlib.Path(current)/name).is_symlink()]
         for name in files:
@@ -306,9 +353,10 @@ for root in ROOTS:
                 if not SAFE.search(json.dumps(row,ensure_ascii=False,sort_keys=True)): candidates.append(row)
             except (OSError,PermissionError): continue
         if time.monotonic()>DEADLINE or visited>=MAX_FILES: break
+    if walk_failed[0]: scan_failed=True
     if time.monotonic()>DEADLINE or visited>=MAX_FILES: break
-scan_complete=visited<MAX_FILES and time.monotonic()<=DEADLINE
-failure_code="" if scan_complete else ("MAX_CANDIDATE_FILES_REACHED" if visited>=MAX_FILES else "SCAN_TIMEOUT")
+scan_complete=(not scan_failed) and visited<MAX_FILES and time.monotonic()<=DEADLINE
+failure_code="" if scan_complete else ("ROOT_OR_WALK_ACCESS_FAILED" if scan_failed else ("MAX_CANDIDATE_FILES_REACHED" if visited>=MAX_FILES else "SCAN_TIMEOUT"))
 print(json.dumps({{"协议":"zhishi-binance-contract-probe/1","扫描UID":os.geteuid(),"扫描GID":os.getegid(),"扫描是否专用只读":True,"扫描完整":scan_complete,"失败安全":not scan_complete,"失败原因代码":failure_code,"扫描文件数":visited,"候选文件数":len(candidates),"候选":candidates,"存储根目录":roots_seen,"远端追加":False,"远端临时文件":False,"数据库写入":False,"订单簿读取":False}},ensure_ascii=False,sort_keys=True))
 '''
 
@@ -397,16 +445,28 @@ def build_evidence(members: Sequence[Mapping[str, str]], candidates: Sequence[Ma
         matched = next((item for item in contracts.get(symbol, []) if item.get("symbol") == exact), None)
         if matched is None:
             continue
-        required = {"来源提供者", "交易场所", "市场类型", "标的身份", "精确合约", "数据对象", "Schema确切版本", "授权边界", "字段中文映射"}
+        if str(fields.get("成员编号", "")) != str(member.get("成员编号", "")):
+            continue
+        if str(fields.get("输入成员SHA-256", "")) != str(member.get("输入成员SHA-256", "")):
+            continue
+        required = set(IDENTITY_FIELDS)
         if not required.issubset(fields) or any(fields.get(key) in (None, "", "未知") for key in required):
             continue
-        if str(fields.get("来源提供者")) != "Binance" or str(fields.get("交易场所")) != "Binance" or str(fields.get("标的身份")) != symbol:
-            continue
-        if str(fields.get("精确合约")) != exact:
+        expected = {
+            "来源提供者": "Binance",
+            "交易场所": "Binance",
+            "市场类型": matched.get("市场类型"),
+            "标的身份": matched.get("baseAsset"),
+            "精确合约": matched.get("symbol"),
+            "数据对象": f"exchangeInfo.symbols[{matched.get('symbol')}]",
+            "Schema确切版本": f"sha256:{matched.get('响应Schema指纹')}",
+            "授权边界": EXPECTED_AUTHORIZATION_SCOPE,
+            "字段中文映射": EXPECTED_FIELD_MAPPING,
+        }
+        if matched.get("未来日期字段") or any(fields.get(key) != value for key, value in expected.items()):
             continue
         verified_members.add((symbol, asset_id))
         values = dict(fields)
-        values["Schema确切版本"] = str(values["Schema确切版本"]) + ";Binance响应Schema=" + str(matched["响应Schema指纹"])
         for field in IDENTITY_FIELDS:
             records.append({"证据记录编号": "E-000085-" + fingerprint({"资产编号": asset_id, "字段": field})[:16], "资产编号": asset_id, "标的": symbol, "输入成员SHA-256": member["输入成员SHA-256"], "证明字段": field, "声明值": values[field]})
     records.sort(key=lambda row: (row["标的"], row["资产编号"], row["证明字段"], row["证据记录编号"]))
@@ -451,7 +511,9 @@ def render_batch(config: Mapping[str, Any], members: Sequence[Mapping[str, str]]
         "批次": batch_id,
         "冻结时间": batch_start.isoformat(timespec="microseconds"),
         "成员顺序SHA-256": sha_path(MEMBERS_PATH),
-        "任务合同SHA-256": sha_path(TASK_PATH),
+        "任务合同SHA-256": task_contract_fingerprint(TASK_PATH),
+        "任务文件SHA-256": sha_path(TASK_PATH),
+        "任务合同指纹口径": "固定合同正文；排除执行/交付事实元数据",
         "配置SHA-256": sha_path(CONFIG_PATH),
         "公开接口摘要": api_snapshots,
         "Ubuntu扫描摘要": {key: remote.get(key) for key in ("扫描UID", "扫描GID", "扫描是否专用只读", "扫描完整", "失败安全", "失败原因代码", "扫描文件数", "候选文件数", "存储根目录", "远端追加", "数据库写入", "订单簿读取")},
@@ -461,6 +523,7 @@ def render_batch(config: Mapping[str, Any], members: Sequence[Mapping[str, str]]
         "安全边界": config["安全边界"],
         "资源上限": config["资源上限"],
         "结论边界": "公开接口和历史候选的描述性差异不能推导因果、预测优势、胜率、收益、研究准入或交易许可",
+        "输出文件SHA-256": {},
     }
     output = {
         "批次清单.json": json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
@@ -468,6 +531,13 @@ def render_batch(config: Mapping[str, Any], members: Sequence[Mapping[str, str]]
         "Ubuntu候选摘要.json": json.dumps(remote, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
         "成员状态摘要.json": json.dumps({"结果摘要": summary, "已证明成员": verified}, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
     }
+    manifest["输出文件SHA-256"] = {
+        name: hashlib.sha256(text.encode("utf-8")).hexdigest()
+        for name, text in output.items()
+        if name != "批次清单.json"
+    }
+    manifest["输出文件SHA-256"]["批次清单.json"] = "不递归；以发布后的Git对象SHA-256复算"
+    output["批次清单.json"] = json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
     if evidence["记录"]:
         output["任务-000084来源身份声明证据.json"] = json.dumps(evidence, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
     batch_root.mkdir(parents=True, exist_ok=True)
