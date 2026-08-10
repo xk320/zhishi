@@ -57,6 +57,7 @@ FIELD_ALIASES = {
     "资产编号": ("asset_id", "asset_no", "资产编号"),
     "成员编号": ("member_id", "member_no", "成员编号"),
     "标的": ("target", "asset", "标的"),
+    "输入成员SHA-256": ("input_member_sha256", "input_member_hash", "输入成员SHA-256"),
     "标的身份": ("symbol", "asset_symbol", "baseAsset", "base_asset", "标的身份"),
     "来源提供者": ("source_provider", "provider", "来源提供者"),
     "交易场所": ("venue", "exchange", "交易场所"),
@@ -468,7 +469,10 @@ def flatten_candidates(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
         rows = summary.get("行", []) if isinstance(summary, dict) else []
         for row in rows:
             if isinstance(row, dict) and not sensitive(row):
-                result.append({"文件": {key: candidate.get(key) for key in ("路径指纹", "文件名", "上级目录名", "大小", "修改时间_ns", "模式", "属主UID", "属组GID")}, "字段": row, "格式": summary.get("格式") if isinstance(summary, dict) else None, "Schema指纹": summary.get("Schema指纹") if isinstance(summary, dict) else None})
+                parent_fingerprint = candidate.get("上级目录指纹")
+                if parent_fingerprint is None and isinstance(candidate.get("上级目录名"), str):
+                    parent_fingerprint = fingerprint(candidate["上级目录名"])
+                result.append({"文件": {"路径指纹": candidate.get("路径指纹"), "文件名": candidate.get("文件名"), "上级目录指纹": parent_fingerprint, "大小": candidate.get("大小"), "修改时间_ns": candidate.get("修改时间_ns"), "模式": candidate.get("模式"), "属主UID": candidate.get("属主UID"), "属组GID": candidate.get("属组GID")}, "字段": row, "格式": summary.get("格式") if isinstance(summary, dict) else None, "Schema指纹": summary.get("Schema指纹") if isinstance(summary, dict) else None})
     return result
 
 
