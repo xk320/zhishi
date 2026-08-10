@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import ast
 import json
+import re
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -43,6 +45,18 @@ class RootCandidateIndexTests(unittest.TestCase):
         source = target._probe_source(self.config, 900)
         self.assertIn("25[0-5]", source)
         self.assertIn("entries=sorted(os.scandir(current), key=lambda item: item.name)", source)
+
+    def test_generated_probe_matches_ipv4_sensitive_value(self) -> None:
+        source = target._probe_source(self.config, 900)
+        tree = ast.parse(source)
+        safe_assignment = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target_node, ast.Name) and target_node.id == "SAFE" for target_node in node.targets)
+        )
+        pattern = ast.literal_eval(safe_assignment.value.args[0])
+        self.assertIsNotNone(re.search(pattern, "candidate address 192.0.2.1"))
 
     def test_failure_payload_is_root_compatible_and_empty(self) -> None:
         result = target._failure("INDEX_ENTRY_LIMIT")

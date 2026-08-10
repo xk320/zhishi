@@ -133,7 +133,7 @@ MAX_SUMMARY_BYTES=__MAX_SUMMARY_BYTES__
 MAX_CANDIDATES=__MAX_CANDIDATES__
 MAX_SIZE=__MAX_SIZE__
 DEADLINE=time.monotonic()+__DEADLINE__
-SAFE=re.compile(r"(?i)(password|passwd|secret|token\s*=|authorization:|gh[pousr]_[A-Za-z0-9]|-----BEGIN|\\b(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)(?:\\.(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)){3}\\b)")
+SAFE=re.compile(r"(?i)(password|passwd|secret|token\s*=|authorization:|gh[pousr]_[A-Za-z0-9]|-----BEGIN|\b(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}\b)")
 def fp(value): return hashlib.sha256(json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(",",":")).encode()).hexdigest()
 def skip(path):
     text=str(path)
