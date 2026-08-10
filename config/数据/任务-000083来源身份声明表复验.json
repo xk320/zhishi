@@ -1,0 +1,70 @@
+{
+  "合同版本": "source-identity-table-readonly-1.0",
+  "任务编号": "任务-000083",
+  "允许SSH目标": ["ubuntu"],
+  "允许对象类型": ["BASE TABLE"],
+  "数据库元数据范围": ["information_schema.TABLES", "information_schema.COLUMNS"],
+  "数据库元数据列": ["TABLE_SCHEMA", "TABLE_NAME", "TABLE_TYPE", "COLUMN_NAME", "COLUMN_TYPE", "ORDINAL_POSITION"],
+  "标的": ["BTC", "ETH"],
+  "主研究尺度": ["4小时", "8小时", "24小时", "48小时"],
+  "事后结果观察窗口": ["15分钟", "1小时"],
+  "逻辑字段顺序": [
+    "成员编号", "资产编号", "标的", "标的身份", "来源提供者", "交易场所", "市场类型", "精确合约", "数据对象", "Schema确切版本", "授权边界", "字段中文映射", "任务合同版本", "采集时间", "声明内容指纹", "成员输入指纹", "Schema指纹", "授权指纹", "可撤销事实或撤销时间", "声明版本或生效版本"
+  ],
+  "字段别名": {
+    "成员编号": ["member_id", "member_no", "成员编号", "成员ID"],
+    "资产编号": ["asset_id", "asset_no", "资产编号"],
+    "标的": ["target", "asset", "symbol_target", "标的"],
+    "标的身份": ["symbol", "asset_symbol", "instrument_symbol", "标的身份"],
+    "来源提供者": ["source_provider", "provider", "来源提供者"],
+    "交易场所": ["venue", "exchange", "交易场所"],
+    "市场类型": ["market_type", "market", "市场类型"],
+    "精确合约": ["contract", "instrument", "精确合约"],
+    "数据对象": ["data_object", "dataset", "数据对象"],
+    "Schema确切版本": ["schema_version", "schema_revision", "Schema确切版本"],
+    "授权边界": ["authorization_scope", "access_scope", "授权边界"],
+    "字段中文映射": ["field_mapping", "column_mapping", "字段中文映射"],
+    "任务合同版本": ["contract_version", "task_contract_version", "任务合同版本"],
+    "采集时间": ["collected_at", "collection_time", "collected_time", "采集时间"],
+    "声明内容指纹": ["declaration_sha256", "content_sha256", "声明内容SHA-256", "声明内容指纹"],
+    "成员输入指纹": ["member_sha256", "member_input_sha256", "输入成员SHA-256", "成员输入指纹"],
+    "Schema指纹": ["schema_sha256", "schema_fingerprint", "Schema指纹"],
+    "授权指纹": ["authorization_sha256", "authorization_fingerprint", "授权快照SHA-256", "授权指纹"],
+    "可撤销事实或撤销时间": ["revoked_at", "revocation_fact", "撤销事实", "撤销时间"],
+    "声明版本或生效版本": ["declaration_version", "version", "声明版本"]
+  },
+  "候选筛选": {
+    "对象类型必须精确匹配": true,
+    "每个逻辑字段必须唯一匹配": true,
+    "未知物理列拒绝": true,
+    "别名冲突拒绝": true,
+    "视图定义读取": false,
+    "底层业务列读取": false
+  },
+  "输入文件": [
+    {"用途": "任务设计", "路径": "docs/superpowers/specs/task-000083-source-identity-table-readonly-design.md", "SHA-256": "63a44adde78d41ec5ce657bb5decbaf60b2f709fefdf1036b3dff6c19d17debf"},
+    {"用途": "任务-000081批次清单", "路径": "artifacts/数据/来源身份声明九字段复验/source-identity-nine-fields-20260808T074100+0800-v4/批次清单.json", "SHA-256": "230316378417f43098f8033c16ae1ee19f54098dbbd5b8ac2f5b61a45dfb9d41"},
+    {"用途": "任务-000081成员清单", "路径": "artifacts/数据/来源身份声明九字段复验/source-identity-nine-fields-20260808T074100+0800-v4/来源身份声明九字段复验清单.csv", "SHA-256": "74a1034fdee473da1d4e750debf474a9b3f171c913ded93f514cf4f0648ba524"},
+    {"用途": "资产清单", "路径": "artifacts/审计/数据源清单.csv", "SHA-256": "019010d64fe47d89c81bfaedafd458f1d886025bb34292c0c32eafcfa4392657"}
+  ],
+  "安全边界": {
+    "远端写入": false,
+    "远端临时文件": false,
+    "数据库业务记录读取": false,
+    "读取环境变量或凭据": false,
+    "读取价格成交订单簿": false,
+    "原始业务记录落盘": false,
+    "修改原始数据": false,
+    "修改生产系统": false,
+    "权限或DDL变更": false
+  },
+  "资源上限": {
+    "批次总超时秒": 600,
+    "逐成员超时秒": 5,
+    "最大成员数": 630,
+    "最大候选行数": 630,
+    "最大输出字节数": 8388608,
+    "最大日志字节数": 32768,
+    "单行最大字节数": 65536
+  }
+}
