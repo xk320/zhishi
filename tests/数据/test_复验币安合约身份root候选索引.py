@@ -93,7 +93,6 @@ class RootCandidateIndexTests(unittest.TestCase):
         for index, path in enumerate(target.EXPECTED_ROOTS, 1):
             roots.append(
                 {
-                    "根目录": f"固定根目录-{index}",
                     "路径指纹": legacy.fingerprint(path),
                     "模式": "0o755",
                     "属主UID": 0,
@@ -140,7 +139,6 @@ class RootCandidateIndexTests(unittest.TestCase):
     def test_probe_rejects_duplicate_root_set(self) -> None:
         roots = []
         root = {
-            "根目录": "固定根目录-1",
             "路径指纹": legacy.fingerprint(target.EXPECTED_ROOTS[0]),
             "模式": "0o755",
             "属主UID": 0,
@@ -277,7 +275,6 @@ class RootCandidateIndexTests(unittest.TestCase):
     def _valid_roots(self):
         return [
             {
-                "根目录": f"固定根目录-{index}",
                 "路径指纹": legacy.fingerprint(path),
                 "模式": "0o755",
                 "属主UID": 0,

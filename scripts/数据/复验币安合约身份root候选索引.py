@@ -220,7 +220,7 @@ def read_sqlite_candidate(path):
     return result
 def root_info(base,ordinal):
     st=base.stat()
-    return {"根目录":f"固定根目录-{ordinal}","路径指纹":fp(str(base)),"模式":oct(st.st_mode&0o777),"属主UID":st.st_uid,"属组GID":st.st_gid,"可读":os.access(base,os.R_OK),"可写":os.access(base,os.W_OK)}
+    return {"路径指纹":fp(str(base)),"模式":oct(st.st_mode&0o777),"属主UID":st.st_uid,"属组GID":st.st_gid,"可读":os.access(base,os.R_OK),"可写":os.access(base,os.W_OK)}
 def candidate_info(path,base):
     st=path.stat(); readable=os.access(path,os.R_OK)
     row={"路径指纹":fp(str(path)),"文件名":path.name,"上级目录指纹":fp(str(path.parent)),"候选根目录指纹":fp(str(base)),"大小":st.st_size,"修改时间_ns":st.st_mtime_ns,"模式":oct(st.st_mode&0o777),"属主UID":st.st_uid,"属组GID":st.st_gid,"可读":readable,"父目录可写":os.access(path.parent,os.W_OK)}
@@ -368,15 +368,13 @@ def run_remote_probe(config: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(payload["存储根目录"], list) or len(payload["存储根目录"]) > len(EXPECTED_ROOTS):
         return _failure("PROBE_ROOT_SCHEMA_INVALID", exit_code=completed.returncode, resource=resource)
     root_fingerprints = {legacy.fingerprint(path) for path in EXPECTED_ROOTS}
-    root_names = {legacy.fingerprint(path): f"固定根目录-{index}" for index, path in enumerate(EXPECTED_ROOTS, 1)}
     seen_root_fingerprints = set()
     for root in payload["存储根目录"]:
-        if not isinstance(root, dict) or set(root) != {"根目录", "路径指纹", "模式", "属主UID", "属组GID", "可读", "可写"}:
+        if not isinstance(root, dict) or set(root) != {"路径指纹", "模式", "属主UID", "属组GID", "可读", "可写"}:
             return _failure("PROBE_ROOT_SCHEMA_INVALID", exit_code=completed.returncode, resource=resource)
         if (
             not isinstance(root["路径指纹"], str) or not re.fullmatch(r"[0-9a-f]{64}", root["路径指纹"])
             or root["路径指纹"] not in root_fingerprints or root["路径指纹"] in seen_root_fingerprints
-            or not isinstance(root["根目录"], str) or root["根目录"] != root_names.get(root["路径指纹"])
             or not isinstance(root["模式"], str) or not re.fullmatch(r"0o[0-7]{3,4}", root["模式"])
             or isinstance(root["属主UID"], bool) or not isinstance(root["属主UID"], int) or root["属主UID"] < 0
             or isinstance(root["属组GID"], bool) or not isinstance(root["属组GID"], int) or root["属组GID"] < 0

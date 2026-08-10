@@ -345,7 +345,7 @@ def render_root_batch(
     summary = legacy.summarize(members, verified, remote, api_snapshots, candidates=candidates if complete else [])
     summary["访问模式"] = remote.get("访问模式", ROOT_MODE)
     summary["Root身份事实"] = "uid=0；root不等价于专用只读UID=1001"
-    generated_id = "binance-contract-identity-" + batch_start.strftime("%Y%m%dT%H%M%S%z") + "-" + legacy.fingerprint({"任务": TASK_ID, "API": api_snapshots, "远端": remote, "成员": legacy.sha_path(MEMBERS_PATH)})[:12]
+    generated_id = "binance-contract-identity-" + batch_start.strftime("%Y%m%dT%H%M%S%z") + "-" + legacy.fingerprint({"任务": TASK_ID, "合同版本": config.get("合同版本"), "配置SHA-256": legacy.sha_path(config_path), "任务合同SHA-256": legacy.task_contract_fingerprint(TASK_PATH), "API": api_snapshots, "远端": remote, "成员": legacy.sha_path(MEMBERS_PATH)})[:12]
     batch_id = batch_id_override or generated_id
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+\-]{0,127}", batch_id):
         raise ValueError("批次身份格式非法")
