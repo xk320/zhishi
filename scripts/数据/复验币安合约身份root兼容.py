@@ -189,7 +189,13 @@ def run_root_remote_probe(config: Mapping[str, Any]) -> dict[str, Any]:
         return _root_failure("PROBE_PAYLOAD_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
     if not non_bool_int(payload.get("扫描文件数")) or not non_bool_int(payload.get("候选文件数")):
         return _root_failure("PROBE_COUNT_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
-    if not 0 <= payload["扫描文件数"] <= int(limits["最大候选文件数"]):
+    if (
+        not 0 <= payload["扫描文件数"] <= int(limits["最大候选文件数"])
+        or (
+            payload["扫描文件数"] == int(limits["最大候选文件数"])
+            and (payload.get("扫描完整") is not False or payload.get("失败安全") is not True)
+        )
+    ):
         return _root_failure("PROBE_SCAN_COUNT_LIMIT", exit_code=completed.returncode, resource_facts=resource_facts)
     if not 0 <= payload["候选文件数"] <= int(limits["最大候选文件数"]) or payload["候选文件数"] != len(payload["候选"]):
         return _root_failure("PROBE_CANDIDATE_COUNT_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)

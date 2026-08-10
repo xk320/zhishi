@@ -114,6 +114,18 @@ class TestRootCompatibleContractIdentity(unittest.TestCase):
         self.assertTrue(result["失败安全"])
         self.assertEqual(result["失败原因代码"], "PROBE_PAYLOAD_INVALID")
 
+    def test_probe_rejects_scan_limit_claimed_complete(self):
+        payload = {
+            "协议": "zhishi-binance-contract-probe/1", "访问模式": "root兼容只读", "扫描UID": 0, "扫描GID": 0,
+            "扫描是否专用只读": False, "扫描完整": True, "失败安全": False, "失败原因代码": "", "失败原因指纹": "",
+            "扫描文件数": 4096, "候选文件数": 0, "候选": [], "存储根目录": [], "远端追加": False,
+            "远端临时文件": False, "数据库写入": False, "订单簿读取": False,
+        }
+        with patch.object(module.legacy.engine, "run_bounded_process", return_value=_Completed(payload)):
+            result = module.run_root_remote_probe(module.load_config())
+        self.assertTrue(result["失败安全"])
+        self.assertEqual(result["失败原因代码"], "PROBE_SCAN_COUNT_LIMIT")
+
     def test_partial_evidence_is_not_published(self):
         members = module.legacy.load_members()
         remote = {"访问模式": "root兼容只读", "扫描UID": 0, "扫描是否专用只读": False, "扫描完整": True, "失败安全": False, "候选": []}
