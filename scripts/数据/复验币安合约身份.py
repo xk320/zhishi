@@ -51,7 +51,7 @@ SAFE_TEXT = re.compile(
 )
 CONTRACT_NAMES = frozenset({
     "contracts.sqlite3", "contracts.db", "contracts.csv", "contracts_hand.csv",
-    "contract.csv", "contract_metadata.csv", "exchangeinfo.json", "exchange_info.json",
+    "contract.csv", "contract_metadata.csv", "exchangeInfo.json", "exchange_info.json",
 })
 FIELD_ALIASES = {
     "资产编号": ("asset_id", "asset_no", "资产编号"),
@@ -146,10 +146,27 @@ def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
         raise ValueError("专用只读身份UID漂移")
     if value["主研究尺度"] != ["4小时", "8小时", "24小时", "48小时"] or value["事后结果观察窗口"] != ["15分钟", "1小时"]:
         raise ValueError("研究尺度漂移")
+    if value["远端候选根目录"] != [
+        "/opt/binance-event", "/opt/celueqing", "/opt/crypto-radar",
+        "/opt/event-prob-lab", "/opt/orderbook-intelligence-service", "/var/lib/mysql",
+    ]:
+        raise ValueError("远端候选根目录白名单漂移")
+    if sorted(value["候选文件名"]) != sorted(CONTRACT_NAMES) or len(value["候选文件名"]) != len(CONTRACT_NAMES):
+        raise ValueError("候选文件名白名单漂移")
+    if value["身份字段"] != list(IDENTITY_FIELDS):
+        raise ValueError("身份字段白名单漂移")
     if set(value["安全边界"]) != {"远端写入", "远端临时文件", "数据库业务记录读取", "读取环境变量或凭据", "读取价格成交订单簿", "原始业务记录落盘", "修改原始数据", "修改生产系统", "权限或DDL变更"} or any(value["安全边界"].values()):
         raise ValueError("安全边界必须全部为false")
     limits = value["资源上限"]
-    if limits.get("批次总超时秒") != 900 or limits.get("最大候选文件数") != 4096 or limits.get("最大API响应字节") != 16777216:
+    if limits != {
+        "批次总超时秒": 900,
+        "SSH连接超时秒": 15,
+        "最大候选文件数": 4096,
+        "最大候选文件字节": 16777216,
+        "最大API响应字节": 16777216,
+        "最大输出字节": 33554432,
+        "最大日志字节": 65536,
+    }:
         raise ValueError("资源上限漂移")
     if value["远端扫描规则"] != {
         "不跟随符号链接": True,
@@ -222,6 +239,29 @@ def fetch_exchange_info(api_spec: Mapping[str, str], limits: Mapping[str, int], 
     return {"市场类型": api_spec["市场类型"], "端点": target_uri, "状态": "通过", "原因代码": "", "观察时间": now.isoformat(), "HTTP状态": status, "响应SHA-256": response_sha, "响应Schema指纹": schema_fingerprint, "合约": selected}
 
 
+def _probe_failure_payload(reason: str) -> dict[str, Any]:
+    """返回不含远端正文的固定失败安全探针结果。"""
+    reason = reason if re.fullmatch(r"[A-Z0-9_]{1,64}", reason) else "PROBE_FAILED"
+    return {
+        "协议": "zhishi-binance-contract-probe/1",
+        "扫描UID": None,
+        "扫描GID": None,
+        "扫描是否专用只读": False,
+        "扫描完整": False,
+        "失败安全": True,
+        "失败原因代码": reason,
+        "失败原因指纹": fingerprint(reason),
+        "扫描文件数": 0,
+        "候选文件数": 0,
+        "候选": [],
+        "存储根目录": [],
+        "远端追加": False,
+        "远端临时文件": False,
+        "数据库写入": False,
+        "订单簿读取": False,
+    }
+
+
 def _remote_probe_source(config: Mapping[str, Any], deadline_seconds: int) -> str:
     roots = json.dumps(config["远端候选根目录"], ensure_ascii=False)
     names = json.dumps(sorted(config["候选文件名"]), ensure_ascii=False)
@@ -232,7 +272,7 @@ def _remote_probe_source(config: Mapping[str, Any], deadline_seconds: int) -> st
     identity_fields = json.dumps(list(IDENTITY_FIELDS), ensure_ascii=False)
     return f'''import csv, hashlib, io, json, os, pathlib, re, sqlite3, stat, time
 ROOTS={roots}
-NAMES=set({names})
+NAMES={{name.lower() for name in {names}}}
 EXCLUDED=tuple({excluded})
 IDENTITY_FIELDS=tuple({identity_fields})
 CANDIDATE_FIELDS=("资产编号","成员编号","标的","输入成员SHA-256")+IDENTITY_FIELDS
@@ -255,7 +295,7 @@ def fields_from_header(header):
         if len(matches)==1: mapping[logical]=matches[0]
     return mapping
 def failure(reason):
-    print(json.dumps({{"协议":"zhishi-binance-contract-probe/1","扫描UID":os.geteuid(),"扫描GID":os.getegid(),"扫描是否专用只读":False,"扫描完整":False,"失败安全":True,"失败原因代码":reason,"扫描文件数":0,"候选文件数":0,"候选":[],"存储根目录":[],"远端追加":False,"远端临时文件":False,"数据库写入":False,"订单簿读取":False}},ensure_ascii=False,sort_keys=True))
+    print(json.dumps({{"协议":"zhishi-binance-contract-probe/1","扫描UID":os.geteuid(),"扫描GID":os.getegid(),"扫描是否专用只读":False,"扫描完整":False,"失败安全":True,"失败原因代码":reason,"失败原因指纹":fp(reason),"扫描文件数":0,"候选文件数":0,"候选":[],"存储根目录":[],"远端追加":False,"远端临时文件":False,"数据库写入":False,"订单簿读取":False}},ensure_ascii=False,sort_keys=True))
     raise SystemExit(0)
 if os.geteuid()!=EXPECTED_UID:
     failure("REMOTE_IDENTITY_NOT_DEDICATED")
@@ -326,6 +366,8 @@ candidates=[]; visited=0; roots_seen=[]; storage=[]; scan_failed=False
 for root in ROOTS:
     base=pathlib.Path(root)
     try:
+        if base.is_symlink():
+            scan_failed=True; continue
         st=base.stat(); readable=base.is_dir() and os.access(base,os.R_OK)
         roots_seen.append({{"根目录":base.name,"路径指纹":fp(str(base)),"模式":oct(st.st_mode&0o777),"属主UID":st.st_uid,"属组GID":st.st_gid,"可读":readable,"可写":os.access(base,os.W_OK)}})
         if not readable:
@@ -345,19 +387,29 @@ for root in ROOTS:
             try:
                 st=path.stat()
                 row=label(path)|{{"大小":st.st_size,"修改时间_ns":st.st_mtime_ns,"模式":oct(st.st_mode&0o777),"属主UID":st.st_uid,"属组GID":st.st_gid,"可读":os.access(path,os.R_OK),"父目录可写":os.access(path.parent,os.W_OK)}}
-                if st.st_size<=MAX_SIZE and os.access(path,os.R_OK):
+                readable=os.access(path,os.R_OK)
+                if not readable:
+                    scan_failed=True
+                if st.st_size>MAX_SIZE:
+                    scan_failed=True
+                if st.st_size<=MAX_SIZE and readable:
                     suffix=path.suffix.lower()
                     if suffix==".csv": row["内容摘要"]=read_csv_candidate(path)
                     elif suffix==".json": row["内容摘要"]=read_json_candidate(path)
                     elif suffix in (".sqlite3",".db"): row["内容摘要"]=read_sqlite_candidate(path)
+                    if row.get("内容摘要",{{}}).get("原因代码") in {{"CANDIDATE_READ_FAILED", "FILE_TOO_LARGE", "CANDIDATE_ROW_LIMIT_EXCEEDED"}}:
+                        scan_failed=True
                 if not SAFE.search(json.dumps(row,ensure_ascii=False,sort_keys=True)): candidates.append(row)
-            except (OSError,PermissionError): continue
+            except (OSError,PermissionError):
+                scan_failed=True
+                continue
         if time.monotonic()>DEADLINE or visited>=MAX_FILES: break
     if walk_failed[0]: scan_failed=True
     if time.monotonic()>DEADLINE or visited>=MAX_FILES: break
 scan_complete=(not scan_failed) and visited<MAX_FILES and time.monotonic()<=DEADLINE
 failure_code="" if scan_complete else ("ROOT_OR_WALK_ACCESS_FAILED" if scan_failed else ("MAX_CANDIDATE_FILES_REACHED" if visited>=MAX_FILES else "SCAN_TIMEOUT"))
-print(json.dumps({{"协议":"zhishi-binance-contract-probe/1","扫描UID":os.geteuid(),"扫描GID":os.getegid(),"扫描是否专用只读":True,"扫描完整":scan_complete,"失败安全":not scan_complete,"失败原因代码":failure_code,"扫描文件数":visited,"候选文件数":len(candidates),"候选":candidates,"存储根目录":roots_seen,"远端追加":False,"远端临时文件":False,"数据库写入":False,"订单簿读取":False}},ensure_ascii=False,sort_keys=True))
+safe_candidates=candidates if scan_complete else []
+print(json.dumps({{"协议":"zhishi-binance-contract-probe/1","扫描UID":os.geteuid(),"扫描GID":os.getegid(),"扫描是否专用只读":True,"扫描完整":scan_complete,"失败安全":not scan_complete,"失败原因代码":failure_code,"失败原因指纹":fp(failure_code) if failure_code else "","扫描文件数":visited,"候选文件数":len(safe_candidates),"候选":safe_candidates,"存储根目录":roots_seen,"远端追加":False,"远端临时文件":False,"数据库写入":False,"订单簿读取":False}},ensure_ascii=False,sort_keys=True))
 '''
 
 
@@ -368,35 +420,42 @@ def run_remote_probe(config: Mapping[str, Any]) -> dict[str, Any]:
         "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=1", "ubuntu", "python3", "-",
     ]
     script = _remote_probe_source(config, int(config["资源上限"]["批次总超时秒"]))
-    completed = engine.run_bounded_process(
-        command,
-        input_text=script,
-        timeout=int(config["资源上限"]["批次总超时秒"]),
-        maximum_stdout=int(config["资源上限"]["最大输出字节"]),
-        maximum_stderr=int(config["资源上限"]["最大日志字节"]),
-    )
+    try:
+        completed = engine.run_bounded_process(
+            command,
+            input_text=script,
+            timeout=int(config["资源上限"]["批次总超时秒"]),
+            maximum_stdout=int(config["资源上限"]["最大输出字节"]),
+            maximum_stderr=int(config["资源上限"]["最大日志字节"]),
+        )
+    except Exception:
+        return _probe_failure_payload("SSH_PROBE_RUNTIME_FAILURE")
     if completed.returncode != 0:
-        raise RuntimeError("Ubuntu候选探针失败")
+        return _probe_failure_payload("SSH_PROBE_FAILED")
     try:
         payload = json.loads(completed.stdout)
-    except (TypeError, json.JSONDecodeError) as error:
-        raise RuntimeError("Ubuntu候选探针响应非法") from error
-    required = {"协议", "扫描UID", "扫描GID", "扫描是否专用只读", "扫描完整", "失败安全", "失败原因代码", "扫描文件数", "候选文件数", "候选", "存储根目录", "远端追加", "远端临时文件", "数据库写入", "订单簿读取"}
+    except (TypeError, json.JSONDecodeError):
+        return _probe_failure_payload("PROBE_RESPONSE_INVALID")
+    required = {"协议", "扫描UID", "扫描GID", "扫描是否专用只读", "扫描完整", "失败安全", "失败原因代码", "失败原因指纹", "扫描文件数", "候选文件数", "候选", "存储根目录", "远端追加", "远端临时文件", "数据库写入", "订单簿读取"}
     if set(payload) != required or payload["协议"] != "zhishi-binance-contract-probe/1":
-        raise ValueError("Ubuntu候选探针协议漂移")
+        return _probe_failure_payload("PROBE_PROTOCOL_DRIFT")
     if any(payload[key] is not False for key in ("远端追加", "远端临时文件", "数据库写入", "订单簿读取")):
-        raise ValueError("Ubuntu探针越过安全边界")
+        return _probe_failure_payload("PROBE_SECURITY_BOUNDARY")
     if not isinstance(payload["候选"], list) or not isinstance(payload["存储根目录"], list):
-        raise ValueError("Ubuntu探针结果类型非法")
+        return _probe_failure_payload("PROBE_PAYLOAD_INVALID")
     if payload["扫描是否专用只读"] is not True:
         if payload["候选"] or payload["扫描文件数"] != 0:
-            raise ValueError("非专用只读身份不得产生候选结果")
+            return _probe_failure_payload("REMOTE_IDENTITY_PAYLOAD_INVALID")
     elif payload["扫描UID"] != int(config["专用只读UID"]):
-        raise ValueError("专用只读身份UID不匹配")
+        return _probe_failure_payload("REMOTE_IDENTITY_UID_MISMATCH")
     if payload["扫描完整"] is not True and payload["失败安全"] is not True:
-        raise ValueError("扫描不完整时必须失败安全")
+        return _probe_failure_payload("SCAN_FAILURE_SAFETY_INVALID")
+    if payload["失败原因代码"] and payload["失败原因指纹"] != fingerprint(payload["失败原因代码"]):
+        return _probe_failure_payload("PROBE_FAILURE_FINGERPRINT_INVALID")
+    if not payload["失败原因代码"] and payload["失败原因指纹"] != "":
+        return _probe_failure_payload("PROBE_FAILURE_FINGERPRINT_INVALID")
     if sensitive(payload):
-        raise ValueError("Ubuntu探针结果包含敏感信息")
+        return _probe_failure_payload("PROBE_SENSITIVE_OUTPUT")
     return payload
 
 
@@ -491,6 +550,7 @@ def summarize(members: Sequence[Mapping[str, str]], verified: Sequence[Mapping[s
     summary["扫描完整"] = remote.get("扫描完整")
     summary["失败安全"] = remote.get("失败安全")
     summary["失败原因代码"] = remote.get("失败原因代码")
+    summary["失败原因指纹"] = remote.get("失败原因指纹")
     summary["公开接口成功数"] = sum(item.get("状态") == "通过" for item in api_snapshots)
     summary["ZS-DATA-GAP-001"] = "继续阻塞；仅有精确九字段证据的成员可进入声明输入" if len(verified_ids) < 630 else "按精确成员范围复算"
     return summary
@@ -498,7 +558,8 @@ def summarize(members: Sequence[Mapping[str, str]], verified: Sequence[Mapping[s
 
 def render_batch(config: Mapping[str, Any], members: Sequence[Mapping[str, str]], api_snapshots: Sequence[Mapping[str, Any]], remote: Mapping[str, Any], batch_start: dt.datetime, batch_root: Path, batch_id_override: str | None = None) -> Path:
     contracts = api_contracts(api_snapshots)
-    candidates = flatten_candidates(remote)
+    # 失败安全扫描不得携带任何部分候选进入证据或统计。
+    candidates = flatten_candidates(remote) if remote.get("扫描完整") is True and remote.get("失败安全") is False else []
     evidence, verified = build_evidence(members, candidates, contracts)
     summary = summarize(members, verified, remote, api_snapshots, candidates=candidates)
     generated_batch_id = "binance-contract-identity-" + batch_start.strftime("%Y%m%dT%H%M%S%z") + "-" + fingerprint({"任务": TASK_ID, "API": api_snapshots, "远端": remote, "成员": sha_path(MEMBERS_PATH)})[:12]
@@ -519,7 +580,7 @@ def render_batch(config: Mapping[str, Any], members: Sequence[Mapping[str, str]]
         "任务合同指纹口径": "固定合同正文；排除执行/交付事实元数据",
         "配置SHA-256": sha_path(CONFIG_PATH),
         "公开接口摘要": api_snapshots,
-        "Ubuntu扫描摘要": {key: remote.get(key) for key in ("扫描UID", "扫描GID", "扫描是否专用只读", "扫描完整", "失败安全", "失败原因代码", "扫描文件数", "候选文件数", "存储根目录", "远端追加", "数据库写入", "订单簿读取")},
+        "Ubuntu扫描摘要": {key: remote.get(key) for key in ("扫描UID", "扫描GID", "扫描是否专用只读", "扫描完整", "失败安全", "失败原因代码", "失败原因指纹", "扫描文件数", "候选文件数", "存储根目录", "远端追加", "数据库写入", "订单簿读取")},
         "候选文件摘要": remote.get("候选", []),
         "结果摘要": summary,
         "证据记录数": len(evidence["记录"]),

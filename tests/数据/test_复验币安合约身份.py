@@ -1,5 +1,6 @@
 import datetime as dt
 import json
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -94,6 +95,37 @@ class TestBinanceContractIdentity(unittest.TestCase):
         self.assertEqual(summary["分标的"]["BTC"]["候选总体"], 315)
         self.assertEqual(summary["分标的"]["ETH"]["无法判定"], 315)
         self.assertEqual(summary["已证明"], 0)
+
+    def test_incomplete_scan_discards_partial_candidates(self):
+        members = module.load_members()
+        candidate = {
+            "字段": {
+                "资产编号": members[0]["资产编号"], "成员编号": members[0]["成员编号"],
+                "标的": members[0]["标的"], "输入成员SHA-256": members[0]["输入成员SHA-256"],
+                "标的身份": "BTC", "来源提供者": "Binance", "交易场所": "Binance",
+                "市场类型": "USDⓈ-M合约", "精确合约": "BTCUSDT",
+                "数据对象": "exchangeInfo.symbols[BTCUSDT]", "Schema确切版本": "sha256:" + "b" * 64,
+                "授权边界": "Binance公开无认证GET", "字段中文映射": module.EXPECTED_FIELD_MAPPING,
+            }
+        }
+        remote = {
+            "扫描完整": False, "失败安全": True, "失败原因代码": "ROOT_OR_WALK_ACCESS_FAILED",
+            "失败原因指纹": module.fingerprint("ROOT_OR_WALK_ACCESS_FAILED"),
+            "候选": [candidate], "扫描UID": 1001, "扫描是否专用只读": True,
+            "候选文件数": 1,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            target = module.render_batch(
+                module.load_config(), members, [], remote,
+                dt.datetime(2026, 8, 10, tzinfo=dt.timezone.utc), Path(directory),
+                batch_id_override="test-incomplete-scan-fails-safe",
+            )
+            manifest = json.loads((target / "批次清单.json").read_text(encoding="utf-8"))
+            summary = manifest["结果摘要"]
+            self.assertEqual(manifest["证据记录数"], 0)
+            self.assertEqual(summary["已观察"], 0)
+            self.assertEqual(summary["已证明"], 0)
+            self.assertEqual(summary["无法判定"], 630)
 
 
 if __name__ == "__main__":
