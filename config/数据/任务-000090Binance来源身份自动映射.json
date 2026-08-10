@@ -7,6 +7,7 @@
     "full_history_download_summary.json"
   ],
   "成员清单": "artifacts/数据/来源身份声明九字段复验/source-identity-nine-fields-20260808T074100+0800-v4/来源身份声明九字段复验清单.csv",
+  "资产清单": "artifacts/审计/数据源清单.csv",
   "Binance公开接口": [
     {
       "市场类型": "USDⓈ-M合约",

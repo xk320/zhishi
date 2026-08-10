@@ -31,6 +31,7 @@ BINDING_VERSION = "source-identity-binding-1.0"
 SOURCE_ROOT = Path("/Volumes/data/data/binance/futures/um")
 MANIFEST_NAMES = ("klines_1d_manifest.json", "full_history_download_summary.json")
 MEMBERS_PATH = REPO_ROOT / "artifacts/数据/来源身份声明九字段复验/source-identity-nine-fields-20260808T074100+0800-v4/来源身份声明九字段复验清单.csv"
+INVENTORY_PATH = REPO_ROOT / "artifacts/审计/数据源清单.csv"
 CONFIG_PATH = REPO_ROOT / "config/数据/任务-000090Binance来源身份自动映射.json"
 DEFAULT_BATCH_ROOT = REPO_ROOT / "artifacts/数据/Binance来源身份自动映射"
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
@@ -84,13 +85,15 @@ def load_json(path: Path, label: str) -> tuple[Any, str]:
 
 
 def validate_config(config: Mapping[str, Any]) -> None:
-    required = {"合同版本", "任务编号", "本地只读根目录", "固定清单文件", "成员清单", "Binance公开接口", "标的", "主研究尺度", "事后结果观察窗口", "身份字段", "字段中文映射", "资源上限", "安全边界", "匹配规则", "输出绑定"}
+    required = {"合同版本", "任务编号", "本地只读根目录", "固定清单文件", "成员清单", "资产清单", "Binance公开接口", "标的", "主研究尺度", "事后结果观察窗口", "身份字段", "字段中文映射", "资源上限", "安全边界", "匹配规则", "输出绑定"}
     if set(config) != required:
         raise ValueError("任务-000090配置字段漂移")
     if config["合同版本"] != CONTRACT_VERSION or config["任务编号"] != TASK_ID:
         raise ValueError("任务-000090配置版本漂移")
     if config["本地只读根目录"] != str(SOURCE_ROOT) or tuple(config["固定清单文件"]) != MANIFEST_NAMES:
         raise ValueError("任务-000090固定清单漂移")
+    if config["成员清单"] != str(MEMBERS_PATH.relative_to(REPO_ROOT)) or config["资产清单"] != str(INVENTORY_PATH.relative_to(REPO_ROOT)):
+        raise ValueError("任务-000090成员或资产清单漂移")
     endpoints = [item.get("端点") for item in config["Binance公开接口"]]
     if endpoints != list(API_ENDPOINTS):
         raise ValueError("任务-000090公开端点漂移")
@@ -125,6 +128,23 @@ def load_members(path: Path) -> tuple[list[dict[str, str]], str]:
     return rows, digest
 
 
+def load_inventory(path: Path) -> tuple[dict[str, dict[str, str]], str]:
+    raw = path.read_bytes()
+    digest = sha256_bytes(raw)
+    rows: dict[str, dict[str, str]] = {}
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        required = {"资产编号", "位置", "资源名称", "标的范围", "服务或项目", "访问状态"}
+        if not required.issubset(set(reader.fieldnames or ())):
+            raise ValueError("资产清单字段不足")
+        for row in reader:
+            asset_id = str(row.get("资产编号", ""))
+            if not asset_id or asset_id in rows:
+                raise ValueError("资产清单资产编号缺失或重复")
+            rows[asset_id] = {key: str(row.get(key, "")) for key in required}
+    return rows, digest
+
+
 def _manifest_entries(document: Any, name: str) -> list[dict[str, Any]]:
     if not isinstance(document, dict):
         raise ValueError(f"{name}不是对象")
@@ -150,7 +170,8 @@ def load_manifests() -> tuple[list[dict[str, Any]], dict[str, str], dict[str, An
         document, digest = load_json(path, name)
         hashes[name] = digest
         current = _manifest_entries(document, name)
-        entries.extend({"清单": name, **item} for item in current)
+        source = str(document.get("source", ""))
+        entries.extend({"清单": name, "来源端点": source, **item} for item in current)
     stats["清单条目总数"] = len(entries)
     seen: set[tuple[str, str]] = set()
     for item in entries:
@@ -172,7 +193,6 @@ def load_manifests() -> tuple[list[dict[str, Any]], dict[str, str], dict[str, An
         if key in seen:
             continue
         seen.add(key)
-        entries.append({}) if False else None
         if symbol.startswith("BTC"):
             stats["BTC线索数"] += 1
         if symbol.startswith("ETH"):
@@ -200,7 +220,13 @@ def fetch_exchange_info(uri: str, started: float) -> dict[str, Any]:
         payload = json.loads(raw.decode("utf-8"))
         if not isinstance(payload, dict) or not isinstance(payload.get("symbols"), list):
             raise ValueError("API_SCHEMA_INVALID")
-        summary.update({"HTTP状态": status, "响应字节数": len(raw), "响应SHA-256": sha256_bytes(raw), "Schema确切版本指纹": schema_fingerprint(payload), "合约条目数": len(payload["symbols"]), "状态": "成功"})
+        index_fields = ("symbol", "baseAsset", "quoteAsset", "contractType", "status")
+        symbol_index = [
+            {key: row[key] for key in index_fields if key in row and isinstance(row[key], (str, int, float, bool))}
+            for row in payload["symbols"]
+            if isinstance(row, dict) and isinstance(row.get("symbol"), str)
+        ]
+        summary.update({"HTTP状态": status, "响应字节数": len(raw), "响应SHA-256": sha256_bytes(raw), "Schema确切版本指纹": schema_fingerprint(payload), "合约条目数": len(payload["symbols"]), "状态": "成功", "_合约索引": symbol_index})
         return summary
     except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
         code = str(exc)[:120] or exc.__class__.__name__
@@ -208,18 +234,44 @@ def fetch_exchange_info(uri: str, started: float) -> dict[str, Any]:
         return summary
 
 
-def member_status(member: Mapping[str, str], *, manifest_stats: Mapping[str, Any], api_summaries: list[Mapping[str, Any]]) -> dict[str, Any]:
+def member_status(member: Mapping[str, str], *, manifest_stats: Mapping[str, Any], api_summaries: list[Mapping[str, Any]], manifest_entries: list[Mapping[str, Any]] | None = None, inventory_rows: Mapping[str, Mapping[str, str]] | None = None, field_mapping_sha: str = "") -> dict[str, Any]:
     target = member["标的"]
     has_api = any(item.get("状态") == "成功" and item.get("市场类型") in {"USDⓈ-M合约", "币本位合约"} for item in api_summaries)
-    reason = "MEMBER_BINDING_UNAVAILABLE"
+    inventory = (inventory_rows or {}).get(member["资产编号"])
+    candidates = [item for item in (manifest_entries or []) if item.get("资产编号") == member["资产编号"]]
+    api_index = {
+        (item.get("市场类型"), row.get("symbol")): row
+        for item in api_summaries
+        if item.get("状态") == "成功"
+        for row in item.get("_合约索引", [])
+    }
+    candidate = candidates[0] if len(candidates) == 1 else {}
+    symbol = str(candidate.get("symbol", ""))
+    uri = str(candidate.get("来源端点", ""))
+    market = API_ENDPOINTS.get(uri, "")
+    checks = {
+        "资产编号唯一绑定": inventory is not None and len(candidates) == 1,
+        "路径精确且在固定根目录": bool(candidate.get("path", "")) and Path(str(candidate.get("path"))).is_absolute() and Path(str(candidate.get("path"))).resolve(strict=False).is_relative_to(SOURCE_ROOT.resolve()),
+        "符号精确匹配": bool(symbol) and (market, symbol) in api_index and str(api_index[(market, symbol)].get("baseAsset", "")) == target,
+        "端点与市场类型精确匹配": bool(uri) and uri in API_ENDPOINTS and market == str(candidate.get("市场类型", market)),
+        "成员SHA全等": bool(candidate.get("输入成员SHA-256")) and candidate.get("输入成员SHA-256") == member["输入成员SHA-256"],
+        "Schema指纹可复算": bool(candidate.get("Schema确切版本指纹")),
+        "授权指纹可复算": bool(candidate.get("授权边界指纹")),
+        "字段映射指纹全等": bool(field_mapping_sha) and candidate.get("字段中文映射指纹") == field_mapping_sha,
+    }
+    complete = all(checks.values()) and has_api
+    reason = "EXACT_MATCH_INCOMPLETE"
     if not has_api:
         reason = "PUBLIC_API_METADATA_UNAVAILABLE"
-    elif manifest_stats.get("固定根目录内路径数", 0) == 0:
-        reason = "MANIFEST_PATH_OUT_OF_SCOPE"
+    elif not candidates or inventory is None:
+        reason = "MEMBER_ASSET_BINDING_MISSING"
+    elif complete:
+        reason = "EXACT_MATCH_COMPLETE"
     return {
         "成员编号": member["成员编号"], "资产编号": member["资产编号"], "标的": target,
-        "输入成员SHA-256": member["输入成员SHA-256"], "状态": "无法判定", "原因代码": reason,
-        "证据定位": "", "匹配符号": "", "限制": "本地清单未提供可复算的逐成员绑定和内容SHA；公开接口不能追溯证明历史文件",
+        "输入成员SHA-256": member["输入成员SHA-256"], "状态": "已证明" if complete else "无法判定", "原因代码": reason,
+        "匹配候选数": len(candidates), "匹配符号": symbol, "匹配检查": checks, "证据定位": "" if not complete else str(candidate.get("证据定位", "")),
+        "限制": "本地清单未提供可复算的逐成员绑定和内容SHA；公开接口不能追溯证明历史文件" if not complete else "仅限固定输入和当前公开元数据",
         "解除条件": "提供当前成员SHA绑定、精确文件/对象定位、Schema/授权指纹和字段中文映射后追加批次",
     }
 
@@ -229,19 +281,25 @@ def build_batch(*, repo_root: Path = REPO_ROOT, batch_root: Path = DEFAULT_BATCH
     config, config_sha = load_json(CONFIG_PATH, "任务-000090配置")
     validate_config(config)
     members, member_sha = load_members(MEMBERS_PATH)
+    inventory_rows, inventory_sha = load_inventory(INVENTORY_PATH)
     manifests, manifest_hashes, manifest_stats = load_manifests()
-    del manifests  # 只保留计数和指纹，不把清单条目原文写入批次
-    api_summaries = [fetcher(url, started) for url in API_ENDPOINTS]
+    api_summaries = [fetcher(uri, started) for uri in API_ENDPOINTS]
     frozen = now or datetime.now(timezone.utc)
     if frozen.tzinfo is None:
         raise ValueError("冻结时间必须带时区")
     executor_sha = sha256_file(Path(__file__))
     task_path = repo_root / "docs/研发中心/任务/任务-000090.md"
     task_sha = sha256_file(task_path)
+    dependency_paths = {
+        "任务-000085": repo_root / "docs/研发中心/任务/任务-000085.md",
+        "任务-000089": repo_root / "docs/研发中心/任务/任务-000089.md",
+        "任务-000090": task_path,
+    }
+    dependency_shas = {name: sha256_file(path) for name, path in dependency_paths.items()}
     rules_sha = sha256_bytes(canonical({"合同版本": CONTRACT_VERSION, "身份字段": IDENTITY_FIELDS, "接口": API_ENDPOINTS, "资源": {"总超时": TOTAL_TIMEOUT_SECONDS, "响应上限": MAX_RESPONSE_BYTES}, "匹配": config["匹配规则"]}))
     field_mapping_sha = "sha256:" + sha256_bytes(canonical(config["字段中文映射"]))
     auth_fingerprints = {uri: "sha256:" + sha256_bytes(f"Binance公开无认证GET|{uri}|method=GET".encode("utf-8")) for uri in API_ENDPOINTS}
-    member_records = [member_status(member, manifest_stats=manifest_stats, api_summaries=api_summaries) for member in members]
+    member_records = [member_status(member, manifest_stats=manifest_stats, api_summaries=api_summaries, manifest_entries=manifests, inventory_rows=inventory_rows, field_mapping_sha=field_mapping_sha) for member in members]
     counts = {status: sum(row["状态"] == status for row in member_records) for status in STATUS_VALUES}
     counts.update({"候选总体": len(member_records), "计数守恒": sum(counts.values()) == len(member_records)})
     summary = {"BTC": {key: sum(row["标的"] == "BTC" and (row["状态"] == key if key in STATUS_VALUES else True) for row in member_records) for key in STATUS_VALUES}, "ETH": {key: sum(row["标的"] == "ETH" and (row["状态"] == key if key in STATUS_VALUES else True) for row in member_records) for key in STATUS_VALUES}}
@@ -249,13 +307,13 @@ def build_batch(*, repo_root: Path = REPO_ROOT, batch_root: Path = DEFAULT_BATCH
     summary["ETH"]["候选总体"] = sum(row["标的"] == "ETH" for row in member_records)
     evidence = {"证据版本": EVIDENCE_VERSION, "记录": []}
     binding = {"绑定清单版本": BINDING_VERSION, "记录": []}
-    input_fingerprint = sha256_bytes(canonical({"成员清单SHA-256": member_sha, "清单SHA-256": manifest_hashes, "配置SHA-256": config_sha}))
+    input_fingerprint = sha256_bytes(canonical({"成员清单SHA-256": member_sha, "资产清单SHA-256": inventory_sha, "清单SHA-256": manifest_hashes, "配置SHA-256": config_sha, "依赖SHA-256": dependency_shas}))
     base_id = f"binance-source-identity-auto-mapping-{frozen.astimezone(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{input_fingerprint[:12]}"
     final_dir = batch_root / base_id
     if final_dir.exists():
         raise FileExistsError(f"批次已存在，禁止覆盖：{final_dir}")
     payloads = {
-        "批次清单.json": {"合同版本": CONTRACT_VERSION, "任务编号": TASK_ID, "批次": base_id, "冻结时间": frozen.isoformat(), "输入": {"成员清单路径": str(MEMBERS_PATH.relative_to(repo_root)), "成员清单SHA-256": member_sha, "固定清单": manifest_hashes, "配置SHA-256": config_sha}, "规则SHA-256": rules_sha, "执行器SHA-256": executor_sha, "字段中文映射指纹": field_mapping_sha, "API": api_summaries, "Schema确切版本指纹": {item["端点"]: item.get("Schema确切版本指纹", "未知") for item in api_summaries}, "授权边界指纹": auth_fingerprints, "本地清单统计": manifest_stats, "结果摘要": {"总计": counts, "分标的": summary}, "资源事实": {"单进程串行": True, "最大API响应字节": MAX_RESPONSE_BYTES, "批次总超时秒": TOTAL_TIMEOUT_SECONDS, "实际耗时秒": round(time.monotonic() - started, 3)}, "安全声明": {"本地清单只读": True, "公开GET": True, "远端写入": False, "数据库业务记录读取": False, "读取原始业务正文": False, "读取凭据": False, "真实交易": False}, "结论边界": "无法判定不表达来源已证明、数据质量、因果、预测优势、胜率、收益、研究准入或交易许可"},
+        "批次清单.json": {"合同版本": CONTRACT_VERSION, "任务编号": TASK_ID, "批次": base_id, "冻结时间": frozen.isoformat(), "输入": {"成员清单路径": str(MEMBERS_PATH.relative_to(repo_root)), "成员清单SHA-256": member_sha, "资产清单路径": str(INVENTORY_PATH.relative_to(repo_root)), "资产清单SHA-256": inventory_sha, "固定清单": manifest_hashes, "配置SHA-256": config_sha, "依赖SHA-256": dependency_shas}, "规则SHA-256": rules_sha, "执行器SHA-256": executor_sha, "字段中文映射指纹": field_mapping_sha, "API": [{key: value for key, value in item.items() if not key.startswith("_")} for item in api_summaries], "Schema确切版本指纹": {item["端点"]: item.get("Schema确切版本指纹", "未知") for item in api_summaries}, "授权边界指纹": auth_fingerprints, "本地清单统计": manifest_stats, "结果摘要": {"总计": counts, "分标的": summary}, "资源事实": {"单进程串行": True, "最大API响应字节": MAX_RESPONSE_BYTES, "批次总超时秒": TOTAL_TIMEOUT_SECONDS, "实际耗时秒": round(time.monotonic() - started, 3)}, "安全声明": {"本地清单只读": True, "公开GET": True, "远端写入": False, "数据库业务记录读取": False, "读取原始业务正文": False, "读取凭据": False, "真实交易": False}, "结论边界": "无法判定不表达来源已证明、数据质量、因果、预测优势、胜率、收益、研究准入或交易许可"},
         "成员状态.json": {"批次": base_id, "成员": member_records},
         "source-identity-evidence-1.0.json": evidence,
         "来源身份绑定清单-1.0.json": binding,
