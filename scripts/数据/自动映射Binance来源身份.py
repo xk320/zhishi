@@ -233,9 +233,8 @@ def fetch_exchange_info(uri: str, started: float) -> dict[str, Any]:
         return summary
 
 
-def member_status(member: Mapping[str, str], *, manifest_stats: Mapping[str, Any], api_summaries: list[Mapping[str, Any]], manifest_entries: list[Mapping[str, Any]] | None = None, inventory_rows: Mapping[str, Mapping[str, str]] | None = None, field_mapping_sha: str = "") -> dict[str, Any]:
+def member_status(member: Mapping[str, str], *, manifest_stats: Mapping[str, Any], api_summaries: list[Mapping[str, Any]], manifest_entries: list[Mapping[str, Any]] | None = None, inventory_rows: Mapping[str, Mapping[str, str]] | None = None, field_mapping_sha: str = "", auth_fingerprints: Mapping[str, str] | None = None) -> dict[str, Any]:
     target = member["标的"]
-    has_api = any(item.get("状态") == "成功" and item.get("市场类型") in {"USDⓈ-M合约", "币本位合约"} for item in api_summaries)
     inventory = (inventory_rows or {}).get(member["资产编号"])
     candidates = [item for item in (manifest_entries or []) if item.get("资产编号") == member["资产编号"]]
     api_index = {
@@ -248,15 +247,22 @@ def member_status(member: Mapping[str, str], *, manifest_stats: Mapping[str, Any
     symbol = str(candidate.get("symbol", ""))
     uri = str(candidate.get("来源端点", ""))
     market = API_ENDPOINTS.get(uri, "")
+    matching_api = [item for item in api_summaries if item.get("状态") == "成功" and item.get("端点") == uri and item.get("市场类型") == market]
+    has_api = bool(matching_api)
+    expected_schema = str(matching_api[0].get("Schema确切版本指纹", "")) if matching_api else ""
+    expected_auth = str((auth_fingerprints or {}).get(uri, ""))
     checks = {
         "资产编号唯一绑定": inventory is not None and len(candidates) == 1,
         "路径精确且在固定根目录": bool(candidate.get("path", "")) and Path(str(candidate.get("path"))).is_absolute() and Path(str(candidate.get("path"))).resolve(strict=False).is_relative_to(SOURCE_ROOT.resolve()),
         "符号精确匹配": bool(symbol) and (market, symbol) in api_index and str(api_index[(market, symbol)].get("baseAsset", "")) == target,
-        "端点与市场类型精确匹配": bool(uri) and uri in API_ENDPOINTS and market == str(candidate.get("市场类型", market)),
+        "端点与市场类型精确匹配": bool(uri) and uri in API_ENDPOINTS and bool(str(candidate.get("市场类型", "")).strip()) and market == str(candidate.get("市场类型", "")),
         "成员SHA全等": bool(candidate.get("输入成员SHA-256")) and candidate.get("输入成员SHA-256") == member["输入成员SHA-256"],
-        "Schema指纹可复算": bool(candidate.get("Schema确切版本指纹")),
-        "授权指纹可复算": bool(candidate.get("授权边界指纹")),
+        "Schema指纹可复算": bool(expected_schema) and candidate.get("Schema确切版本指纹") == expected_schema,
+        "授权指纹可复算": bool(expected_auth) and candidate.get("授权边界指纹") == expected_auth,
         "字段映射指纹全等": bool(field_mapping_sha) and candidate.get("字段中文映射指纹") == field_mapping_sha,
+        "九项身份字段完整": all(str(candidate.get(field, "")).strip() for field in IDENTITY_FIELDS),
+        "证据定位唯一": bool(str(candidate.get("证据定位", "")).strip()),
+        "声明内容SHA可复算": bool(HEX64.fullmatch(str(candidate.get("声明内容SHA-256", "")))),
     }
     complete = all(checks.values()) and has_api
     reason = "EXACT_MATCH_INCOMPLETE"
@@ -273,6 +279,22 @@ def member_status(member: Mapping[str, str], *, manifest_stats: Mapping[str, Any
         "限制": "本地清单未提供可复算的逐成员绑定和内容SHA；公开接口不能追溯证明历史文件" if not complete else "仅限固定输入和当前公开元数据",
         "解除条件": "提供当前成员SHA绑定、精确文件/对象定位、Schema/授权指纹和字段中文映射后追加批次",
     }
+
+
+def build_identity_records(member: Mapping[str, str], candidate: Mapping[str, Any], field_mapping_sha: str) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """为已完成九项检查的唯一候选构建相互绑定的六字段/八字段记录。"""
+
+    location = str(candidate.get("证据定位", "")).strip()
+    values = {field: str(candidate.get(field, "")).strip() for field in IDENTITY_FIELDS}
+    if not location or not all(values.values()) or not HEX64.fullmatch(str(candidate.get("声明内容SHA-256", ""))):
+        return [], []
+    evidence: list[dict[str, str]] = []
+    binding: list[dict[str, str]] = []
+    for field in IDENTITY_FIELDS:
+        record_id = f"{location}#{field}"
+        evidence.append({"证据记录编号": record_id, "资产编号": member["资产编号"], "标的": member["标的"], "输入成员SHA-256": member["输入成员SHA-256"], "证明字段": field, "声明值": values[field]})
+        binding.append({"证据记录编号": record_id, "资产编号": member["资产编号"], "标的": member["标的"], "输入成员SHA-256": member["输入成员SHA-256"], "证明字段": field, "声明值": values[field], "证据定位": record_id, "字段中文映射指纹": field_mapping_sha})
+    return evidence, binding
 
 
 def build_batch(*, repo_root: Path = REPO_ROOT, batch_root: Path = DEFAULT_BATCH_ROOT, now: datetime | None = None, fetcher=fetch_exchange_info) -> tuple[Path, dict[str, Any]]:
@@ -304,14 +326,30 @@ def build_batch(*, repo_root: Path = REPO_ROOT, batch_root: Path = DEFAULT_BATCH
         for item in manifests
         if str(item.get("资产编号", ""))
     }
-    member_records = [member_status(member, manifest_stats=manifest_stats, api_summaries=api_summaries, manifest_entries=manifests, inventory_rows=manifest_inventory, field_mapping_sha=field_mapping_sha) for member in members]
+    member_records = [member_status(member, manifest_stats=manifest_stats, api_summaries=api_summaries, manifest_entries=manifests, inventory_rows=manifest_inventory, field_mapping_sha=field_mapping_sha, auth_fingerprints=auth_fingerprints) for member in members]
+    evidence_records: list[dict[str, str]] = []
+    binding_records: list[dict[str, str]] = []
+    for member, record in zip(members, member_records):
+        if record["状态"] != "已证明":
+            continue
+        candidates = [item for item in manifests if item.get("资产编号") == member["资产编号"]]
+        candidate_evidence, candidate_binding = build_identity_records(member, candidates[0], field_mapping_sha) if len(candidates) == 1 else ([], [])
+        if len(candidate_evidence) != len(IDENTITY_FIELDS) or len(candidate_binding) != len(IDENTITY_FIELDS):
+            record["状态"] = "无法判定"
+            record["原因代码"] = "EVIDENCE_BINDING_INCOMPLETE"
+            record["限制"] = "九项身份字段或六字段/八字段绑定记录不完整；失败安全降级"
+            continue
+        evidence_records.extend(candidate_evidence)
+        binding_records.extend(candidate_binding)
     counts = {status: sum(row["状态"] == status for row in member_records) for status in STATUS_VALUES}
     counts.update({"候选总体": len(member_records), "计数守恒": sum(counts.values()) == len(member_records)})
     summary = {"BTC": {key: sum(row["标的"] == "BTC" and (row["状态"] == key if key in STATUS_VALUES else True) for row in member_records) for key in STATUS_VALUES}, "ETH": {key: sum(row["标的"] == "ETH" and (row["状态"] == key if key in STATUS_VALUES else True) for row in member_records) for key in STATUS_VALUES}}
     summary["BTC"]["候选总体"] = sum(row["标的"] == "BTC" for row in member_records)
     summary["ETH"]["候选总体"] = sum(row["标的"] == "ETH" for row in member_records)
-    evidence = {"证据版本": EVIDENCE_VERSION, "记录": []}
-    binding = {"绑定清单版本": BINDING_VERSION, "记录": []}
+    if len({row["证据记录编号"] for row in evidence_records}) != len(evidence_records) or len({row["证据记录编号"] for row in binding_records}) != len(binding_records):
+        raise ValueError("证据记录编号重复，失败安全且不发布")
+    evidence = {"证据版本": EVIDENCE_VERSION, "记录": evidence_records}
+    binding = {"绑定清单版本": BINDING_VERSION, "记录": binding_records}
     input_fingerprint = sha256_bytes(canonical({"成员清单SHA-256": member_sha, "清单SHA-256": manifest_hashes, "配置SHA-256": config_sha, "依赖SHA-256": dependency_shas}))
     base_id = f"binance-source-identity-auto-mapping-{frozen.astimezone(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{input_fingerprint[:12]}"
     final_dir = batch_root / base_id
