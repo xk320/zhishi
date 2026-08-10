@@ -33,12 +33,15 @@ FINAL_CSV = FINAL_BATCH / "来源身份声明九字段复验清单.csv"
 TARGETS = ("BTC", "ETH")
 IDENTITY_FIELDS = ("来源提供者", "交易场所", "市场类型", "标的身份", "精确合约", "数据对象", "Schema确切版本", "授权边界", "字段中文映射")
 LOGICAL_FIELDS = ("成员编号", "资产编号", "标的", "标的身份", "来源提供者", "交易场所", "市场类型", "精确合约", "数据对象", "Schema确切版本", "授权边界", "字段中文映射", "任务合同版本", "采集时间", "声明内容指纹", "成员输入指纹", "Schema指纹", "授权指纹", "可撤销事实或撤销时间", "声明版本或生效版本")
-DECLARATION_FIELDS = frozenset((*IDENTITY_FIELDS, "成员编号", "资产编号", "标的", "任务合同版本", "采集时间", "输入成员SHA-256", "声明版本", "声明内容SHA-256", "Schema指纹", "授权快照SHA-256", "撤销事实", "证据定位"))
+# 探针读取的声明字段必须与配置冻结的20个逻辑字段完全一致；“证据定位”
+# 是探针根据表名和成员编号追加的脱敏定位元数据，不属于数据库读取列。
+DECLARATION_FIELDS = frozenset((*LOGICAL_FIELDS, "证据定位"))
 FINAL_STATES = ("已证明", "拒绝", "无法判定", "失败", "未成熟", "失效")
 ENTRY_STATES = ("未登记", "入口不完整", "已登记")
 LOCATABLE_STATES = ("已定位", "不可定位")
 SAFETY_KEYS = ("远端写入", "远端临时文件", "数据库业务记录读取", "读取环境变量或凭据", "读取价格成交订单簿", "原始业务记录落盘", "修改原始数据", "修改生产系统", "权限或DDL变更")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+MISSING_VALUES = frozenset({"", "未知", "NULL", "null", "\\N"})
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 SAFE_COLUMN = re.compile(r"^[A-Za-z0-9_]+$|^[\u4e00-\u9fffA-Za-z0-9_]+$")
 FIELD_ALIASES = {
@@ -91,6 +94,10 @@ def rel(path: Path) -> str:
 
 def sensitive(value: object) -> bool:
     return engine._contains_sensitive(canonical(value))
+
+
+def is_missing(value: object) -> bool:
+    return value is None or str(value).strip() in MISSING_VALUES
 
 
 def load_json(path: Path, label: str) -> dict[str, Any]:
@@ -224,20 +231,21 @@ def build_probe_script(members: Sequence[Mapping[str, str]], inventory: Sequence
         groups = {{}}
         results = [{{"资产编号": item["资产编号"], "表": "MySQL/" + item["Schema"] + "/" + item["Table"], "状态": "元数据未复验", "候选": False}} for item in ASSETS]
         candidates = []
+        env = {{"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "LANG": "C", "LC_ALL": "C"}}
         try:
-            env = {{"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "LANG": "C", "LC_ALL": "C"}}
             completed = subprocess.run(["mysql", "--no-defaults", "--batch", "--raw", "--skip-column-names", "--binary-mode", "--protocol=SOCKET", "--connect-timeout=3", "-e", SQL], capture_output=True, text=True, timeout=5, env=env, check=False)
-            if completed.returncode == 0 and len(completed.stdout.encode("utf-8", "replace")) <= 8388608 and len(completed.stderr.encode("utf-8", "replace")) <= 32768:
-                for line in completed.stdout.splitlines():
-                    fields = line.split("\\t")
-                    if len(fields) != 6:
-                        continue
-                    schema, table, table_type, column, column_type, ordinal = fields
-                    if not re.fullmatch(r"^[A-Za-z0-9_.-]+$", schema) or not re.fullmatch(r"^[A-Za-z0-9_.-]+$", table):
-                        continue
-                    groups.setdefault((schema, table), {{"类型": table_type, "列": []}})["列"].append({{"名称": column, "类型": column_type, "顺序": ordinal}})
-        except (OSError, subprocess.SubprocessError):
-            pass
+        except (OSError, subprocess.SubprocessError) as error:
+            raise RuntimeError("元数据探针执行失败") from error
+        if completed.returncode != 0 or len(completed.stdout.encode("utf-8", "replace")) > 8388608 or len(completed.stderr.encode("utf-8", "replace")) > 32768:
+            raise RuntimeError("元数据探针返回失败")
+        for line in completed.stdout.splitlines():
+            fields = line.split("\\t")
+            if len(fields) != 6:
+                raise RuntimeError("元数据探针行结构非法")
+            schema, table, table_type, column, column_type, ordinal = fields
+            if not re.fullmatch(r"^[A-Za-z0-9_.-]+$", schema) or not re.fullmatch(r"^[A-Za-z0-9_.-]+$", table):
+                raise RuntimeError("元数据探针标识非法")
+            groups.setdefault((schema, table), {{"类型": table_type, "列": []}})["列"].append({{"名称": column, "类型": column_type, "顺序": ordinal}})
         member_index = {{row["成员编号"]: row for row in MEMBERS}}
         for (schema, table), info in sorted(groups.items()):
             columns = info["列"]
@@ -261,17 +269,21 @@ def build_probe_script(members: Sequence[Mapping[str, str]], inventory: Sequence
             candidates.append(table_entry)
             ids = ",".join(literal(row["成员编号"]) for row in MEMBERS)
             select_sql = ",".join(identifier(mapping[field]) for field in FIELDS)
-            query = "SELECT " + select_sql + " FROM " + identifier(schema) + "." + identifier(table) + " WHERE " + identifier(mapping["成员编号"]) + " IN (" + ids + ") LIMIT 630"
+            query = "SELECT " + select_sql + " FROM " + identifier(schema) + "." + identifier(table) + " WHERE " + identifier(mapping["成员编号"]) + " IN (" + ids + ") ORDER BY " + identifier(mapping["成员编号"]) + " LIMIT 631"
             try:
                 completed = subprocess.run(["mysql", "--no-defaults", "--batch", "--raw", "--skip-column-names", "--binary-mode", "--protocol=SOCKET", "--connect-timeout=3", "-e", query], capture_output=True, text=True, timeout=5, env=env, check=False)
                 if completed.returncode != 0 or len(completed.stdout.encode("utf-8", "replace")) > 8388608 or len(completed.stderr.encode("utf-8", "replace")) > 32768:
-                    continue
+                    raise RuntimeError("候选声明列探针返回失败")
+                observed_rows = 0
                 for line in completed.stdout.splitlines():
                     if len(line.encode("utf-8", "replace")) > MAX_ROW:
-                        continue
+                        raise RuntimeError("候选声明行超出上限")
                     values = line.split("\\t")
                     if len(values) != len(FIELDS):
-                        continue
+                        raise RuntimeError("候选声明行字段数非法")
+                    observed_rows += 1
+                    if observed_rows > 630:
+                        raise RuntimeError("候选声明行超过630条上限")
                     declaration = {{field: values[index] for index, field in enumerate(FIELDS)}}
                     member_id = declaration["成员编号"]
                     if member_id not in member_index or not safe(declaration):
@@ -282,12 +294,12 @@ def build_probe_script(members: Sequence[Mapping[str, str]], inventory: Sequence
                         continue
                     table_entry["候选行数"] += 1
                     candidates.append({{"来源类型": "数据库候选BASE TABLE", "证据定位": location, "入口内容SHA-256": fp({{"表": candidate_table["表"], "Schema指纹": schema_fp}}), "候选Schema指纹": schema_fp, "声明": declaration}})
-            except (OSError, subprocess.SubprocessError):
-                continue
+            except (OSError, subprocess.SubprocessError) as error:
+                raise RuntimeError("候选声明列探针执行失败") from error
         table_rows = [item for item in candidates if "声明" not in item]
         rows = [item for item in candidates if "声明" in item]
         for result in results:
-            result["状态"] = "元数据已读取"
+            result["状态"] = "元数据已读取" if any(key == tuple(result["表"].split("/", 2)[1:]) for key in groups) else "元数据未发现"
             result["候选"] = any(item["表"] == result["表"] and "声明" not in item for item in candidates)
         print(json.dumps({{"探针版本": PROBE_VERSION, "远端写入": False, "远端临时文件": False, "数据库业务记录读取": False, "读取环境变量或凭据": False, "读取价格成交订单簿": False, "原始业务记录落盘": False, "修改原始数据": False, "修改生产系统": False, "权限或DDL变更": False, "结果": results, "候选表": table_rows, "候选行": rows}}, ensure_ascii=False, sort_keys=True))
     """)
@@ -313,14 +325,34 @@ def run_probe(script: str, config: Mapping[str, Any], runner: Callable[..., Any]
             raise ValueError("探针候选超过固定上限")
     if sensitive(payload):
         raise ValueError("探针响应包含敏感内容")
+    allowed_tables = {
+        "MySQL/" + str(asset["位置"])[len("MySQL/") :]
+        for asset in load_inventory()
+        if str(asset.get("位置", "")).startswith("MySQL/")
+    }
+    candidate_tables: dict[str, Mapping[str, Any]] = {}
     for item in payload["候选表"]:
         if set(item) != {"表", "对象类型", "字段映射", "Schema指纹", "候选行数"} or item["对象类型"] != "BASE TABLE" or not SHA256.fullmatch(str(item["Schema指纹"])):
             raise ValueError("候选表结构非法")
+        if item["表"] not in allowed_tables or not isinstance(item["字段映射"], dict):
+            raise ValueError("候选表未在资产清单或字段映射非法")
         if item["字段映射"] != {key: item["字段映射"].get(key) for key in LOGICAL_FIELDS} or len(set(item["字段映射"].values())) != len(LOGICAL_FIELDS):
             raise ValueError("候选字段映射非法")
+        for logical, physical in item["字段映射"].items():
+            if physical not in FIELD_ALIASES[logical]:
+                raise ValueError("候选字段映射越过别名白名单")
+        candidate_tables[str(item["表"])] = item
     for item in payload["候选行"]:
         if set(item) != {"来源类型", "证据定位", "入口内容SHA-256", "候选Schema指纹", "声明"} or not isinstance(item["声明"], dict) or set(item["声明"]) != DECLARATION_FIELDS:
             raise ValueError("候选行结构非法")
+        location = str(item["证据定位"])
+        table_path, separator, _ = location.partition("#成员编号=")
+        table = candidate_tables.get(table_path)
+        if not separator or table is None or item["候选Schema指纹"] != table["Schema指纹"]:
+            raise ValueError("候选行定位或Schema绑定非法")
+        expected_entry_hash = fp({"表": table_path, "Schema指纹": table["Schema指纹"]})
+        if item["入口内容SHA-256"] != expected_entry_hash:
+            raise ValueError("候选行入口指纹绑定非法")
     return payload
 
 
@@ -345,21 +377,25 @@ def complete(candidate: Mapping[str, Any], row: Mapping[str, str], batch_start: 
             missing.append("采集时间")
     except (TypeError, ValueError):
         missing.append("采集时间")
-    for field in (*IDENTITY_FIELDS, "成员编号", "资产编号", "标的", "任务合同版本", "采集时间", "输入成员SHA-256", "声明版本", "声明内容SHA-256", "Schema指纹", "授权快照SHA-256", "撤销事实", "证据定位"):
-        if not str(declaration.get(field, "")).strip() or str(declaration.get(field)).strip() == "未知":
+    for field in (*LOGICAL_FIELDS, "证据定位"):
+        if is_missing(declaration.get(field)):
             missing.append(field)
-    for field in ("输入成员SHA-256", "声明内容SHA-256", "Schema指纹", "授权快照SHA-256"):
+    for field in ("成员输入指纹", "声明内容指纹", "Schema指纹", "授权指纹"):
         if not SHA256.fullmatch(str(declaration.get(field, ""))):
             missing.append(field)
-    if declaration.get("成员编号") != row["成员编号"] or declaration.get("资产编号") != row["资产编号"] or declaration.get("标的") != row["标的"] or declaration.get("输入成员SHA-256") != row["输入成员SHA-256"]:
+    if declaration.get("成员编号") != row["成员编号"] or declaration.get("资产编号") != row["资产编号"] or declaration.get("标的") != row["标的"] or declaration.get("成员输入指纹") != row["输入成员SHA-256"]:
         missing.append("成员绑定")
-    if declaration.get("撤销事实") not in {"有效", "未撤销"}:
-        missing.append("撤销事实")
+    if is_missing(declaration.get("可撤销事实或撤销时间")):
+        missing.append("可撤销事实或撤销时间")
     if declaration.get("Schema指纹") != candidate.get("候选Schema指纹"):
         missing.append("Schema指纹绑定")
-    content = {key: value for key, value in declaration.items() if key != "声明内容SHA-256"}
-    if declaration.get("声明内容SHA-256") != fp(content):
-        missing.append("声明内容SHA-256")
+    content = {
+        key: value
+        for key, value in declaration.items()
+        if key not in {"声明内容指纹", "证据定位"}
+    }
+    if declaration.get("声明内容指纹") != fp(content):
+        missing.append("声明内容指纹")
     return not missing, sorted(set(missing))
 
 
@@ -376,7 +412,7 @@ def evaluate_member(row: Mapping[str, str], candidates: Sequence[Mapping[str, An
             complete_items.append(item)
         else:
             missing.extend(fields)
-    if len(complete_items) > 1 and len({canonical(item["声明"]) for item in complete_items}) > 1:
+    if len(complete_items) > 1:
         item = complete_items[0]
         return {"入口状态": "已登记", "可定位": "已定位", "九字段状态": "无法判定", "最终身份状态": prior, "候选入口数": len(matches), "原因代码": "IDENTITY_TABLE_ROW_CONFLICT", "缺失字段": "声明冲突", "声明来源": item["来源类型"], "证据定位": item["证据定位"], "声明": item["声明"]}
     if not complete_items:
@@ -393,19 +429,43 @@ def build_rows(members: Sequence[Mapping[str, str]], candidates: Sequence[Mappin
     for member in members:
         result = evaluate_member(member, candidates, batch_start)
         declaration = result.pop("声明")
-        row: dict[str, str] = {"批次": batch_id, "成员编号": member["成员编号"], "资产编号": member["资产编号"], "标的": member["标的"], "入口状态": str(result["入口状态"]), "可定位": str(result["可定位"]), "候选入口数": str(result["候选入口数"]), "九字段状态": str(result["九字段状态"]), "最终身份状态": str(result["最终身份状态"]), **{field: str(declaration.get(field, "未知")) for field in IDENTITY_FIELDS}, "任务合同版本": str(declaration.get("任务合同版本", "未知")), "采集时间": str(declaration.get("采集时间", "未知")), "声明版本": str(declaration.get("声明版本", "未知")), "声明来源": str(result["声明来源"]), "证据定位": str(result["证据定位"]), "声明内容SHA-256": str(declaration.get("声明内容SHA-256", "未知")), "输入成员SHA-256": str(declaration.get("输入成员SHA-256", member["输入成员SHA-256"])), "Schema指纹": str(declaration.get("Schema指纹", "未知")), "授权快照SHA-256": str(declaration.get("授权快照SHA-256", "未知")), "撤销事实": str(declaration.get("撤销事实", "未复验")), "原因代码": str(result["原因代码"]), "缺失字段": str(result["缺失字段"]), "限制": "只读取information_schema和严格20列声明白名单；不读取业务正文、价格、成交、订单簿、账户或凭据", "解除条件": "该成员绑定当前版本九字段、资产/标的、唯一定位、成员/Schema/授权指纹、带时区采集时间和未撤销事实后追加不可变批次", "入口记录SHA-256": "", "规则SHA-256": rules_hash, "执行器SHA-256": executor_hash, "成员记录SHA-256": ""}
+        row: dict[str, str] = {"批次": batch_id, "成员编号": member["成员编号"], "资产编号": member["资产编号"], "标的": member["标的"], "入口状态": str(result["入口状态"]), "可定位": str(result["可定位"]), "候选入口数": str(result["候选入口数"]), "九字段状态": str(result["九字段状态"]), "最终身份状态": str(result["最终身份状态"]), **{field: str(declaration.get(field, "未知")) for field in IDENTITY_FIELDS}, "任务合同版本": str(declaration.get("任务合同版本", "未知")), "采集时间": str(declaration.get("采集时间", "未知")), "声明版本": str(declaration.get("声明版本或生效版本", "未知")), "声明来源": str(result["声明来源"]), "证据定位": str(result["证据定位"]), "声明内容SHA-256": str(declaration.get("声明内容指纹", "未知")), "输入成员SHA-256": str(declaration.get("成员输入指纹", member["输入成员SHA-256"])), "Schema指纹": str(declaration.get("Schema指纹", "未知")), "授权快照SHA-256": str(declaration.get("授权指纹", "未知")), "撤销事实": str(declaration.get("可撤销事实或撤销时间", "未复验")), "原因代码": str(result["原因代码"]), "缺失字段": str(result["缺失字段"]), "限制": "只读取information_schema和严格20列声明白名单；不读取业务正文、价格、成交、订单簿、账户或凭据", "解除条件": "该成员绑定当前版本九字段、资产/标的、唯一定位、成员/Schema/授权指纹、带时区采集时间和未撤销事实后追加不可变批次", "入口记录SHA-256": "", "规则SHA-256": rules_hash, "执行器SHA-256": executor_hash, "成员记录SHA-256": ""}
         row["入口记录SHA-256"] = fp({"来源": row["声明来源"], "定位": row["证据定位"], "声明内容SHA-256": row["声明内容SHA-256"]})
         row["成员记录SHA-256"] = fp(row)
         rows.append(row)
-    summary: dict[str, Any] = {"候选成员总体": len(rows), "入口候选总体": sum(int(row["候选入口数"]) for row in rows), "已证明": sum(row["最终身份状态"] == "已证明" for row in rows)}
+    final_counts = {state: sum(row["最终身份状态"] == state for row in rows) for state in FINAL_STATES}
+    summary: dict[str, Any] = {
+        "候选成员总体": len(rows),
+        "候选总体": len(rows),
+        "分母": len(rows),
+        "已观察": sum(row["可定位"] == "已定位" for row in rows),
+        "已观察口径": "存在可定位的严格候选声明行",
+        **final_counts,
+        "已证明": final_counts["已证明"],
+        "入口候选总体": sum(int(row["候选入口数"]) for row in rows),
+        "最终状态计数": final_counts,
+    }
     per_symbol: dict[str, Any] = {}
     for symbol in TARGETS:
         selected = [row for row in rows if row["标的"] == symbol]
         if len(selected) != 315:
             raise ValueError(f"{symbol}成员分母漂移")
-        per_symbol[symbol] = {"候选总体": 315, "入口候选总体": sum(int(row["候选入口数"]) for row in selected), "入口状态计数": {state: sum(row["入口状态"] == state for row in selected) for state in ENTRY_STATES}, "可定位计数": {state: sum(row["可定位"] == state for row in selected) for state in LOCATABLE_STATES}, "最终状态计数": {state: sum(row["最终身份状态"] == state for row in selected) for state in FINAL_STATES}}
+        symbol_final_counts = {state: sum(row["最终身份状态"] == state for row in selected) for state in FINAL_STATES}
+        per_symbol[symbol] = {
+            "候选总体": len(selected),
+            "分母": len(selected),
+            "已观察": sum(row["可定位"] == "已定位" for row in selected),
+            "已观察口径": "存在可定位的严格候选声明行",
+            **symbol_final_counts,
+            "入口候选总体": sum(int(row["候选入口数"]) for row in selected),
+            "入口状态计数": {state: sum(row["入口状态"] == state for row in selected) for state in ENTRY_STATES},
+            "可定位计数": {state: sum(row["可定位"] == state for row in selected) for state in LOCATABLE_STATES},
+            "最终状态计数": symbol_final_counts,
+        }
         if any(sum(per_symbol[symbol][key].values()) != 315 for key in ("入口状态计数", "可定位计数", "最终状态计数")):
             raise ValueError("状态计数不守恒")
+        if per_symbol[symbol]["分母"] != 315 or per_symbol[symbol]["已观察"] > per_symbol[symbol]["分母"] or any(per_symbol[symbol][state] < 0 for state in FINAL_STATES):
+            raise ValueError("候选总体、分母或已观察计数非法")
     summary["分标的"] = per_symbol
     summary["ZS-DATA-GAP-001"] = "继续阻塞；未形成每个BTC、ETH成员的完整当前九字段声明" if summary["已证明"] < 630 else "按精确成员范围复算"
     return rows, summary
