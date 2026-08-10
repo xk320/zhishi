@@ -57,6 +57,7 @@ FIELD_ALIASES = {
     "资产编号": ("asset_id", "asset_no", "资产编号"),
     "成员编号": ("member_id", "member_no", "成员编号"),
     "标的": ("target", "asset", "标的"),
+    "输入成员SHA-256": ("input_member_sha256", "input_member_hash", "输入成员SHA-256"),
     "标的身份": ("symbol", "asset_symbol", "baseAsset", "base_asset", "标的身份"),
     "来源提供者": ("source_provider", "provider", "来源提供者"),
     "交易场所": ("venue", "exchange", "交易场所"),

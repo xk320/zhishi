@@ -305,9 +305,16 @@ def _validate_summary(summary: object, limits: Mapping[str, int]) -> bool:
         return False
     if summary["格式"] in {"csv", "json"}:
         mapping = summary.get("字段映射")
-        if not isinstance(mapping, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in mapping.items()):
-            return False
-        if not reason and set(mapping) != set(legacy.CANDIDATE_FIELDS):
+        if (
+            not isinstance(mapping, dict)
+            or set(mapping) != set(legacy.CANDIDATE_FIELDS)
+            or any(
+                not isinstance(value, str)
+                or value not in legacy.FIELD_ALIASES.get(key, ())
+                for key, value in mapping.items()
+            )
+            or len(set(mapping.values())) != len(legacy.CANDIDATE_FIELDS)
+        ):
             return False
         if not reason and (not isinstance(summary.get("Schema指纹"), str) or not re.fullmatch(r"[0-9a-f]{64}", summary["Schema指纹"])):
             return False

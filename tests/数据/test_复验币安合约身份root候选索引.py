@@ -298,6 +298,16 @@ class RootCandidateIndexTests(unittest.TestCase):
         }
         self.assertFalse(target._validate_summary(summary, self.config["资源上限"]))
 
+    def test_summary_rejects_unbound_csv_mapping(self) -> None:
+        summary = {
+            "格式": "csv",
+            "字段映射": {field: field for field in legacy.CANDIDATE_FIELDS},
+            "行": [],
+            "Schema指纹": "b" * 64,
+        }
+        summary["字段映射"]["标的"] = "unbound-column"
+        self.assertFalse(target._validate_summary(summary, self.config["资源上限"]))
+
     def _valid_roots(self):
         return [
             {

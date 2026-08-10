@@ -256,10 +256,17 @@ def run_root_remote_probe(config: Mapping[str, Any]) -> dict[str, Any]:
                 if set(summary) - {"格式", "字段映射", "行", "Schema指纹", "原因代码"}:
                     return _root_failure("PROBE_CONTENT_SCHEMA_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
                 mapping = summary.get("字段映射")
-                if not isinstance(mapping, dict) or any(not isinstance(key, str) or key not in legacy.CANDIDATE_FIELDS or not isinstance(value, str) for key, value in mapping.items()):
+                if (
+                    not isinstance(mapping, dict)
+                    or set(mapping) != set(legacy.CANDIDATE_FIELDS)
+                    or any(
+                        not isinstance(value, str)
+                        or value not in legacy.FIELD_ALIASES.get(key, ())
+                        for key, value in mapping.items()
+                    )
+                    or len(set(mapping.values())) != len(legacy.CANDIDATE_FIELDS)
+                ):
                     return _root_failure("PROBE_FIELD_MAPPING_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
-                if not summary.get("原因代码") and set(mapping) != set(legacy.CANDIDATE_FIELDS):
-                    return _root_failure("PROBE_FIELD_MAPPING_INCOMPLETE", exit_code=completed.returncode, resource_facts=resource_facts)
             elif not isinstance(summary.get("表"), list):
                 return _root_failure("PROBE_SQLITE_TABLES_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
             elif set(summary) - {"格式", "表", "行", "原因代码"}:
