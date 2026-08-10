@@ -193,6 +193,9 @@ BLOCKED_CONTRACT_REPAIR_TARGET = "000055"
 BLOCKED_CONTRACT_REPAIR_FIELD = "- 自动合并范围：治理自动化"
 ROOT_READONLY_CONTRACT_REPAIR_EXECUTOR = "000086"
 ROOT_READONLY_CONTRACT_REPAIR_TARGET = "000084"
+BLOCKED_CONTRACT_REPAIR_TARGETS = frozenset(
+    {BLOCKED_CONTRACT_REPAIR_TARGET, ROOT_READONLY_CONTRACT_REPAIR_TARGET}
+)
 ROOT_READONLY_COMPAT_SECTION = """## Ubuntu root只读兼容模式（受控合同修复）
 
 - 适用条件：仅当逻辑别名`ubuntu`实际UID为0且专用只读UID=1001不可用时启用；root与专用只读身份不等价，必须在批次证据中记录uid=0和访问模式。
@@ -3084,6 +3087,13 @@ def main() -> int:
     for path in changed_paths:
         match = TASK_FILE_PATTERN.fullmatch(path)
         if match is not None:
+            # 阻塞合同修复的PR正文只引用执行任务；目标任务由固定映射
+            # 加载用于合同校验，不把目标路径误算成第二个执行任务。
+            if (
+                change_type == BLOCKED_CONTRACT_REPAIR_TYPE
+                and match.group(1) in BLOCKED_CONTRACT_REPAIR_TARGETS
+            ):
+                continue
             task_ids.add(match.group(1))
     if len(task_ids) > _task_reference_limit(change_type):
         print(
@@ -3100,8 +3110,17 @@ def main() -> int:
         return 1
     ordered_ids = tuple(sorted(task_ids))
 
-    base_tasks = _load_ref_tasks(repo_root, arguments.base_ref, ordered_ids)
-    head_tasks = _load_ref_tasks(repo_root, arguments.head_ref, ordered_ids)
+    load_ids = set(ordered_ids)
+    if change_type == BLOCKED_CONTRACT_REPAIR_TYPE and len(ordered_ids) == 1:
+        target_id = {
+            BLOCKED_CONTRACT_REPAIR_EXECUTOR: BLOCKED_CONTRACT_REPAIR_TARGET,
+            ROOT_READONLY_CONTRACT_REPAIR_EXECUTOR: ROOT_READONLY_CONTRACT_REPAIR_TARGET,
+        }.get(ordered_ids[0])
+        if target_id is not None:
+            load_ids.add(target_id)
+    loaded_ids = tuple(sorted(load_ids))
+    base_tasks = _load_ref_tasks(repo_root, arguments.base_ref, loaded_ids)
+    head_tasks = _load_ref_tasks(repo_root, arguments.head_ref, loaded_ids)
     # 取消状态的替代任务只作为证据引用，不属于本次状态迁移；仍从同一
     # PR 的基线/头提交加载其任务文件，以便用main中的真实合并事实复算。
     for task in tuple(head_tasks.values()):
