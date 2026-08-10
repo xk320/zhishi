@@ -141,6 +141,17 @@ def run_root_remote_probe(config: Mapping[str, Any]) -> dict[str, Any]:
         "最大输出字节": int(limits["最大输出字节"]),
         "最大日志字节": int(limits["最大日志字节"]),
     }
+
+    def byte_length(value: object) -> int:
+        if isinstance(value, str):
+            return len(value.encode("utf-8"))
+        if isinstance(value, (bytes, bytearray)):
+            return len(value)
+        return 0
+
+    def non_bool_int(value: object) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool)
+
     try:
         completed = legacy.engine.run_bounded_process(
             command,
@@ -150,8 +161,8 @@ def run_root_remote_probe(config: Mapping[str, Any]) -> dict[str, Any]:
             maximum_stderr=int(config["资源上限"]["最大日志字节"]),
         )
         resource_facts.update({
-            "标准输出字节": len(completed.stdout or b""),
-            "标准错误字节": len(completed.stderr or b""),
+            "标准输出字节": byte_length(completed.stdout),
+            "标准错误字节": byte_length(completed.stderr),
         })
     except Exception:
         return _root_failure("SSH_PROBE_RUNTIME_FAILURE", resource_facts=resource_facts)
@@ -161,6 +172,8 @@ def run_root_remote_probe(config: Mapping[str, Any]) -> dict[str, Any]:
         payload = json.loads(completed.stdout)
     except (TypeError, json.JSONDecodeError):
         return _root_failure("PROBE_RESPONSE_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+    if not isinstance(payload, dict):
+        return _root_failure("PROBE_PAYLOAD_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
     required = {
         "协议", "访问模式", "扫描UID", "扫描GID", "扫描是否专用只读", "扫描完整", "失败安全",
         "失败原因代码", "失败原因指纹", "扫描文件数", "候选文件数", "候选", "存储根目录",
@@ -168,43 +181,105 @@ def run_root_remote_probe(config: Mapping[str, Any]) -> dict[str, Any]:
     }
     if set(payload) != required or payload.get("协议") != "zhishi-binance-contract-probe/1" or payload.get("访问模式") != ROOT_MODE:
         return _root_failure("PROBE_PROTOCOL_DRIFT", exit_code=completed.returncode, resource_facts=resource_facts)
-    if payload.get("扫描UID") != ROOT_UID or payload.get("扫描是否专用只读") is not False:
+    if not non_bool_int(payload.get("扫描UID")) or payload.get("扫描UID") != ROOT_UID or not non_bool_int(payload.get("扫描GID")) or payload.get("扫描GID") < 0 or payload.get("扫描是否专用只读") is not False:
         return _root_failure("ROOT_IDENTITY_FACT_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
     if any(payload.get(key) is not False for key in ("远端追加", "远端临时文件", "数据库写入", "订单簿读取")):
         return _root_failure("PROBE_SECURITY_BOUNDARY", exit_code=completed.returncode, resource_facts=resource_facts)
     if not isinstance(payload.get("候选"), list) or not isinstance(payload.get("存储根目录"), list):
         return _root_failure("PROBE_PAYLOAD_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
-    if not isinstance(payload.get("扫描文件数"), int) or not isinstance(payload.get("候选文件数"), int):
+    if not non_bool_int(payload.get("扫描文件数")) or not non_bool_int(payload.get("候选文件数")):
         return _root_failure("PROBE_COUNT_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
     if not 0 <= payload["扫描文件数"] <= int(limits["最大候选文件数"]):
         return _root_failure("PROBE_SCAN_COUNT_LIMIT", exit_code=completed.returncode, resource_facts=resource_facts)
     if not 0 <= payload["候选文件数"] <= int(limits["最大候选文件数"]) or payload["候选文件数"] != len(payload["候选"]):
         return _root_failure("PROBE_CANDIDATE_COUNT_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
-    expected_root_fingerprints = {legacy.fingerprint(path) for path in config["远端候选根目录"]}
-    expected_root_names = {Path(path).name for path in config["远端候选根目录"]}
-    roots = payload["存储根目录"]
-    if len({item.get("路径指纹") for item in roots if isinstance(item, dict)}) != len(roots):
-        return _root_failure("PROBE_ROOT_DUPLICATE", exit_code=completed.returncode, resource_facts=resource_facts)
-    if any(
-        not isinstance(item, dict)
-        or item.get("根目录") not in expected_root_names
-        or item.get("路径指纹") not in expected_root_fingerprints
-        or not isinstance(item.get("可读"), bool)
-        or not isinstance(item.get("可写"), bool)
-        for item in roots
-    ):
-        return _root_failure("PROBE_ROOT_PATH_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
-    for candidate in payload["候选"]:
-        if not isinstance(candidate, dict):
-            return _root_failure("PROBE_CANDIDATE_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
-        if candidate.get("文件名", "").lower() not in {name.lower() for name in config["候选文件名"]}:
-            return _root_failure("PROBE_CANDIDATE_NAME_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
-        if candidate.get("候选根目录指纹") not in expected_root_fingerprints:
-            return _root_failure("PROBE_CANDIDATE_ROOT_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
-        if not isinstance(candidate.get("路径指纹"), str) or not re.fullmatch(r"[0-9a-f]{64}", candidate["路径指纹"]):
-            return _root_failure("PROBE_CANDIDATE_PATH_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
-        if not isinstance(candidate.get("大小"), int) or candidate["大小"] < 0 or candidate["大小"] > int(limits["最大候选文件字节"]):
-            return _root_failure("PROBE_CANDIDATE_SIZE_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+    if payload["候选文件数"] > payload["扫描文件数"]:
+        return _root_failure("PROBE_COUNT_NOT_CONSERVED", exit_code=completed.returncode, resource_facts=resource_facts)
+    try:
+        expected_root_fingerprints = {legacy.fingerprint(path) for path in config["远端候选根目录"]}
+        expected_root_names = {Path(path).name for path in config["远端候选根目录"]}
+        allowed_names = {name.lower() for name in config["候选文件名"]}
+        roots = payload["存储根目录"]
+        if len({item.get("路径指纹") for item in roots if isinstance(item, dict) and isinstance(item.get("路径指纹"), str)}) != len(roots):
+            return _root_failure("PROBE_ROOT_DUPLICATE", exit_code=completed.returncode, resource_facts=resource_facts)
+        for item in roots:
+            if not isinstance(item, dict) or set(item) != {"根目录", "路径指纹", "模式", "属主UID", "属组GID", "可读", "可写"}:
+                return _root_failure("PROBE_ROOT_SCHEMA_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+            if (
+                not isinstance(item["根目录"], str)
+                or item["根目录"] not in expected_root_names
+                or not isinstance(item["路径指纹"], str)
+                or item["路径指纹"] not in expected_root_fingerprints
+                or not isinstance(item["模式"], str)
+                or not re.fullmatch(r"0o[0-7]{3,4}", item["模式"])
+                or not non_bool_int(item["属主UID"])
+                or item["属主UID"] < 0
+                or not non_bool_int(item["属组GID"])
+                or item["属组GID"] < 0
+                or not isinstance(item["可读"], bool)
+                or not isinstance(item["可写"], bool)
+            ):
+                return _root_failure("PROBE_ROOT_PATH_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+        candidate_keys = {"路径指纹", "文件名", "上级目录名", "候选根目录指纹", "大小", "修改时间_ns", "模式", "属主UID", "属组GID", "可读", "父目录可写", "内容摘要"}
+        for candidate in payload["候选"]:
+            if not isinstance(candidate, dict) or set(candidate) != candidate_keys:
+                return _root_failure("PROBE_CANDIDATE_SCHEMA_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+            if (
+                not isinstance(candidate["路径指纹"], str) or not re.fullmatch(r"[0-9a-f]{64}", candidate["路径指纹"])
+                or not isinstance(candidate["候选根目录指纹"], str) or candidate["候选根目录指纹"] not in expected_root_fingerprints
+                or not isinstance(candidate["文件名"], str)
+                or not isinstance(candidate["上级目录名"], str) or not candidate["上级目录名"]
+                or not non_bool_int(candidate["大小"]) or candidate["大小"] < 0 or candidate["大小"] > int(limits["最大候选文件字节"])
+                or not non_bool_int(candidate["修改时间_ns"]) or candidate["修改时间_ns"] < 0
+                or not isinstance(candidate["模式"], str) or not re.fullmatch(r"0o[0-7]{3,4}", candidate["模式"])
+                or not non_bool_int(candidate["属主UID"]) or candidate["属主UID"] < 0
+                or not non_bool_int(candidate["属组GID"]) or candidate["属组GID"] < 0
+                or not isinstance(candidate["可读"], bool) or not isinstance(candidate["父目录可写"], bool)
+                or not isinstance(candidate["内容摘要"], dict)
+            ):
+                return _root_failure("PROBE_CANDIDATE_METADATA_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+            if candidate["文件名"].lower() not in allowed_names:
+                return _root_failure("PROBE_CANDIDATE_NAME_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+            summary = candidate["内容摘要"]
+            fmt = summary.get("格式")
+            if fmt not in {"csv", "json", "sqlite"} or not isinstance(summary.get("行"), list) or len(summary["行"]) > 630:
+                return _root_failure("PROBE_CONTENT_SUMMARY_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+            if not isinstance(summary.get("原因代码", ""), str) or (summary.get("原因代码") and not re.fullmatch(r"[A-Z0-9_]{1,64}", summary["原因代码"])):
+                return _root_failure("PROBE_CONTENT_FAILURE_CODE_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+            if fmt in {"csv", "json"}:
+                if set(summary) - {"格式", "字段映射", "行", "Schema指纹", "原因代码"}:
+                    return _root_failure("PROBE_CONTENT_SCHEMA_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+                mapping = summary.get("字段映射")
+                if not isinstance(mapping, dict) or any(not isinstance(key, str) or key not in legacy.CANDIDATE_FIELDS or not isinstance(value, str) for key, value in mapping.items()):
+                    return _root_failure("PROBE_FIELD_MAPPING_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+                if not summary.get("原因代码") and set(mapping) != set(legacy.CANDIDATE_FIELDS):
+                    return _root_failure("PROBE_FIELD_MAPPING_INCOMPLETE", exit_code=completed.returncode, resource_facts=resource_facts)
+            elif not isinstance(summary.get("表"), list):
+                return _root_failure("PROBE_SQLITE_TABLES_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+            elif set(summary) - {"格式", "表", "行", "原因代码"}:
+                return _root_failure("PROBE_CONTENT_SCHEMA_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+            if "原因代码" in summary:
+                if set(summary) - {"格式", "字段映射", "行", "Schema指纹", "表", "原因代码"} or summary["行"]:
+                    return _root_failure("PROBE_CONTENT_FAILURE_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+            if "Schema指纹" in summary and (not isinstance(summary["Schema指纹"], str) or not re.fullmatch(r"[0-9a-f]{64}", summary["Schema指纹"])):
+                return _root_failure("PROBE_SCHEMA_FINGERPRINT_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+            if not summary.get("原因代码") and fmt in {"csv", "json"} and "Schema指纹" not in summary:
+                return _root_failure("PROBE_SCHEMA_FINGERPRINT_MISSING", exit_code=completed.returncode, resource_facts=resource_facts)
+            for row in summary["行"]:
+                if not isinstance(row, dict) or set(row) != set(legacy.CANDIDATE_FIELDS):
+                    return _root_failure("PROBE_CONTENT_ROW_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+                if legacy.sensitive(row):
+                    return _root_failure("PROBE_CONTENT_SENSITIVE", exit_code=completed.returncode, resource_facts=resource_facts)
+            if fmt == "sqlite":
+                for table in summary.get("表", []):
+                    if not isinstance(table, dict) or set(table) != {"表名指纹", "字段指纹", "字段映射"}:
+                        return _root_failure("PROBE_SQLITE_SCHEMA_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+                    if any(not isinstance(table[key], str) or not re.fullmatch(r"[0-9a-f]{64}", table[key]) for key in ("表名指纹", "字段指纹")):
+                        return _root_failure("PROBE_SQLITE_FINGERPRINT_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+            elif set(summary) - {"格式", "字段映射", "行", "Schema指纹", "原因代码"}:
+                return _root_failure("PROBE_CONTENT_SCHEMA_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+    except (AttributeError, TypeError, ValueError):
+        return _root_failure("PROBE_PAYLOAD_TYPE_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
     if payload.get("扫描完整") is not True and payload.get("失败安全") is not True:
         return _root_failure("SCAN_FAILURE_SAFETY_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
     if payload.get("失败原因代码") and payload.get("失败原因指纹") != legacy.fingerprint(payload["失败原因代码"]):

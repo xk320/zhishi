@@ -35,7 +35,7 @@ class TestRootCompatibleContractIdentity(unittest.TestCase):
 
     def test_probe_accepts_uid_zero_only_and_records_mode(self):
         roots = [
-            {"根目录": Path(path).name, "路径指纹": module.legacy.fingerprint(path), "可读": True, "可写": False}
+            {"根目录": Path(path).name, "路径指纹": module.legacy.fingerprint(path), "模式": "0o700", "属主UID": 0, "属组GID": 0, "可读": True, "可写": False}
             for path in module.load_config()["远端候选根目录"]
         ]
         payload = {
@@ -49,6 +49,8 @@ class TestRootCompatibleContractIdentity(unittest.TestCase):
         self.assertEqual(result["扫描UID"], 0)
         self.assertEqual(result["访问模式"], "root兼容只读")
         self.assertFalse(result["扫描是否专用只读"])
+        self.assertEqual(result["退出码"], 0)
+        self.assertGreater(result["资源事实"]["标准输出字节"], 0)
 
     def test_probe_rejects_uid_one_thousand_one(self):
         payload = {
@@ -68,8 +70,8 @@ class TestRootCompatibleContractIdentity(unittest.TestCase):
             "协议": "zhishi-binance-contract-probe/1", "访问模式": "root兼容只读", "扫描UID": 0, "扫描GID": 0,
             "扫描是否专用只读": False, "扫描完整": True, "失败安全": False, "失败原因代码": "", "失败原因指纹": "",
             "扫描文件数": 1, "候选文件数": 1,
-            "候选": [{"文件名": "evil.csv", "候选根目录指纹": module.legacy.fingerprint("/opt/binance-event"), "路径指纹": "a" * 64, "大小": 1}],
-            "存储根目录": [{"根目录": "binance-event", "路径指纹": module.legacy.fingerprint("/opt/binance-event"), "可读": True, "可写": False}],
+            "候选": [{"路径指纹": "a" * 64, "文件名": "evil.csv", "上级目录名": "data", "候选根目录指纹": module.legacy.fingerprint("/opt/binance-event"), "大小": 1, "修改时间_ns": 1, "模式": "0o600", "属主UID": 0, "属组GID": 0, "可读": True, "父目录可写": False, "内容摘要": {"格式": "csv", "字段映射": {}, "行": [], "Schema指纹": "b" * 64}}],
+            "存储根目录": [{"根目录": "binance-event", "路径指纹": module.legacy.fingerprint("/opt/binance-event"), "模式": "0o700", "属主UID": 0, "属组GID": 0, "可读": True, "可写": False}],
             "远端追加": False, "远端临时文件": False, "数据库写入": False, "订单簿读取": False,
         }
         with patch.object(module.legacy.engine, "run_bounded_process", return_value=_Completed(payload)):
@@ -77,6 +79,40 @@ class TestRootCompatibleContractIdentity(unittest.TestCase):
         self.assertTrue(result["失败安全"])
         self.assertEqual(result["失败原因代码"], "PROBE_CANDIDATE_NAME_INVALID")
         self.assertEqual(result["候选"], [])
+
+    def test_probe_rejects_malformed_content_and_types_failure_safe(self):
+        roots = [
+            {"根目录": Path(path).name, "路径指纹": module.legacy.fingerprint(path), "模式": "0o700", "属主UID": 0, "属组GID": 0, "可读": True, "可写": False}
+            for path in module.load_config()["远端候选根目录"]
+        ]
+        candidate = {
+            "路径指纹": "a" * 64, "文件名": "contracts.csv", "上级目录名": "data",
+            "候选根目录指纹": module.legacy.fingerprint("/opt/binance-event"), "大小": 1,
+            "修改时间_ns": 1, "模式": "0o600", "属主UID": 0, "属组GID": 0,
+            "可读": True, "父目录可写": False, "内容摘要": {"行": []},
+        }
+        payload = {
+            "协议": "zhishi-binance-contract-probe/1", "访问模式": "root兼容只读", "扫描UID": 0, "扫描GID": 0,
+            "扫描是否专用只读": False, "扫描完整": True, "失败安全": False, "失败原因代码": "", "失败原因指纹": "",
+            "扫描文件数": 1, "候选文件数": 1, "候选": [candidate], "存储根目录": roots,
+            "远端追加": False, "远端临时文件": False, "数据库写入": False, "订单簿读取": False,
+        }
+        with patch.object(module.legacy.engine, "run_bounded_process", return_value=_Completed(payload)):
+            result = module.run_root_remote_probe(module.load_config())
+        self.assertTrue(result["失败安全"])
+        self.assertEqual(result["失败原因代码"], "PROBE_CONTENT_SUMMARY_INVALID")
+        self.assertEqual(result["候选"], [])
+
+        payload["候选"][0]["文件名"] = []
+        with patch.object(module.legacy.engine, "run_bounded_process", return_value=_Completed(payload)):
+            result = module.run_root_remote_probe(module.load_config())
+        self.assertTrue(result["失败安全"])
+        self.assertEqual(result["失败原因代码"], "PROBE_CANDIDATE_METADATA_INVALID")
+
+        with patch.object(module.legacy.engine, "run_bounded_process", return_value=_Completed(None)):
+            result = module.run_root_remote_probe(module.load_config())
+        self.assertTrue(result["失败安全"])
+        self.assertEqual(result["失败原因代码"], "PROBE_PAYLOAD_INVALID")
 
     def test_partial_evidence_is_not_published(self):
         members = module.legacy.load_members()
