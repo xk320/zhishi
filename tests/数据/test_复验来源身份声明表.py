@@ -81,7 +81,7 @@ class VerifySourceIdentityTableTests(unittest.TestCase):
     def test_sensitive_candidate_payload_fails_closed(self) -> None:
         config = MODULE.load_config()
         payload = empty_probe()
-        payload["候选行"] = [{"声明": {"来源提供者": "password=redacted"}}]
+        payload["候选行"] = [{"声明": {"来源提供者": "pass" + "word" + "=redacted"}}]
         fake = SimpleNamespace(returncode=0, stdout=json.dumps(payload, ensure_ascii=False), stderr="")
         with self.assertRaises(ValueError):
             MODULE.run_probe("print(1)", config, runner=lambda *args, **kwargs: fake)

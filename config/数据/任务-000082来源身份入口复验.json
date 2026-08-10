@@ -20,10 +20,10 @@
   "事后结果观察窗口": ["15分钟", "1小时"],
   "输入文件": [
     {"用途": "设计合同", "路径": "docs/superpowers/specs/task-000082-source-identity-entry-discovery-design.md", "SHA-256": "91050f2ab9e350bcb045602668a96d453aac8f06d0c33d01a9b59020e99381aa"},
-    {"用途": "任务-000081输入快照", "路径": "config/数据/任务-000081来源身份声明输入快照.json", "SHA-256": "bf702c7fbc1c77bc18c862bcc18743799d343d8b137c0334cf58a44df61ba269"},
+    {"用途": "任务-000081输入快照", "路径": "config/数据/任务-000081来源身份声明输入快照.json", "SHA-256": "48f4b2aac7c779c9d154718f6318f234c87287f7ec78f7e7a0f458df5fd7b0db"},
     {"用途": "任务-000081最终批次清单", "路径": "artifacts/数据/来源身份声明九字段复验/source-identity-nine-fields-20260808T074100+0800-v4/批次清单.json", "SHA-256": "230316378417f43098f8033c16ae1ee19f54098dbbd5b8ac2f5b61a45dfb9d41"},
     {"用途": "任务-000081最终成员清单", "路径": "artifacts/数据/来源身份声明九字段复验/source-identity-nine-fields-20260808T074100+0800-v4/来源身份声明九字段复验清单.csv", "SHA-256": "74a1034fdee473da1d4e750debf474a9b3f171c913ded93f514cf4f0648ba524"},
-    {"用途": "来源身份总合同", "路径": "config/数据/数据来源与资产身份.json", "SHA-256": "02df63188870d1b33cad7e39534fa3be4fdbfd78c062a02cdf9faf7ef319b394"},
+    {"用途": "来源身份总合同", "路径": "config/数据/数据来源与资产身份.json", "SHA-256": "30ad096c1652cec311ae313fe275b220d50dc5de1891af49b4ae340dbb8d0bc3"},
     {"用途": "来源身份补采合同", "路径": "config/数据/来源身份声明补采.json", "SHA-256": "696e0e2636f0a6d82041a4be46ca2b20222564afd75a5d8a8c8961ca635fc676"},
     {"用途": "资产清单", "路径": "artifacts/审计/数据源清单.csv", "SHA-256": "019010d64fe47d89c81bfaedafd458f1d886025bb34292c0c32eafcfa4392657"}
   ],
