@@ -158,6 +158,7 @@ def read_csv_candidate(path):
             selected={key:row.get(result["字段映射"][key]) for key in CANDIDATE_FIELDS}
             if SAFE.search(json.dumps(selected,ensure_ascii=False,sort_keys=True)): return result|{"行":[],"原因代码":"SENSITIVE_CANDIDATE_FIELD"}
             result["行"].append(selected)
+        if not result["行"]: return result|{"原因代码":"INCOMPLETE_IDENTITY_SCHEMA"}
         result["Schema指纹"]=fp([str(item) for item in (reader.fieldnames or [])])
     except Exception: result["原因代码"]="CANDIDATE_READ_FAILED"
     return result
@@ -170,19 +171,27 @@ def read_json_candidate(path):
         items=payload.get("symbols",[]) if isinstance(payload,dict) else payload if isinstance(payload,list) else []
         if isinstance(items,dict): items=[items]
         if len(items)>630: return result|{"原因代码":"CANDIDATE_ROW_LIMIT_EXCEEDED"}
+        missing_schema=False; schema_shapes=[]; first_mapping=None
         for item in items:
-            if not isinstance(item,dict): continue
+            if not isinstance(item,dict): missing_schema=True; continue
             mapping=fields_from_header([str(key) for key in item])
-            if not set(CANDIDATE_FIELDS).issubset(mapping): continue
+            shape=sorted(str(key) for key in item)
+            schema_shapes.append(shape)
+            if not set(CANDIDATE_FIELDS).issubset(mapping): missing_schema=True; continue
+            if first_mapping is None: first_mapping=mapping
+            if mapping != first_mapping: missing_schema=True; continue
             selected={key:item.get(mapping[key]) for key in CANDIDATE_FIELDS}
             if SAFE.search(json.dumps(selected,ensure_ascii=False,sort_keys=True)): return result|{"行":[],"原因代码":"SENSITIVE_CANDIDATE_FIELD"}
             result["行"].append(selected)
-        result["Schema指纹"]=fp(sorted(payload) if isinstance(payload,dict) else "list")
+        if missing_schema or (items and not result["行"]): return result|{"行":[],"原因代码":"INCOMPLETE_IDENTITY_SCHEMA"}
+        result["字段映射"]=first_mapping or {}
+        result["Schema指纹"]=fp({"顶层":sorted(str(key) for key in payload) if isinstance(payload,dict) else "list","对象字段集合":schema_shapes})
     except Exception: result["原因代码"]="CANDIDATE_READ_FAILED"
     return result
 def read_sqlite_candidate(path):
     result={"格式":"sqlite","表":[],"行":[]}
     try:
+        complete_table=False
         connection=sqlite3.connect("file:"+str(path)+"?mode=ro",uri=True)
         try:
             tables=connection.execute("SELECT name,sql FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
@@ -192,13 +201,17 @@ def read_sqlite_candidate(path):
                 mapping=fields_from_header(columns)
                 result["表"].append({"表名指纹":fp(table),"字段指纹":fp(columns),"字段映射":mapping})
                 if not set(CANDIDATE_FIELDS).issubset(mapping): continue
-                query="SELECT "+",".join("\""+mapping[key].replace("\"","\"\"")+"\"" for key in CANDIDATE_FIELDS)+" FROM \""+table.replace("\"","\"\"")+"\" LIMIT 631"
+                complete_table=True
+                selected_columns=",".join("\""+mapping[key].replace("\"","\"\"")+"\"" for key in CANDIDATE_FIELDS)
+                order_columns=",".join("\""+mapping[key].replace("\"","\"\"")+"\"" for key in CANDIDATE_FIELDS)
+                query="SELECT "+selected_columns+" FROM \""+table.replace("\"","\"\"")+"\" ORDER BY "+order_columns+" LIMIT 631"
                 for row in connection.execute(query):
                     if len(result["行"])>=630: return result|{"行":[],"原因代码":"CANDIDATE_ROW_LIMIT_EXCEEDED"}
                     selected={key:row[index] for index,key in enumerate(CANDIDATE_FIELDS)}
                     if SAFE.search(json.dumps(selected,ensure_ascii=False,sort_keys=True)): return result|{"行":[],"原因代码":"SENSITIVE_CANDIDATE_FIELD"}
                     result["行"].append(selected)
         finally: connection.close()
+        if not complete_table or not result["行"]: result["原因代码"]="INCOMPLETE_IDENTITY_SCHEMA"
     except Exception: result["原因代码"]="CANDIDATE_READ_FAILED"
     return result
 def root_info(base):
@@ -206,7 +219,7 @@ def root_info(base):
     return {"根目录":base.name,"路径指纹":fp(str(base)),"模式":oct(st.st_mode&0o777),"属主UID":st.st_uid,"属组GID":st.st_gid,"可读":os.access(base,os.R_OK),"可写":os.access(base,os.W_OK)}
 def candidate_info(path,base):
     st=path.stat(); readable=os.access(path,os.R_OK)
-    row={"路径指纹":fp(str(path)),"文件名":path.name,"上级目录名":path.parent.name,"候选根目录指纹":fp(str(base)),"大小":st.st_size,"修改时间_ns":st.st_mtime_ns,"模式":oct(st.st_mode&0o777),"属主UID":st.st_uid,"属组GID":st.st_gid,"可读":readable,"父目录可写":os.access(path.parent,os.W_OK)}
+    row={"路径指纹":fp(str(path)),"文件名":path.name,"上级目录指纹":fp(str(path.parent)),"候选根目录指纹":fp(str(base)),"大小":st.st_size,"修改时间_ns":st.st_mtime_ns,"模式":oct(st.st_mode&0o777),"属主UID":st.st_uid,"属组GID":st.st_gid,"可读":readable,"父目录可写":os.access(path.parent,os.W_OK)}
     suffix=path.suffix.lower()
     fmt={".csv":"csv",".json":"json",".sqlite3":"sqlite",".db":"sqlite"}.get(suffix,"unknown")
     if not readable or st.st_size>MAX_SIZE: return row|{"内容摘要":{"格式":fmt,"行":[],"原因代码":"FILE_TOO_LARGE" if st.st_size>MAX_SIZE else "CANDIDATE_NOT_READABLE"}}
@@ -249,7 +262,7 @@ for root in ROOTS:
                 if len(candidates)>=MAX_CANDIDATES: emit("MAX_CANDIDATE_FILES_REACHED",os.geteuid(),os.getegid(),roots_seen,file_count,directory_count,entry_count,len(queue),summary_bytes)
                 item=candidate_info(path,base); encoded=json.dumps(item.get("内容摘要",{}),ensure_ascii=False,sort_keys=True,separators=(",",":")).encode("utf-8")
                 item_reason=item.get("内容摘要",{}).get("原因代码")
-                if item["大小"]>MAX_SIZE or item_reason in {"FILE_TOO_LARGE","CANDIDATE_NOT_READABLE","CANDIDATE_READ_FAILED","SENSITIVE_CANDIDATE_FIELD","CANDIDATE_ROW_LIMIT_EXCEEDED"}:
+                if item["大小"]>MAX_SIZE or item_reason in {"FILE_TOO_LARGE","CANDIDATE_NOT_READABLE","CANDIDATE_READ_FAILED","SENSITIVE_CANDIDATE_FIELD","CANDIDATE_ROW_LIMIT_EXCEEDED","INCOMPLETE_IDENTITY_SCHEMA"}:
                     scan_failed=True
                     if not failure_code: failure_code="CANDIDATE_FILE_TOO_LARGE" if item["大小"]>MAX_SIZE or item_reason=="FILE_TOO_LARGE" else item_reason
                 summary_bytes+=len(encoded)
@@ -276,10 +289,12 @@ print(json.dumps({"协议":"zhishi-binance-contract-probe/1","访问模式":"roo
 
 
 def _validate_summary(summary: object, limits: Mapping[str, int]) -> bool:
-    if not isinstance(summary, dict) or summary.get("格式") not in {"csv", "json", "sqlite"}:
+    if not isinstance(summary, dict) or not isinstance(summary.get("格式"), str) or summary.get("格式") not in {"csv", "json", "sqlite"}:
         return False
     reason = summary.get("原因代码", "")
     if not isinstance(reason, str) or (reason and not re.fullmatch(r"[A-Z0-9_]{1,64}", reason)):
+        return False
+    if reason:
         return False
     rows = summary.get("行")
     if not isinstance(rows, list) or len(rows) > 630:
@@ -326,9 +341,16 @@ def run_remote_probe(config: Mapping[str, Any]) -> dict[str, Any]:
     required = {"协议", "访问模式", "扫描UID", "扫描GID", "扫描是否专用只读", "扫描完整", "失败安全", "失败原因代码", "失败原因指纹", "扫描文件数", "候选文件数", "候选", "存储根目录", "索引目录数", "索引条目数", "待处理目录数", "索引候选摘要字节", "远端追加", "远端临时文件", "数据库写入", "订单簿读取"}
     if not isinstance(payload, dict) or set(payload) != required or payload.get("协议") != "zhishi-binance-contract-probe/1" or payload.get("访问模式") != ROOT_MODE:
         return _failure("PROBE_PROTOCOL_DRIFT", exit_code=completed.returncode, resource=resource)
+    if not isinstance(payload["协议"], str) or not isinstance(payload["访问模式"], str):
+        return _failure("PROBE_PAYLOAD_TYPE_INVALID", exit_code=completed.returncode, resource=resource)
     integer_keys = ("扫描UID", "扫描GID", "扫描文件数", "候选文件数", "索引目录数", "索引条目数", "待处理目录数", "索引候选摘要字节")
     if any(isinstance(payload.get(key), bool) or not isinstance(payload.get(key), int) or payload[key] < 0 for key in integer_keys):
         return _failure("PROBE_COUNT_INVALID", exit_code=completed.returncode, resource=resource)
+    bool_keys = ("扫描是否专用只读", "扫描完整", "失败安全", "远端追加", "远端临时文件", "数据库写入", "订单簿读取")
+    if any(not isinstance(payload[key], bool) for key in bool_keys):
+        return _failure("PROBE_PAYLOAD_TYPE_INVALID", exit_code=completed.returncode, resource=resource)
+    if not isinstance(payload["失败原因代码"], str) or not isinstance(payload["失败原因指纹"], str):
+        return _failure("PROBE_PAYLOAD_TYPE_INVALID", exit_code=completed.returncode, resource=resource)
     if payload["扫描UID"] != ROOT_UID or payload["扫描是否专用只读"] is not False:
         return _failure("ROOT_IDENTITY_FACT_INVALID", exit_code=completed.returncode, resource=resource)
     if any(payload.get(key) is not False for key in ("远端追加", "远端临时文件", "数据库写入", "订单簿读取")):
@@ -340,18 +362,43 @@ def run_remote_probe(config: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(payload["存储根目录"], list) or len(payload["存储根目录"]) > len(EXPECTED_ROOTS):
         return _failure("PROBE_ROOT_SCHEMA_INVALID", exit_code=completed.returncode, resource=resource)
     root_fingerprints = {legacy.fingerprint(path) for path in EXPECTED_ROOTS}
+    root_names = {legacy.fingerprint(path): Path(path).name for path in EXPECTED_ROOTS}
+    seen_root_fingerprints = set()
     for root in payload["存储根目录"]:
         if not isinstance(root, dict) or set(root) != {"根目录", "路径指纹", "模式", "属主UID", "属组GID", "可读", "可写"}:
             return _failure("PROBE_ROOT_SCHEMA_INVALID", exit_code=completed.returncode, resource=resource)
-        if root["路径指纹"] not in root_fingerprints or not isinstance(root["根目录"], str) or not isinstance(root["模式"], str) or not re.fullmatch(r"0o[0-7]{3,4}", root["模式"]):
+        if (
+            not isinstance(root["路径指纹"], str) or not re.fullmatch(r"[0-9a-f]{64}", root["路径指纹"])
+            or root["路径指纹"] not in root_fingerprints or root["路径指纹"] in seen_root_fingerprints
+            or not isinstance(root["根目录"], str) or root["根目录"] != root_names.get(root["路径指纹"])
+            or not isinstance(root["模式"], str) or not re.fullmatch(r"0o[0-7]{3,4}", root["模式"])
+            or isinstance(root["属主UID"], bool) or not isinstance(root["属主UID"], int) or root["属主UID"] < 0
+            or isinstance(root["属组GID"], bool) or not isinstance(root["属组GID"], int) or root["属组GID"] < 0
+            or not isinstance(root["可读"], bool) or not isinstance(root["可写"], bool)
+        ):
             return _failure("PROBE_ROOT_PATH_INVALID", exit_code=completed.returncode, resource=resource)
+        seen_root_fingerprints.add(root["路径指纹"])
     seen = set()
     for candidate in payload["候选"]:
-        keys = {"路径指纹", "文件名", "上级目录名", "候选根目录指纹", "大小", "修改时间_ns", "模式", "属主UID", "属组GID", "可读", "父目录可写", "内容摘要"}
-        if not isinstance(candidate, dict) or set(candidate) != keys or candidate["路径指纹"] in seen:
+        keys = {"路径指纹", "文件名", "上级目录指纹", "候选根目录指纹", "大小", "修改时间_ns", "模式", "属主UID", "属组GID", "可读", "父目录可写", "内容摘要"}
+        if not isinstance(candidate, dict) or set(candidate) != keys:
+            return _failure("PROBE_CANDIDATE_SCHEMA_INVALID", exit_code=completed.returncode, resource=resource)
+        if not isinstance(candidate["路径指纹"], str) or candidate["路径指纹"] in seen:
             return _failure("PROBE_CANDIDATE_SCHEMA_INVALID", exit_code=completed.returncode, resource=resource)
         seen.add(candidate["路径指纹"])
-        if candidate["候选根目录指纹"] not in root_fingerprints or candidate["文件名"].lower() not in {name.lower() for name in config["候选文件名"]} or candidate["大小"] > limits["最大候选文件字节"] or not re.fullmatch(r"0o[0-7]{3,4}", candidate["模式"]):
+        if (
+            not isinstance(candidate["路径指纹"], str) or not re.fullmatch(r"[0-9a-f]{64}", candidate["路径指纹"])
+            or not isinstance(candidate["候选根目录指纹"], str) or candidate["候选根目录指纹"] not in root_fingerprints
+            or not isinstance(candidate["文件名"], str) or not candidate["文件名"]
+            or not isinstance(candidate["上级目录指纹"], str) or not re.fullmatch(r"[0-9a-f]{64}", candidate["上级目录指纹"])
+            or candidate["文件名"].lower() not in {name.lower() for name in config["候选文件名"]}
+            or isinstance(candidate["大小"], bool) or not isinstance(candidate["大小"], int) or candidate["大小"] < 0 or candidate["大小"] > limits["最大候选文件字节"]
+            or isinstance(candidate["修改时间_ns"], bool) or not isinstance(candidate["修改时间_ns"], int) or candidate["修改时间_ns"] < 0
+            or not isinstance(candidate["模式"], str) or not re.fullmatch(r"0o[0-7]{3,4}", candidate["模式"])
+            or isinstance(candidate["属主UID"], bool) or not isinstance(candidate["属主UID"], int) or candidate["属主UID"] < 0
+            or isinstance(candidate["属组GID"], bool) or not isinstance(candidate["属组GID"], int) or candidate["属组GID"] < 0
+            or not isinstance(candidate["可读"], bool) or not isinstance(candidate["父目录可写"], bool)
+        ):
             return _failure("PROBE_CANDIDATE_METADATA_INVALID", exit_code=completed.returncode, resource=resource)
         if not _validate_summary(candidate["内容摘要"], limits):
             return _failure("PROBE_CONTENT_SUMMARY_INVALID", exit_code=completed.returncode, resource=resource)
@@ -365,13 +412,19 @@ def run_remote_probe(config: Mapping[str, Any]) -> dict[str, Any]:
     if payload["扫描完整"] is True and payload["失败安全"] is not False:
         return _failure("SCAN_COMPLETION_INVALID", exit_code=completed.returncode, resource=resource)
     reason = payload["失败原因代码"]
+    if reason and not re.fullmatch(r"[A-Z0-9_]{1,64}", reason):
+        return _failure("PROBE_FAILURE_CODE_INVALID", exit_code=completed.returncode, resource=resource)
+    if payload["扫描完整"] is True and reason:
+        return _failure("SCAN_COMPLETION_INVALID", exit_code=completed.returncode, resource=resource)
+    if payload["扫描完整"] is not True and not reason:
+        return _failure("SCAN_FAILURE_REASON_MISSING", exit_code=completed.returncode, resource=resource)
     if reason and payload["失败原因指纹"] != legacy.fingerprint(reason):
         return _failure("PROBE_FAILURE_FINGERPRINT_INVALID", exit_code=completed.returncode, resource=resource)
     if not reason and payload["失败原因指纹"] != "":
         return _failure("PROBE_FAILURE_FINGERPRINT_INVALID", exit_code=completed.returncode, resource=resource)
     if payload["扫描完整"] is not True:
         payload["候选"] = []; payload["候选文件数"] = 0; payload["索引候选摘要字节"] = 0
-    elif len(payload["存储根目录"]) != len(EXPECTED_ROOTS):
+    elif len(payload["存储根目录"]) != len(EXPECTED_ROOTS) or seen_root_fingerprints != root_fingerprints:
         return _failure("PROBE_ROOT_COUNT_INVALID", exit_code=completed.returncode, resource=resource)
     payload["退出码"] = completed.returncode
     payload["资源事实"] = resource
@@ -380,6 +433,19 @@ def run_remote_probe(config: Mapping[str, Any]) -> dict[str, Any]:
 
 def _build_evidence(members: Sequence[Mapping[str, str]], candidates: Sequence[Mapping[str, Any]], contracts: Mapping[str, Sequence[Mapping[str, Any]]]):
     evidence, verified = _ROOT_BUILD_EVIDENCE(members, candidates, contracts)
+    expected_count = len(members) * len(legacy.IDENTITY_FIELDS)
+    records = evidence.get("记录") if isinstance(evidence, dict) else None
+    record_keys = {"证据记录编号", "资产编号", "标的", "输入成员SHA-256", "证明字段", "声明值"}
+    if (
+        not isinstance(records, list)
+        or len(verified) != len(members)
+        or len(records) != expected_count
+        or any(not isinstance(record, dict) or set(record) != record_keys for record in records)
+        or any(not isinstance(record["证据记录编号"], str) or not record["证据记录编号"] for record in records)
+        or len({record["证据记录编号"] for record in records}) != len(records)
+        or any(record["证明字段"] not in legacy.IDENTITY_FIELDS for record in records)
+    ):
+        return {"证据版本": "source-identity-evidence-1.0", "记录": []}, []
     for record in evidence["记录"]:
         record["证据记录编号"] = record["证据记录编号"].replace("E-000088-", "E-000089-", 1)
     return evidence, verified

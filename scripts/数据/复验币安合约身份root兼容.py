@@ -353,7 +353,7 @@ def render_root_batch(
     if target.exists() or target.is_symlink():
         raise FileExistsError("批次目录已存在")
     manifest = {
-        "合同版本": "binance-contract-identity-recheck-1.0",
+        "合同版本": config["合同版本"],
         "任务编号": TASK_ID,
         "访问模式": ROOT_MODE,
         "实际UID": ROOT_UID,

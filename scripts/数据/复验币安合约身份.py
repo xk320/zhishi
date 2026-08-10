@@ -468,7 +468,8 @@ def flatten_candidates(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
         rows = summary.get("行", []) if isinstance(summary, dict) else []
         for row in rows:
             if isinstance(row, dict) and not sensitive(row):
-                result.append({"文件": {key: candidate.get(key) for key in ("路径指纹", "文件名", "上级目录名", "大小", "修改时间_ns", "模式", "属主UID", "属组GID")}, "字段": row, "格式": summary.get("格式") if isinstance(summary, dict) else None, "Schema指纹": summary.get("Schema指纹") if isinstance(summary, dict) else None})
+                parent_fingerprint = candidate.get("上级目录指纹", candidate.get("上级目录名"))
+                result.append({"文件": {"路径指纹": candidate.get("路径指纹"), "文件名": candidate.get("文件名"), "上级目录指纹": parent_fingerprint, "大小": candidate.get("大小"), "修改时间_ns": candidate.get("修改时间_ns"), "模式": candidate.get("模式"), "属主UID": candidate.get("属主UID"), "属组GID": candidate.get("属组GID")}, "字段": row, "格式": summary.get("格式") if isinstance(summary, dict) else None, "Schema指纹": summary.get("Schema指纹") if isinstance(summary, dict) else None})
     return result
 
 

@@ -132,6 +132,148 @@ class RootCandidateIndexTests(unittest.TestCase):
         self.assertEqual(result["候选文件数"], 0)
         self.assertEqual(result["访问模式"], "root兼容只读")
 
+    def test_probe_rejects_duplicate_root_set(self) -> None:
+        roots = []
+        root = {
+            "根目录": "binance-event",
+            "路径指纹": legacy.fingerprint(target.EXPECTED_ROOTS[0]),
+            "模式": "0o755",
+            "属主UID": 0,
+            "属组GID": 0,
+            "可读": True,
+            "可写": False,
+        }
+        roots.extend([root.copy() for _ in target.EXPECTED_ROOTS])
+        payload = self._base_payload(扫描完整=True, 失败安全=False, 存储根目录=roots)
+        completed = SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+        with patch.object(target.legacy.engine, "run_bounded_process", return_value=completed):
+            result = target.run_remote_probe(self.config)
+        self.assertTrue(result["失败安全"])
+        self.assertEqual(result["失败原因代码"], "PROBE_ROOT_PATH_INVALID")
+        self.assertEqual(result["候选"], [])
+
+    def test_probe_rejects_malformed_root_without_throwing(self) -> None:
+        roots = self._valid_roots()
+        roots[0]["路径指纹"] = [roots[0]["路径指纹"]]
+        payload = self._base_payload(扫描完整=False, 失败安全=True, 存储根目录=roots)
+        completed = SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+        with patch.object(target.legacy.engine, "run_bounded_process", return_value=completed):
+            result = target.run_remote_probe(self.config)
+        self.assertTrue(result["失败安全"])
+        self.assertEqual(result["失败原因代码"], "PROBE_ROOT_PATH_INVALID")
+
+    def test_probe_rejects_malformed_candidate_without_throwing(self) -> None:
+        roots = self._valid_roots()
+        candidate = {
+            "路径指纹": legacy.fingerprint("/opt/binance-event/contracts.csv"),
+            "文件名": None,
+            "上级目录指纹": legacy.fingerprint("/opt/binance-event"),
+            "候选根目录指纹": legacy.fingerprint(target.EXPECTED_ROOTS[0]),
+            "大小": 1,
+            "修改时间_ns": 1,
+            "模式": "0o644",
+            "属主UID": 0,
+            "属组GID": 0,
+            "可读": True,
+            "父目录可写": False,
+            "内容摘要": {"格式": "csv", "字段映射": {}, "行": [], "原因代码": "INCOMPLETE_IDENTITY_SCHEMA"},
+        }
+        payload = self._base_payload(扫描完整=True, 失败安全=False, 存储根目录=roots, 候选=[candidate], 候选文件数=1)
+        completed = SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+        with patch.object(target.legacy.engine, "run_bounded_process", return_value=completed):
+            result = target.run_remote_probe(self.config)
+        self.assertTrue(result["失败安全"])
+        self.assertEqual(result["失败原因代码"], "PROBE_CANDIDATE_METADATA_INVALID")
+        self.assertEqual(result["候选"], [])
+
+    def test_probe_rejects_unhashable_candidate_fingerprint_without_throwing(self) -> None:
+        roots = self._valid_roots()
+        candidate = {
+            "路径指纹": ["not-a-fingerprint"],
+            "文件名": "contracts.csv",
+            "上级目录指纹": legacy.fingerprint("/opt/binance-event"),
+            "候选根目录指纹": legacy.fingerprint(target.EXPECTED_ROOTS[0]),
+            "大小": 1,
+            "修改时间_ns": 1,
+            "模式": "0o644",
+            "属主UID": 0,
+            "属组GID": 0,
+            "可读": True,
+            "父目录可写": False,
+            "内容摘要": {"格式": "csv", "字段映射": {}, "行": [], "原因代码": "INCOMPLETE_IDENTITY_SCHEMA"},
+        }
+        payload = self._base_payload(扫描完整=True, 失败安全=False, 存储根目录=roots, 候选=[candidate], 候选文件数=1)
+        completed = SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+        with patch.object(target.legacy.engine, "run_bounded_process", return_value=completed):
+            result = target.run_remote_probe(self.config)
+        self.assertTrue(result["失败安全"])
+        self.assertEqual(result["失败原因代码"], "PROBE_CANDIDATE_SCHEMA_INVALID")
+
+    def test_incomplete_summary_reason_is_not_a_valid_candidate(self) -> None:
+        summary = {
+            "格式": "csv",
+            "字段映射": {"标的": "target"},
+            "行": [],
+            "原因代码": "INCOMPLETE_IDENTITY_SCHEMA",
+        }
+        self.assertFalse(target._validate_summary(summary, self.config["资源上限"]))
+
+    def test_incomplete_evidence_is_never_published(self) -> None:
+        with patch.object(
+            target,
+            "_ROOT_BUILD_EVIDENCE",
+            return_value=(
+                {"证据版本": "source-identity-evidence-1.0", "记录": [{"证据记录编号": "E-1"}]},
+                [{"资产编号": "BTCUSDT", "标的": "BTC"}],
+            ),
+        ):
+            evidence, verified = target._build_evidence(
+                [{"资产编号": "BTCUSDT", "标的": "BTC"}], [], {}
+            )
+        self.assertEqual(evidence, {"证据版本": "source-identity-evidence-1.0", "记录": []})
+        self.assertEqual(verified, [])
+
+    def _valid_roots(self):
+        return [
+            {
+                "根目录": path.rsplit("/", 1)[-1],
+                "路径指纹": legacy.fingerprint(path),
+                "模式": "0o755",
+                "属主UID": 0,
+                "属组GID": 0,
+                "可读": True,
+                "可写": False,
+            }
+            for path in target.EXPECTED_ROOTS
+        ]
+
+    def _base_payload(self, **overrides):
+        payload = {
+            "协议": "zhishi-binance-contract-probe/1",
+            "访问模式": "root兼容只读",
+            "扫描UID": 0,
+            "扫描GID": 0,
+            "扫描是否专用只读": False,
+            "扫描完整": False,
+            "失败安全": True,
+            "失败原因代码": "INDEX_ENTRY_LIMIT",
+            "失败原因指纹": legacy.fingerprint("INDEX_ENTRY_LIMIT"),
+            "扫描文件数": 0,
+            "候选文件数": 0,
+            "候选": [],
+            "存储根目录": [],
+            "索引目录数": 0,
+            "索引条目数": 0,
+            "待处理目录数": 0,
+            "索引候选摘要字节": 0,
+            "远端追加": False,
+            "远端临时文件": False,
+            "数据库写入": False,
+            "订单簿读取": False,
+        }
+        payload.update(overrides)
+        return payload
+
 
 if __name__ == "__main__":
     unittest.main()
