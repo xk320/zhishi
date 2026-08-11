@@ -21,16 +21,26 @@ import zipfile
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 
 STATUSES = ("已证明", "拒绝", "无法判定", "失败", "未成熟", "失效")
 GATES = ("来源身份", "三类时间", "质量", "历史重放", "成本与执行", "血缘", "容量", "恢复")
 DATE_PATTERN = re.compile(r"(\d{4}-\d{2}-\d{2})\.zip$")
 SHA_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-EXPECTED_CONFIG_CANONICAL_SHA256 = "c88fa0502d54139b1245bb561f3e6850bd2f76067004fecda48a1da2b64c906e"
+EXPECTED_CONFIG_CANONICAL_SHA256 = "2a5216be70954610df8d7c47ea714b8af871bb33512cee2ce03a41c4a3dc6623"
 EXPECTED_CONFIG_RELATIVE_PATH = Path("config/审计/任务-000093阶段1新候选集重算.json")
 EXPECTED_OUTPUT_RELATIVE_PATH = Path("artifacts/审计/阶段1新候选集重算")
+TASK_CONTRACT_HEADER_PREFIXES = (
+    "# 任务-000093：",
+    "- 类型：",
+    "- 阶段：",
+    "- 优先级：",
+    "- 执行方案：",
+    "- 方案状态：",
+    "- 执行授权：",
+    "- 并行规则：",
+)
 
 
 def canonical_json(value: Any) -> str:
@@ -47,6 +57,34 @@ def sha256_file(path: Path, chunk_bytes: int = 1024 * 1024) -> str:
         while chunk := stream.read(chunk_bytes):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def task_contract_sha256(path: Path) -> str:
+    """计算任务-000093不可变合同指纹。
+
+    状态、分支、时间、提交、PR和执行记录是追加式运行元数据，不属于
+    批准的执行合同。该定义使真实批次在状态闭环后仍能稳定验证，同时任何
+    规范正文变化都必然改变指纹。
+    """
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    try:
+        body_start = lines.index("## 依赖与阻塞条件")
+    except ValueError as error:
+        raise ValueError("TASK_CONTRACT_BOUNDARY_INVALID") from error
+    try:
+        body_end = lines.index("## 执行记录", body_start + 1)
+    except ValueError:
+        body_end = len(lines)
+    header = [
+        line
+        for line in lines[:body_start]
+        if any(line.startswith(prefix) for prefix in TASK_CONTRACT_HEADER_PREFIXES)
+    ]
+    if len(header) != len(TASK_CONTRACT_HEADER_PREFIXES):
+        raise ValueError("TASK_CONTRACT_HEADER_INVALID")
+    canonical = "\n".join(header + [""] + lines[body_start:body_end]).rstrip() + "\n"
+    return sha256_bytes(canonical.encode("utf-8"))
 
 
 def load_json(path: Path) -> Any:
@@ -464,27 +502,38 @@ def build_gate_leaves(
 def atomic_publish(
     root: Path,
     batch_id: str,
-    files: Mapping[str, str],
+    files: Mapping[str, str] | Iterable[tuple[str, str]],
     *,
     max_file_bytes: int,
     max_total_bytes: int,
+    after_write: Callable[[], None] | None = None,
     before_rename: Callable[[], None] | None = None,
 ) -> Path:
-    encoded = {name: content.encode("utf-8") for name, content in files.items()}
-    if any(len(content) > max_file_bytes for content in encoded.values()):
-        raise ValueError("OUTPUT_FILE_LIMIT_EXCEEDED")
-    if sum(map(len, encoded.values())) > max_total_bytes:
-        raise ValueError("OUTPUT_TOTAL_LIMIT_EXCEEDED")
     root.mkdir(parents=True, exist_ok=True)
     target = root / batch_id
     if target.exists():
         raise FileExistsError(batch_id)
     temporary = Path(tempfile.mkdtemp(prefix=f".{batch_id}.", dir=root))
     try:
-        for relative, content in sorted(encoded.items()):
+        entries = files.items() if isinstance(files, Mapping) else files
+        seen: set[str] = set()
+        total_bytes = 0
+        for relative, content in entries:
+            if relative in seen:
+                raise ValueError("OUTPUT_DUPLICATE_PATH")
+            seen.add(relative)
+            encoded = content.encode("utf-8")
+            if len(encoded) > max_file_bytes:
+                raise ValueError("OUTPUT_FILE_LIMIT_EXCEEDED")
+            total_bytes += len(encoded)
+            if total_bytes > max_total_bytes:
+                raise ValueError("OUTPUT_TOTAL_LIMIT_EXCEEDED")
             path = temporary / relative
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(content)
+            path.write_bytes(encoded)
+            del encoded
+            if after_write is not None:
+                after_write()
         if before_rename is not None:
             before_rename()
         temporary.rename(target)
@@ -601,8 +650,9 @@ def _compact_member(member: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _json_shards(records: Sequence[Mapping[str, Any]], prefix: str, max_bytes: int) -> dict[str, str]:
-    files: dict[str, str] = {}
+def _json_shards(records: Sequence[Mapping[str, Any]], prefix: str, max_bytes: int) -> Iterator[tuple[str, str]]:
+    """逐片生成JSON；任何时刻最多保留一个受单文件上限约束的分片字符串。"""
+
     current: list[str] = []
     current_bytes = 2
     index = 1
@@ -611,7 +661,7 @@ def _json_shards(records: Sequence[Mapping[str, Any]], prefix: str, max_bytes: i
         encoded_bytes = len(encoded.encode("utf-8"))
         separator_bytes = 1 if current else 0
         if current and current_bytes + separator_bytes + encoded_bytes + 1 > max_bytes:
-            files[f"{prefix}-{index:03d}.json"] = "[" + ",".join(current) + "]\n"
+            yield f"{prefix}-{index:03d}.json", "[" + ",".join(current) + "]\n"
             index += 1
             current = []
             current_bytes = 2
@@ -621,8 +671,7 @@ def _json_shards(records: Sequence[Mapping[str, Any]], prefix: str, max_bytes: i
         current.append(encoded)
         current_bytes += separator_bytes + encoded_bytes
     if current:
-        files[f"{prefix}-{index:03d}.json"] = "[" + ",".join(current) + "]\n"
-    return files
+        yield f"{prefix}-{index:03d}.json", "[" + ",".join(current) + "]\n"
 
 
 def _coverage(observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -659,6 +708,10 @@ def run(config_path: Path, repo_root: Path, output_root: Path, batch_id: str) ->
         raise ValueError("OUTPUT_PATH_INVALID")
     config = load_config(config_path)
     limits = config["limits"]
+    task_contract_path = repo_root / "docs/研发中心/任务/任务-000093.md"
+    contract_sha256 = task_contract_sha256(task_contract_path)
+    if contract_sha256 != config.get("task_contract_sha256"):
+        raise ValueError("TASK_CONTRACT_FINGERPRINT_DRIFT")
     batch_dir = repo_root / config["source_batch_dir"]
     source_batch_files = verify_source_batch_files(
         batch_dir,
@@ -755,7 +808,9 @@ def run(config_path: Path, repo_root: Path, output_root: Path, batch_id: str) ->
         "formal_input_fingerprint": sha256_bytes(canonical_json(formal).encode("utf-8")),
         "config_sha256": sha256_file(config_path),
         "executor_sha256": sha256_file(Path(__file__).resolve()),
-        "task_contract_sha256": sha256_file(repo_root / "docs/研发中心/任务/任务-000093.md"),
+        "task_contract_sha256": contract_sha256,
+        "task_contract_fingerprint_scope": "任务标题、类型、阶段、优先级、执行方案、方案状态、执行授权、并行规则及从依赖与阻塞条件至执行记录前的规范正文",
+        "task_file_sha256_at_run": sha256_file(task_contract_path),
         "source_inventory_before_sha256": before_fingerprint,
         "source_inventory_after_sha256": after_fingerprint,
         "source_inventory_entry_count": inventory_count,
@@ -797,13 +852,17 @@ def run(config_path: Path, repo_root: Path, output_root: Path, batch_id: str) ->
         "inspection-failures.json": canonical_json(failures) + "\n",
         "source-batch-files.json": canonical_json(source_batch_files) + "\n",
     }
-    files.update(_json_shards(formal, "formal-input", limits["output_file_bytes"] - 1024))
-    files.update(_json_shards(observations, "member-observations", limits["output_file_bytes"] - 1024))
     prepublish_snapshot = _resource_snapshot(output_root, source_root)
     assert_resource_limits(prepublish_snapshot, limits)
     assert_time_limit(started, limits)
     summary["resource_facts"]["prepublish"] = prepublish_snapshot
     files["summary.json"] = json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+
+    def output_entries() -> Iterator[tuple[str, str]]:
+        for name, content in sorted(files.items()):
+            yield name, content
+        yield from _json_shards(formal, "formal-input", limits["output_file_bytes"] - 1024)
+        yield from _json_shards(observations, "member-observations", limits["output_file_bytes"] - 1024)
 
     def assert_publish_safe() -> None:
         assert_time_limit(started, limits)
@@ -812,9 +871,10 @@ def run(config_path: Path, repo_root: Path, output_root: Path, batch_id: str) ->
     target = atomic_publish(
         output_root,
         batch_id,
-        files,
+        output_entries(),
         max_file_bytes=limits["output_file_bytes"],
         max_total_bytes=limits["output_total_bytes"],
+        after_write=assert_publish_safe,
         before_rename=assert_publish_safe,
     )
     print(json.dumps({"batch_id": batch_id, "output": str(target), "summary": summary}, ensure_ascii=False), flush=True)

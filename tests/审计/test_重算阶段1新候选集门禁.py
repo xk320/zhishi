@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "审计" / "重算阶段1新候选集门禁.py"
 CONFIG = ROOT / "config" / "审计" / "任务-000093阶段1新候选集重算.json"
 SOURCE_BATCH = ROOT / "artifacts" / "数据" / "Binance历史归档来源身份" / "binance-archive-provenance-20260811T063739Z-7a6da0087493"
-BATCH = ROOT / "artifacts" / "审计" / "阶段1新候选集重算" / "stage1-candidate-recompute-20260811T131000Z-c88fa0502d54"
+BATCH = ROOT / "artifacts" / "审计" / "阶段1新候选集重算" / "stage1-candidate-recompute-20260811T140000Z-2a5216be7095"
 SPEC = importlib.util.spec_from_file_location("stage1_candidate_recompute", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -131,6 +131,25 @@ class Stage1CandidateRecomputeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "CONFIG_FINGERPRINT_INVALID"):
                 MODULE.load_config(path)
 
+    def test_任务合同指纹排除执行元数据但绑定规范正文(self):
+        task_path = ROOT / "docs" / "研发中心" / "任务" / "任务-000093.md"
+        original = task_path.read_text(encoding="utf-8")
+        original_hash = MODULE.task_contract_sha256(task_path)
+        with tempfile.TemporaryDirectory() as directory:
+            changed_metadata = Path(directory) / "metadata.md"
+            changed_metadata.write_text(
+                original.replace("- 状态：待评审", "- 状态：已完成")
+                .replace("- 实现提交SHA：", "- 实现提交SHA：`f" + "0" * 39 + "` # "),
+                encoding="utf-8",
+            )
+            self.assertEqual(original_hash, MODULE.task_contract_sha256(changed_metadata))
+            changed_contract = Path(directory) / "contract.md"
+            changed_contract.write_text(
+                original.replace("阶段2不因路线替代自动放行", "阶段2立即放行"),
+                encoding="utf-8",
+            )
+            self.assertNotEqual(original_hash, MODULE.task_contract_sha256(changed_contract))
+
     def test_来源批次完整文件集合必须在读取前匹配固定指纹(self):
         config = MODULE.load_config(CONFIG)
         files = MODULE.verify_source_batch_files(
@@ -221,11 +240,28 @@ class Stage1CandidateRecomputeTests(unittest.TestCase):
     def test_JSON分片按增量字节生成且保持规范序列化(self):
         records = [{"id": index, "value": "x" * 20} for index in range(5)]
         shards = MODULE._json_shards(records, "items", 90)
+        self.assertIs(iter(shards), shards, "分片必须逐个生成，不得返回整体字典")
         rebuilt = []
-        for name, content in sorted(shards.items()):
+        for name, content in shards:
             self.assertLessEqual(len(content.encode("utf-8")), 90, name)
             rebuilt.extend(json.loads(content))
         self.assertEqual(records, rebuilt)
+
+    def test_发布逐文件消费迭代器并保留总量门(self):
+        consumed = []
+
+        def entries():
+            for index in range(3):
+                consumed.append(index)
+                yield f"part-{index}.json", "{}\n"
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = MODULE.atomic_publish(root, "batch-stream", entries(), max_file_bytes=16, max_total_bytes=16)
+            self.assertEqual([0, 1, 2], consumed)
+            self.assertEqual(3, len(list(target.iterdir())))
+            with self.assertRaisesRegex(ValueError, "OUTPUT_TOTAL_LIMIT_EXCEEDED"):
+                MODULE.atomic_publish(root, "batch-over", entries(), max_file_bytes=16, max_total_bytes=5)
 
     def test_真实批次分母指纹资源与八叶子闭合(self):
         summary = json.loads((BATCH / "summary.json").read_text(encoding="utf-8"))
@@ -237,8 +273,11 @@ class Stage1CandidateRecomputeTests(unittest.TestCase):
         self.assertFalse(summary["stage1_complete"])
         self.assertFalse(summary["stage2_released"])
         self.assertFalse(summary["legacy_task_000084_current_gate"])
+        self.assertEqual(MODULE.task_contract_sha256(ROOT / "docs/研发中心/任务/任务-000093.md"), summary["task_contract_sha256"])
+        self.assertEqual(MODULE.sha256_file(SCRIPT), summary["executor_sha256"])
+        self.assertEqual(MODULE.sha256_file(CONFIG), summary["config_sha256"])
         self.assertEqual(summary["source_inventory_before_sha256"], summary["source_inventory_after_sha256"])
-        self.assertLessEqual(summary["resource_facts"]["completed"]["process_max_rss_bytes"], 256 * 1024 * 1024)
+        self.assertLessEqual(summary["resource_facts"]["prepublish"]["process_max_rss_bytes"], 256 * 1024 * 1024)
         leaves = json.loads((BATCH / "leaves.json").read_text(encoding="utf-8"))
         self.assertEqual(8, len(leaves))
         self.assertTrue(all(item["decision"] == "阻塞" for item in leaves))
