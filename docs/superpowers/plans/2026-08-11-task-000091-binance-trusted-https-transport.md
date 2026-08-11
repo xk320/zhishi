@@ -20,11 +20,11 @@
 - Modify: `config/数据/任务-000090Binance来源身份自动映射.json`
 - Create: `docs/superpowers/plans/2026-08-11-task-000091-binance-trusted-https-transport.md`
 
-- [ ] **Step 1: 将任务与看板迁移为执行中**
+- [x] **Step 1: 将任务与看板迁移为执行中**
 
 写入执行分支`codex/task-000091-binance-trusted-https-exec-v1`和带时区开始时间；看板保持唯一映射。
 
-- [ ] **Step 2: 在配置中增加固定传输合同**
+- [x] **Step 2: 在配置中增加固定传输合同**
 
 新增顶层`可信HTTPS传输`对象，固定以下字段：
 
@@ -41,7 +41,7 @@
 }
 ```
 
-- [ ] **Step 3: 更新配置校验测试并确认先失败**
+- [x] **Step 3: 更新配置校验测试并确认先失败**
 
 Run: `python3 -m unittest tests/数据/test_自动映射Binance来源身份.py -q`
 
@@ -53,7 +53,7 @@ Expected: FAIL，提示配置尚未包含`可信HTTPS传输`或实现尚未验�
 - Modify: `tests/数据/test_自动映射Binance来源身份.py`
 - Modify: `scripts/数据/自动映射Binance来源身份.py`
 
-- [ ] **Step 1: 新增成功与参数安全测试**
+- [x] **Step 1: 新增成功与参数安全测试**
 
 用可注入`runner`捕获命令数组，断言：
 
@@ -71,17 +71,17 @@ self.assertNotIn("--location", captured_command)
 self.assertEqual(captured_command[-1], uri)
 ```
 
-- [ ] **Step 2: 新增白名单、超时、超限和非JSON失败测试**
+- [x] **Step 2: 新增白名单、超时、超限和非JSON失败测试**
 
 分别验证非白名单URI抛出`ValueError`，进程超时映射为`CURL_TIMEOUT`，响应超过16MiB映射为`API_RESPONSE_TOO_LARGE`，非JSON映射为`API_JSON_INVALID`，且全部不回显响应正文。
 
-- [ ] **Step 3: 运行测试确认RED**
+- [x] **Step 3: 运行测试确认RED**
 
 Run: `python3 -m unittest tests/数据/test_自动映射Binance来源身份.py -q`
 
 Expected: FAIL，因为现有函数仍使用`urllib`且不接受`runner`与`curl_path`。
 
-- [ ] **Step 4: 实现最小传输适配器**
+- [x] **Step 4: 实现最小传输适配器**
 
 实现以下接口并保持无shell调用：
 
@@ -97,7 +97,7 @@ def run_curl(uri: str, *, runner=subprocess.run, curl_path: Path = CURL_PATH) ->
     return completed.stdout, transport_facts(curl_path, command)
 ```
 
-- [ ] **Step 5: 运行专项测试确认GREEN**
+- [x] **Step 5: 运行专项测试确认GREEN**
 
 Run: `python3 -m unittest tests/数据/test_自动映射Binance来源身份.py -q`
 
@@ -109,17 +109,17 @@ Expected: PASS，所有传输和既有证据测试通过。
 - Modify: `scripts/数据/自动映射Binance来源身份.py`
 - Modify: `tests/数据/test_自动映射Binance来源身份.py`
 
-- [ ] **Step 1: 新增批次传输事实失败测试**
+- [x] **Step 1: 新增批次传输事实失败测试**
 
 断言`批次清单.json`包含传输器路径、版本、二进制SHA、参数指纹和每个响应SHA，但不包含`_合约索引`或完整API响应。
 
-- [ ] **Step 2: 运行测试确认RED**
+- [x] **Step 2: 运行测试确认RED**
 
 Run: `python3 -m unittest tests/数据/test_自动映射Binance来源身份.py -q`
 
 Expected: FAIL，现有批次未记录传输器指纹。
 
-- [ ] **Step 3: 实现批次绑定并确认GREEN**
+- [x] **Step 3: 实现批次绑定并确认GREEN**
 
 把传输事实加入规则指纹和`资源事实`，继续过滤所有以下划线开头的内存字段；不改变成员排序、身份门和计数函数。
 
@@ -127,7 +127,7 @@ Run: `python3 -m unittest tests/数据/test_自动映射Binance来源身份.py -
 
 Expected: PASS。
 
-- [ ] **Step 4: 验证历史批次树不变**
+- [x] **Step 4: 验证历史批次树不变**
 
 Run: `git diff --exit-code origin/main -- 'artifacts/数据/Binance来源身份自动映射/binance-source-identity-auto-mapping-20260810T200235Z-30cadf61bf69'`
 
@@ -143,22 +143,22 @@ Expected: exit 0。
 - Modify: `docs/研发中心/任务/任务-000091.md`
 - Modify: `docs/研发中心/看板.md`
 
-- [ ] **Step 1: 执行一次真实串行复采**
+- [x] **Step 1: 执行一次真实串行复采**
 
 Run: `python3 scripts/数据/自动映射Binance来源身份.py`
 
 Expected: 两个固定端点使用默认TLS校验完成或以明确失败码失败；无完整响应落盘；生成唯一追加批次。
 
-- [ ] **Step 2: 验证批次计数与边界**
+- [x] **Step 2: 验证批次计数与边界**
 
 确认BTC与ETH各315、总计630、计数守恒；如九字段仍不完整，所有未证明成员保持`无法判定`，任务-000084保持阻塞。
 
-- [ ] **Step 3: 运行合同要求的全部验证**
+- [x] **Step 3: 运行合同要求的全部验证**
 
 Run: 任务-000091“验证命令”章节中的专项、数据、审计、研发中心、Python编译、MarkdownLint、敏感扫描和`git diff --check`命令。
 
 Expected: 与本任务相关检查通过；任何main基线失败以同命令对照记录，不伪称通过。
 
-- [ ] **Step 4: 更新待评审元数据并提交PR**
+- [x] **Step 4: 更新待评审元数据并提交PR**
 
 任务文件和看板迁移到`待评审`，写入执行分支、实现提交SHA、PR编号、批次、验证结果、限制和安全影响。推送同一分支并创建关联任务-000091的`任务交付`PR。
