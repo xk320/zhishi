@@ -1,0 +1,52 @@
+{
+  "schema_version": "zhishi-binance-archive-provenance/v1",
+  "task_id": "000092",
+  "local_root": "/Volumes/data/data/binance/futures/um",
+  "curl_path": "/usr/bin/curl",
+  "s3_endpoint": "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision",
+  "official_readme": {
+    "url": "https://raw.githubusercontent.com/binance/binance-public-data/5c7f3197591c0d54d85dc43066226bc4c671d47a/README.md",
+    "sha256": "085ab91377aa9325d44f4c7ad27cce4ab381e158403e1d7df2bad39d1a66f7c6"
+  },
+  "groups": [
+    {
+      "id": "BTCUSDT-trades",
+      "contract": "BTCUSDT",
+      "dataset": "trades",
+      "relative_dir": "trades/BTCUSDT",
+      "remote_prefix": "data/futures/um/daily/trades/BTCUSDT/"
+    },
+    {
+      "id": "ETHUSDT-trades",
+      "contract": "ETHUSDT",
+      "dataset": "trades",
+      "relative_dir": "trades/ETHUSDT",
+      "remote_prefix": "data/futures/um/daily/trades/ETHUSDT/"
+    },
+    {
+      "id": "BTCUSDT-aggTrades",
+      "contract": "BTCUSDT",
+      "dataset": "aggTrades",
+      "relative_dir": "aggTrades/BTCUSDT",
+      "remote_prefix": "data/futures/um/daily/aggTrades/BTCUSDT/"
+    }
+  ],
+  "observations": [
+    "klines_1d/BTCUSDT.csv",
+    "klines_1d/ETHUSDT.csv"
+  ],
+  "manifests": [
+    "klines_1d_manifest.json",
+    "full_history_download_summary.json"
+  ],
+  "limits": {
+    "single_file_bytes": 17179869184,
+    "member_count": 8192,
+    "zip_sample_bytes": 1048576,
+    "remote_total_bytes": 33554432,
+    "output_bytes": 26214400,
+    "shard_bytes": 4718592,
+    "total_seconds": 14400,
+    "memory_bytes": 268435456
+  }
+}
