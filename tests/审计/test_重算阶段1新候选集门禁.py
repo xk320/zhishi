@@ -4,11 +4,14 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "审计" / "重算阶段1新候选集门禁.py"
-BATCH = ROOT / "artifacts" / "审计" / "阶段1新候选集重算" / "stage1-candidate-recompute-20260811T100838Z-1b8dcf49f2aa"
+CONFIG = ROOT / "config" / "审计" / "任务-000093阶段1新候选集重算.json"
+SOURCE_BATCH = ROOT / "artifacts" / "数据" / "Binance历史归档来源身份" / "binance-archive-provenance-20260811T063739Z-7a6da0087493"
+BATCH = ROOT / "artifacts" / "审计" / "阶段1新候选集重算" / "stage1-candidate-recompute-20260811T120000Z-c88fa0502d54"
 SPEC = importlib.util.spec_from_file_location("stage1_candidate_recompute", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -97,6 +100,79 @@ class Stage1CandidateRecomputeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "CONTENT_SHA_DRIFT"):
                 MODULE.verify_file_identity(root, self.groups()["BTCUSDT-trades"], member)
 
+    def test_配置完整冻结且任何字段漂移失败安全(self):
+        valid = MODULE.load_config(CONFIG)
+        self.assertEqual("000093", valid["task_id"])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            changed = dict(valid)
+            changed["local_root"] = "/tmp/unapproved-root"
+            path.write_text(json.dumps(changed, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "CONFIG_FINGERPRINT_INVALID"):
+                MODULE.load_config(path)
+
+    def test_来源批次完整文件集合必须在读取前匹配固定指纹(self):
+        config = MODULE.load_config(CONFIG)
+        files = MODULE.verify_source_batch_files(
+            SOURCE_BATCH,
+            expected_fingerprint=config["source_batch_files_fingerprint"],
+            max_files=config["limits"]["source_member_count"],
+            max_file_bytes=config["limits"]["single_source_file_bytes"],
+        )
+        self.assertIn("summary.json", files)
+        with tempfile.TemporaryDirectory() as directory:
+            batch = Path(directory)
+            (batch / "summary.json").write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "SOURCE_BATCH_FILES_FINGERPRINT_DRIFT"):
+                MODULE.verify_source_batch_files(
+                    batch,
+                    expected_fingerprint="0" * 64,
+                    max_files=10,
+                    max_file_bytes=1024,
+                )
+
+    def test_资源探针失败与硬门超限均失败安全(self):
+        with mock.patch.object(MODULE.subprocess, "run", side_effect=OSError), mock.patch.object(
+            MODULE.Path, "read_text", side_effect=OSError
+        ):
+            self.assertEqual(0.0, MODULE._memory_available_percent())
+        limits = {
+            "min_available_memory_percent": 20,
+            "min_free_disk_bytes": 5 * 1024**3,
+            "memory_bytes": 256 * 1024**2,
+        }
+        snapshot = {
+            "memory_available_percent": 100.0,
+            "output_disk_free_bytes": 10 * 1024**3,
+            "process_max_rss_bytes": 100 * 1024**2,
+        }
+        MODULE.assert_resource_limits(snapshot, limits)
+        for field, value, reason in (
+            ("memory_available_percent", 0.0, "MEMORY_HEADROOM_INSUFFICIENT"),
+            ("output_disk_free_bytes", 0, "DISK_HEADROOM_INSUFFICIENT"),
+            ("process_max_rss_bytes", 300 * 1024**2, "PROCESS_MEMORY_LIMIT_EXCEEDED"),
+        ):
+            changed = dict(snapshot)
+            changed[field] = value
+            with self.assertRaisesRegex(ValueError, reason):
+                MODULE.assert_resource_limits(changed, limits)
+
+    def test_单源文件超过固定上限时在哈希前拒绝(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "trades/BTCUSDT/BTCUSDT-trades-2024-01-01.zip"
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b"oversized")
+            member = self.member("BTCUSDT-trades", path.name, "已证明", MODULE.sha256_file(path))
+            member["size_bytes"] = path.stat().st_size
+            with self.assertRaisesRegex(ValueError, "SOURCE_FILE_SIZE_LIMIT_EXCEEDED"):
+                MODULE.verify_file_identity(
+                    root,
+                    self.groups()["BTCUSDT-trades"],
+                    member,
+                    max_file_bytes=path.stat().st_size - 1,
+                )
+
     def test_八叶子完整且未知硬门阻塞(self):
         leaves = MODULE.build_gate_leaves(
             accepted_counts={"BTC": 10, "ETH": 8},
@@ -108,6 +184,9 @@ class Stage1CandidateRecomputeTests(unittest.TestCase):
             self.assertEqual("通过", leaf["gates"]["来源身份"]["status"])
             self.assertEqual("无法判定", leaf["gates"]["三类时间"]["status"])
             self.assertEqual("阻塞", leaf["decision"])
+            for gate in leaf["gates"].values():
+                self.assertTrue(gate["evidence_refs"])
+                self.assertTrue(gate["release_conditions"])
 
     def test_追加式发布禁止覆盖(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -116,6 +195,15 @@ class Stage1CandidateRecomputeTests(unittest.TestCase):
             self.assertTrue((target / "summary.json").is_file())
             with self.assertRaises(FileExistsError):
                 MODULE.atomic_publish(root, "batch-1", {"summary.json": "{}\n"}, max_file_bytes=1024, max_total_bytes=2048)
+
+    def test_JSON分片按增量字节生成且保持规范序列化(self):
+        records = [{"id": index, "value": "x" * 20} for index in range(5)]
+        shards = MODULE._json_shards(records, "items", 90)
+        rebuilt = []
+        for name, content in sorted(shards.items()):
+            self.assertLessEqual(len(content.encode("utf-8")), 90, name)
+            rebuilt.extend(json.loads(content))
+        self.assertEqual(records, rebuilt)
 
     def test_真实批次分母指纹资源与八叶子闭合(self):
         summary = json.loads((BATCH / "summary.json").read_text(encoding="utf-8"))

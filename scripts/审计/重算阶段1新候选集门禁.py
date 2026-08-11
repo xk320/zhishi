@@ -21,13 +21,16 @@ import zipfile
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 
 STATUSES = ("已证明", "拒绝", "无法判定", "失败", "未成熟", "失效")
 GATES = ("来源身份", "三类时间", "质量", "历史重放", "成本与执行", "血缘", "容量", "恢复")
 DATE_PATTERN = re.compile(r"(\d{4}-\d{2}-\d{2})\.zip$")
 SHA_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+EXPECTED_CONFIG_CANONICAL_SHA256 = "c88fa0502d54139b1245bb561f3e6850bd2f76067004fecda48a1da2b64c906e"
+EXPECTED_CONFIG_RELATIVE_PATH = Path("config/审计/任务-000093阶段1新候选集重算.json")
+EXPECTED_OUTPUT_RELATIVE_PATH = Path("artifacts/审计/阶段1新候选集重算")
 
 
 def canonical_json(value: Any) -> str:
@@ -52,6 +55,8 @@ def load_json(path: Path) -> Any:
 
 def load_config(path: Path) -> dict[str, Any]:
     config = load_json(path)
+    if sha256_bytes(canonical_json(config).encode("utf-8")) != EXPECTED_CONFIG_CANONICAL_SHA256:
+        raise ValueError("CONFIG_FINGERPRINT_INVALID")
     if config.get("schema_version") != "zhishi-stage1-candidate-recompute/v1":
         raise ValueError("CONFIG_VERSION_INVALID")
     groups = config.get("groups")
@@ -64,6 +69,47 @@ def load_config(path: Path) -> dict[str, Any]:
     if tuple(config.get("gates") or ()) != GATES:
         raise ValueError("CONFIG_GATES_INVALID")
     return config
+
+
+def verify_source_batch_files(
+    batch_dir: Path,
+    *,
+    expected_fingerprint: str,
+    max_files: int,
+    max_file_bytes: int,
+) -> dict[str, str]:
+    """在读取来源摘要或成员前冻结完整普通JSON文件集合。"""
+
+    if batch_dir.is_symlink() or not batch_dir.is_dir():
+        raise ValueError("SOURCE_BATCH_DIR_INVALID")
+    root = batch_dir.resolve(strict=True)
+    paths: list[Path] = []
+    for path in batch_dir.rglob("*"):
+        if path.is_symlink():
+            raise ValueError("SOURCE_BATCH_FILE_INVALID")
+        if path.is_dir():
+            continue
+        if len(paths) >= max_files:
+            raise ValueError("SOURCE_BATCH_FILE_COUNT_LIMIT_EXCEEDED")
+        if not path.is_file() or path.suffix != ".json":
+            raise ValueError("SOURCE_BATCH_FILE_INVALID")
+        try:
+            path.resolve(strict=True).relative_to(root)
+        except ValueError as error:
+            raise ValueError("SOURCE_BATCH_PATH_REJECTED") from error
+        if path.stat().st_size > max_file_bytes:
+            raise ValueError("SOURCE_BATCH_FILE_SIZE_LIMIT_EXCEEDED")
+        paths.append(path)
+    if not paths:
+        raise ValueError("SOURCE_BATCH_EMPTY")
+    files = {
+        str(path.relative_to(batch_dir)): sha256_file(path)
+        for path in sorted(paths, key=lambda item: str(item.relative_to(batch_dir)).encode("utf-8"))
+    }
+    fingerprint = sha256_bytes(canonical_json(files).encode("utf-8"))
+    if fingerprint != expected_fingerprint:
+        raise ValueError("SOURCE_BATCH_FILES_FINGERPRINT_DRIFT")
+    return files
 
 
 def load_source_records(batch_dir: Path, limit: int) -> list[dict[str, Any]]:
@@ -173,9 +219,17 @@ def resolve_member_path(root: Path, group: Mapping[str, Any], member: Mapping[st
     return path
 
 
-def verify_file_identity(root: Path, group: Mapping[str, Any], member: Mapping[str, Any]) -> Path:
+def verify_file_identity(
+    root: Path,
+    group: Mapping[str, Any],
+    member: Mapping[str, Any],
+    *,
+    max_file_bytes: int | None = None,
+) -> Path:
     path = resolve_member_path(root, group, member)
     info = path.stat()
+    if max_file_bytes is not None and info.st_size > max_file_bytes:
+        raise ValueError("SOURCE_FILE_SIZE_LIMIT_EXCEEDED")
     if info.st_size != member.get("size_bytes"):
         raise ValueError("FILE_SIZE_DRIFT")
     if sha256_file(path) != member.get("content_sha256"):
@@ -253,8 +307,14 @@ def inspect_formal_member(
     group: Mapping[str, Any],
     member: Mapping[str, Any],
     chunk_bytes: int,
+    max_file_bytes: int | None = None,
 ) -> dict[str, Any]:
-    path = verify_file_identity(root, group, member)
+    path = verify_file_identity(
+        root,
+        group,
+        member,
+        max_file_bytes=max_file_bytes,
+    )
     expected_csv = Path(str(member["relative_name"])).stem + ".csv"
     try:
         with zipfile.ZipFile(path) as archive:
@@ -308,22 +368,63 @@ def build_gate_leaves(
     for underlying in ("BTC", "ETH"):
         source_count = int(accepted_counts.get(underlying, 0))
         observed = int((observations.get(underlying) or {}).get("observed", 0))
+        group_refs = (
+            ["coverage.json#/BTCUSDT-trades", "coverage.json#/BTCUSDT-aggTrades"]
+            if underlying == "BTC"
+            else ["coverage.json#/ETHUSDT-trades"]
+        )
+        formal_ref = f"formal-input-*.json#/underlying={underlying}"
+        observation_ref = f"member-observations-*.json#/underlying={underlying}"
         for horizon in (4, 8, 24, 48):
             gates = {
                 "来源身份": {
                     "status": "通过" if source_count > 0 else "无法判定",
                     "reason_code": "FORMAL_SOURCE_IDENTITY_BOUND" if source_count > 0 else "FORMAL_SOURCE_EMPTY",
+                    "evidence_refs": ["source-batch-files.json#/", formal_ref],
+                    "release_conditions": ["来源批次文件集合、正式输入成员SHA与固定指纹持续全等"],
                 },
-                "三类时间": {"status": "无法判定", "reason_code": "ARRIVAL_AND_CAPTURE_TIME_MISSING"},
-                "质量": {"status": "无法判定", "reason_code": "FULL_ROW_QUALITY_NOT_AUDITED"},
-                "历史重放": {"status": "无法判定", "reason_code": "REPLAY_EVIDENCE_NOT_COMPATIBLE"},
-                "成本与执行": {"status": "无法判定", "reason_code": "COST_EXECUTION_DATA_MISSING"},
+                "三类时间": {
+                    "status": "无法判定",
+                    "reason_code": "ARRIVAL_AND_CAPTURE_TIME_MISSING",
+                    "evidence_refs": [observation_ref],
+                    "release_conditions": ["同一正式输入版本逐成员补齐事件时间、到达时间和采集时间并验证可见性"],
+                },
+                "质量": {
+                    "status": "无法判定",
+                    "reason_code": "FULL_ROW_QUALITY_NOT_AUDITED",
+                    "evidence_refs": [observation_ref, *group_refs],
+                    "release_conditions": ["同一正式输入版本完成逐行断档、重复、乱序、Schema和异常值质量审计"],
+                },
+                "历史重放": {
+                    "status": "无法判定",
+                    "reason_code": "REPLAY_EVIDENCE_NOT_COMPATIBLE",
+                    "evidence_refs": ["summary.json#/remaining_blockers/2"],
+                    "release_conditions": ["以同一正式输入和三类时间规则完成无时间穿越的历史现场重放"],
+                },
+                "成本与执行": {
+                    "status": "无法判定",
+                    "reason_code": "COST_EXECUTION_DATA_MISSING",
+                    "evidence_refs": ["summary.json#/remaining_blockers/3"],
+                    "release_conditions": ["同版本补齐手续费、价差、深度、冲击、资金费率和执行延迟证据"],
+                },
                 "血缘": {
                     "status": "通过" if source_count > 0 and observed == source_count else "无法判定",
                     "reason_code": "CONTENT_ADDRESSED_LINEAGE" if source_count > 0 and observed == source_count else "LINEAGE_INCOMPLETE",
+                    "evidence_refs": ["source-batch-files.json#/", formal_ref, observation_ref],
+                    "release_conditions": ["来源批次、正式输入、观察成员和内容SHA的一对一血缘持续闭合"],
                 },
-                "容量": {"status": "无法判定", "reason_code": "RESEARCH_PIPELINE_CAPACITY_NOT_PROVEN"},
-                "恢复": {"status": "无法判定", "reason_code": "ISOLATED_RECOVERY_NOT_PROVEN"},
+                "容量": {
+                    "status": "无法判定",
+                    "reason_code": "RESEARCH_PIPELINE_CAPACITY_NOT_PROVEN",
+                    "evidence_refs": ["summary.json#/resource_facts"],
+                    "release_conditions": ["在隔离研究流水线上完成同版本容量试采并满足资源预算"],
+                },
+                "恢复": {
+                    "status": "无法判定",
+                    "reason_code": "ISOLATED_RECOVERY_NOT_PROVEN",
+                    "evidence_refs": ["summary.json#/remaining_blockers/4"],
+                    "release_conditions": ["完成隔离故障注入、幂等重启和不可变输出恢复验证"],
+                },
             }
             decision = "通过" if all(item["status"] == "通过" for item in gates.values()) else "阻塞"
             leaves.append(
@@ -349,6 +450,7 @@ def atomic_publish(
     *,
     max_file_bytes: int,
     max_total_bytes: int,
+    before_rename: Callable[[], None] | None = None,
 ) -> Path:
     encoded = {name: content.encode("utf-8") for name, content in files.items()}
     if any(len(content) > max_file_bytes for content in encoded.values()):
@@ -365,6 +467,8 @@ def atomic_publish(
             path = temporary / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(content)
+        if before_rename is not None:
+            before_rename()
         temporary.rename(target)
     except BaseException:
         shutil.rmtree(temporary, ignore_errors=True)
@@ -388,9 +492,17 @@ def inventory_fingerprint(paths: Sequence[Path], root: Path, limit: int) -> tupl
         if not parent.exists() and not parent.is_symlink():
             append(parent, "missing")
             continue
-        candidates = [parent]
+        append_parent = True
+        candidates: list[Path] = []
         if parent.is_dir() and not parent.is_symlink():
-            candidates.extend(sorted((Path(item.path) for item in os.scandir(parent)), key=lambda item: item.name.encode("utf-8")))
+            with os.scandir(parent) as entries:
+                for item in entries:
+                    if len(rows) + 1 + len(candidates) >= limit:
+                        raise ValueError("INVENTORY_ENTRY_LIMIT_EXCEEDED")
+                    candidates.append(Path(item.path))
+            candidates.sort(key=lambda item: item.name.encode("utf-8"))
+        if append_parent:
+            candidates.insert(0, parent)
         for path in candidates:
             info = path.lstat()
             kind = "symlink" if stat.S_ISLNK(info.st_mode) else "directory" if stat.S_ISDIR(info.st_mode) else "file" if stat.S_ISREG(info.st_mode) else "other"
@@ -412,7 +524,24 @@ def _memory_available_percent() -> float:
             return float(match.group(1))
     except (OSError, subprocess.SubprocessError):
         pass
-    return 100.0
+    try:
+        values: dict[str, int] = {}
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            key, separator, raw = line.partition(":")
+            if separator and raw.strip().endswith("kB"):
+                values[key] = int(raw.strip().split()[0])
+        total = values.get("MemTotal", 0)
+        available = values.get("MemAvailable", 0)
+        if total > 0 and 0 <= available <= total:
+            return available * 100.0 / total
+    except (OSError, UnicodeError, ValueError):
+        pass
+    return 0.0
+
+
+def _process_max_rss_bytes() -> int:
+    value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    return value if sys.platform == "darwin" else value * 1024
 
 
 def _resource_snapshot(output_root: Path, source_root: Path) -> dict[str, Any]:
@@ -421,8 +550,17 @@ def _resource_snapshot(output_root: Path, source_root: Path) -> dict[str, Any]:
         "memory_available_percent": _memory_available_percent(),
         "output_disk_free_bytes": shutil.disk_usage(output_root.parent if not output_root.exists() else output_root).free,
         "source_disk_free_bytes": shutil.disk_usage(source_root).free,
-        "process_max_rss_bytes": int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss),
+        "process_max_rss_bytes": _process_max_rss_bytes(),
     }
+
+
+def assert_resource_limits(snapshot: Mapping[str, Any], limits: Mapping[str, Any]) -> None:
+    if float(snapshot["memory_available_percent"]) < float(limits["min_available_memory_percent"]):
+        raise ValueError("MEMORY_HEADROOM_INSUFFICIENT")
+    if int(snapshot["output_disk_free_bytes"]) < int(limits["min_free_disk_bytes"]):
+        raise ValueError("DISK_HEADROOM_INSUFFICIENT")
+    if int(snapshot["process_max_rss_bytes"]) > int(limits["memory_bytes"]):
+        raise ValueError("PROCESS_MEMORY_LIMIT_EXCEEDED")
 
 
 def _compact_member(member: Mapping[str, Any]) -> dict[str, Any]:
@@ -441,19 +579,25 @@ def _compact_member(member: Mapping[str, Any]) -> dict[str, Any]:
 
 def _json_shards(records: Sequence[Mapping[str, Any]], prefix: str, max_bytes: int) -> dict[str, str]:
     files: dict[str, str] = {}
-    current: list[Mapping[str, Any]] = []
+    current: list[str] = []
+    current_bytes = 2
     index = 1
     for record in records:
-        candidate = current + [record]
-        text = canonical_json(candidate) + "\n"
-        if len(text.encode("utf-8")) > max_bytes and current:
-            files[f"{prefix}-{index:03d}.json"] = canonical_json(current) + "\n"
+        encoded = canonical_json(record)
+        encoded_bytes = len(encoded.encode("utf-8"))
+        separator_bytes = 1 if current else 0
+        if current and current_bytes + separator_bytes + encoded_bytes + 1 > max_bytes:
+            files[f"{prefix}-{index:03d}.json"] = "[" + ",".join(current) + "]\n"
             index += 1
-            current = [record]
-        else:
-            current = candidate
+            current = []
+            current_bytes = 2
+            separator_bytes = 0
+        if current_bytes + separator_bytes + encoded_bytes + 1 > max_bytes:
+            raise ValueError("OUTPUT_RECORD_LIMIT_EXCEEDED")
+        current.append(encoded)
+        current_bytes += separator_bytes + encoded_bytes
     if current:
-        files[f"{prefix}-{index:03d}.json"] = canonical_json(current) + "\n"
+        files[f"{prefix}-{index:03d}.json"] = "[" + ",".join(current) + "]\n"
     return files
 
 
@@ -483,9 +627,21 @@ def _coverage(observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 def run(config_path: Path, repo_root: Path, output_root: Path, batch_id: str) -> Path:
     started = time.monotonic()
     started_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    expected_config_path = (repo_root / EXPECTED_CONFIG_RELATIVE_PATH).resolve()
+    expected_output_root = (repo_root / EXPECTED_OUTPUT_RELATIVE_PATH).resolve()
+    if config_path.resolve() != expected_config_path:
+        raise ValueError("CONFIG_PATH_INVALID")
+    if output_root.resolve() != expected_output_root:
+        raise ValueError("OUTPUT_PATH_INVALID")
     config = load_config(config_path)
     limits = config["limits"]
     batch_dir = repo_root / config["source_batch_dir"]
+    source_batch_files = verify_source_batch_files(
+        batch_dir,
+        expected_fingerprint=config["source_batch_files_fingerprint"],
+        max_files=limits["source_member_count"],
+        max_file_bytes=limits["single_source_file_bytes"],
+    )
     summary_path = batch_dir / "summary.json"
     if sha256_file(summary_path) != config["source_summary_sha256"]:
         raise ValueError("SOURCE_SUMMARY_SHA_DRIFT")
@@ -506,16 +662,21 @@ def run(config_path: Path, repo_root: Path, output_root: Path, batch_id: str) ->
     if before_fingerprint != source_summary["source_inventory_before_sha256"]:
         raise ValueError("SOURCE_INVENTORY_BASELINE_DRIFT")
     start_snapshot = _resource_snapshot(output_root, source_root)
-    if start_snapshot["memory_available_percent"] < limits["min_available_memory_percent"]:
-        raise ValueError("MEMORY_HEADROOM_INSUFFICIENT")
-    if start_snapshot["output_disk_free_bytes"] < limits["min_free_disk_bytes"]:
-        raise ValueError("DISK_HEADROOM_INSUFFICIENT")
+    assert_resource_limits(start_snapshot, limits)
 
     observations: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
     for index, member in enumerate(accepted, start=1):
         try:
-            observations.append(inspect_formal_member(source_root, groups[str(member["group"])], member, limits["stream_chunk_bytes"]))
+            observations.append(
+                inspect_formal_member(
+                    source_root,
+                    groups[str(member["group"])],
+                    member,
+                    limits["stream_chunk_bytes"],
+                    limits["single_source_file_bytes"],
+                )
+            )
         except (OSError, ValueError) as error:
             failures.append({
                 "member_id": member["member_id"],
@@ -528,8 +689,7 @@ def run(config_path: Path, repo_root: Path, output_root: Path, batch_id: str) ->
         if index % 50 == 0 or index == len(accepted):
             print(f"正式输入观察: {index}/{len(accepted)}，失败={len(failures)}", file=sys.stderr, flush=True)
             snapshot = _resource_snapshot(output_root, source_root)
-            if snapshot["memory_available_percent"] < limits["min_available_memory_percent"]:
-                raise ValueError("MEMORY_HEADROOM_INSUFFICIENT")
+            assert_resource_limits(snapshot, limits)
             if time.monotonic() - started > limits["total_seconds"]:
                 raise TimeoutError("TOTAL_TIME_LIMIT_EXCEEDED")
 
@@ -545,10 +705,7 @@ def run(config_path: Path, repo_root: Path, output_root: Path, batch_id: str) ->
         observations={key: {"observed": value} for key, value in observed_counts.items()},
     )
     completed_snapshot = _resource_snapshot(output_root, source_root)
-    source_batch_files = {
-        str(path.relative_to(batch_dir)): sha256_file(path)
-        for path in sorted(batch_dir.rglob("*.json"), key=lambda item: str(item).encode("utf-8"))
-    }
+    assert_resource_limits(completed_snapshot, limits)
     compact_rejected = [
         {
             "member_id": item["member_id"],
@@ -560,6 +717,8 @@ def run(config_path: Path, repo_root: Path, output_root: Path, batch_id: str) ->
         for item in records
         if item["status"] != "已证明"
     ]
+    del accepted
+    del records
     summary = {
         "schema_version": "zhishi-stage1-candidate-recompute-batch/v1",
         "task_id": "000093",
@@ -613,12 +772,19 @@ def run(config_path: Path, repo_root: Path, output_root: Path, batch_id: str) ->
     }
     files.update(_json_shards(formal, "formal-input", limits["output_file_bytes"] - 1024))
     files.update(_json_shards(observations, "member-observations", limits["output_file_bytes"] - 1024))
+    prepublish_snapshot = _resource_snapshot(output_root, source_root)
+    assert_resource_limits(prepublish_snapshot, limits)
+    summary["resource_facts"]["prepublish"] = prepublish_snapshot
+    files["summary.json"] = json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
     target = atomic_publish(
         output_root,
         batch_id,
         files,
         max_file_bytes=limits["output_file_bytes"],
         max_total_bytes=limits["output_total_bytes"],
+        before_rename=lambda: assert_resource_limits(
+            _resource_snapshot(output_root, source_root), limits
+        ),
     )
     print(json.dumps({"batch_id": batch_id, "output": str(target), "summary": summary}, ensure_ascii=False), flush=True)
     return target
