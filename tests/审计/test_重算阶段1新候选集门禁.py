@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "审计" / "重算阶段1新候选集门禁.py"
 CONFIG = ROOT / "config" / "审计" / "任务-000093阶段1新候选集重算.json"
 SOURCE_BATCH = ROOT / "artifacts" / "数据" / "Binance历史归档来源身份" / "binance-archive-provenance-20260811T063739Z-7a6da0087493"
-BATCH = ROOT / "artifacts" / "审计" / "阶段1新候选集重算" / "stage1-candidate-recompute-20260811T140000Z-2a5216be7095"
+BATCH = ROOT / "artifacts" / "审计" / "阶段1新候选集重算" / "stage1-candidate-recompute-20260811T145500Z-22191bf6b82a"
 SPEC = importlib.util.spec_from_file_location("stage1_candidate_recompute", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -247,6 +247,22 @@ class Stage1CandidateRecomputeTests(unittest.TestCase):
             rebuilt.extend(json.loads(content))
         self.assertEqual(records, rebuilt)
 
+    def test_列式JSON分片可确定性还原并字典编码低基数字段(self):
+        records = [
+            {"id": index, "group": "BTC", "status": "已观察", "value": "x" * 20}
+            for index in range(5)
+        ]
+        shards = MODULE._json_table_shards(records, "items", 420)
+        self.assertIs(iter(shards), shards, "列式分片必须逐个生成")
+        rebuilt = []
+        for name, content in shards:
+            self.assertLessEqual(len(content.encode("utf-8")), 420, name)
+            payload = json.loads(content)
+            self.assertEqual("zhishi-record-table/v1", payload["schema_version"])
+            self.assertIn("group", payload["dictionaries"])
+            rebuilt.extend(self.decode_table(payload))
+        self.assertEqual(records, rebuilt)
+
     def test_发布逐文件消费迭代器并保留总量门(self):
         consumed = []
 
@@ -286,9 +302,9 @@ class Stage1CandidateRecomputeTests(unittest.TestCase):
         formal = []
         observations = []
         for path in sorted(BATCH.glob("formal-input-*.json")):
-            formal.extend(json.loads(path.read_text(encoding="utf-8")))
+            formal.extend(self.decode_payload(json.loads(path.read_text(encoding="utf-8"))))
         for path in sorted(BATCH.glob("member-observations-*.json")):
-            observations.extend(json.loads(path.read_text(encoding="utf-8")))
+            observations.extend(self.decode_payload(json.loads(path.read_text(encoding="utf-8"))))
         self.assertEqual(5180, len(formal))
         self.assertEqual(5180, len({item["member_id"] for item in formal}))
         self.assertEqual(5180, len(observations))
@@ -303,6 +319,22 @@ class Stage1CandidateRecomputeTests(unittest.TestCase):
         self.assertEqual(0, coverage["BTCUSDT-aggTrades"]["missing_date_count"])
         self.assertEqual(8, coverage["BTCUSDT-trades"]["missing_date_count"])
         self.assertEqual(199, coverage["ETHUSDT-trades"]["missing_date_count"])
+
+    @staticmethod
+    def decode_table(payload):
+        columns = payload["columns"]
+        dictionaries = payload["dictionaries"]
+        return [
+            {
+                column: dictionaries[column][value] if column in dictionaries else value
+                for column, value in zip(columns, row, strict=True)
+            }
+            for row in payload["rows"]
+        ]
+
+    @classmethod
+    def decode_payload(cls, payload):
+        return payload if isinstance(payload, list) else cls.decode_table(payload)
 
     @staticmethod
     def groups():

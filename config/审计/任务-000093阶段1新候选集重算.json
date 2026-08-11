@@ -1,7 +1,7 @@
 {
   "schema_version": "zhishi-stage1-candidate-recompute/v1",
   "task_id": "000093",
-  "task_contract_sha256": "4126908bc17db2d1e165464e04259878a3140e98a22fe2421ba88db55c3b6ea3",
+  "task_contract_sha256": "6821ea5908bdb06651763b9cf06655ebd5c67ecfb71c290f4d7fdbba861fb36f",
   "source_task_id": "000092",
   "source_batch_id": "binance-archive-provenance-20260811T063739Z-7a6da0087493",
   "source_batch_dir": "artifacts/数据/Binance历史归档来源身份/binance-archive-provenance-20260811T063739Z-7a6da0087493",

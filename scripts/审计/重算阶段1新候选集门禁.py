@@ -28,7 +28,7 @@ STATUSES = ("已证明", "拒绝", "无法判定", "失败", "未成熟", "失�
 GATES = ("来源身份", "三类时间", "质量", "历史重放", "成本与执行", "血缘", "容量", "恢复")
 DATE_PATTERN = re.compile(r"(\d{4}-\d{2}-\d{2})\.zip$")
 SHA_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-EXPECTED_CONFIG_CANONICAL_SHA256 = "2a5216be70954610df8d7c47ea714b8af871bb33512cee2ce03a41c4a3dc6623"
+EXPECTED_CONFIG_CANONICAL_SHA256 = "22191bf6b82a070deacb46ea7aee0a50350f8bf72cb167265109676040b2ed56"
 EXPECTED_CONFIG_RELATIVE_PATH = Path("config/审计/任务-000093阶段1新候选集重算.json")
 EXPECTED_OUTPUT_RELATIVE_PATH = Path("artifacts/审计/阶段1新候选集重算")
 TASK_CONTRACT_HEADER_PREFIXES = (
@@ -674,6 +674,72 @@ def _json_shards(records: Sequence[Mapping[str, Any]], prefix: str, max_bytes: i
         yield f"{prefix}-{index:03d}.json", "[" + ",".join(current) + "]\n"
 
 
+def _json_table_shards(
+    records: Sequence[Mapping[str, Any]], prefix: str, max_bytes: int
+) -> Iterator[tuple[str, str]]:
+    """以可逆列式JSON逐片输出成员证据，避免重复低基数字符串撑大仓库。"""
+
+    if not records:
+        return
+    columns = sorted(records[0])
+    expected_columns = set(columns)
+    candidates: dict[str, set[str]] = {column: set() for column in columns}
+    ineligible: set[str] = set()
+    for record in records:
+        if set(record) != expected_columns:
+            raise ValueError("OUTPUT_TABLE_SCHEMA_DRIFT")
+        for column in columns:
+            value = record[column]
+            if column in ineligible:
+                continue
+            if not isinstance(value, str):
+                ineligible.add(column)
+                candidates.pop(column, None)
+                continue
+            candidates[column].add(value)
+            if len(candidates[column]) > 32:
+                ineligible.add(column)
+                candidates.pop(column, None)
+    dictionaries = {
+        column: sorted(values, key=lambda value: value.encode("utf-8"))
+        for column, values in sorted(candidates.items())
+        if values
+    }
+    indexes = {
+        column: {value: index for index, value in enumerate(values)}
+        for column, values in dictionaries.items()
+    }
+    header = (
+        '{"schema_version":"zhishi-record-table/v1","columns":'
+        + canonical_json(columns)
+        + ',"dictionaries":'
+        + canonical_json(dictionaries)
+        + ',"rows":['
+    )
+    suffix = "]}\n"
+    base_bytes = len(header.encode("utf-8")) + len(suffix.encode("utf-8"))
+    current: list[str] = []
+    current_bytes = base_bytes
+    index = 1
+    for record in records:
+        row = [indexes[column][record[column]] if column in indexes else record[column] for column in columns]
+        encoded = canonical_json(row)
+        encoded_bytes = len(encoded.encode("utf-8"))
+        separator_bytes = 1 if current else 0
+        if current and current_bytes + separator_bytes + encoded_bytes > max_bytes:
+            yield f"{prefix}-{index:03d}.json", header + ",".join(current) + suffix
+            index += 1
+            current = []
+            current_bytes = base_bytes
+            separator_bytes = 0
+        if current_bytes + separator_bytes + encoded_bytes > max_bytes:
+            raise ValueError("OUTPUT_RECORD_LIMIT_EXCEEDED")
+        current.append(encoded)
+        current_bytes += separator_bytes + encoded_bytes
+    if current:
+        yield f"{prefix}-{index:03d}.json", header + ",".join(current) + suffix
+
+
 def _coverage(observations: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     grouped: dict[str, list[Mapping[str, Any]]] = {}
     for item in observations:
@@ -861,8 +927,8 @@ def run(config_path: Path, repo_root: Path, output_root: Path, batch_id: str) ->
     def output_entries() -> Iterator[tuple[str, str]]:
         for name, content in sorted(files.items()):
             yield name, content
-        yield from _json_shards(formal, "formal-input", limits["output_file_bytes"] - 1024)
-        yield from _json_shards(observations, "member-observations", limits["output_file_bytes"] - 1024)
+        yield from _json_table_shards(formal, "formal-input", limits["output_file_bytes"] - 1024)
+        yield from _json_table_shards(observations, "member-observations", limits["output_file_bytes"] - 1024)
 
     def assert_publish_safe() -> None:
         assert_time_limit(started, limits)
