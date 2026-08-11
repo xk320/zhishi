@@ -504,23 +504,24 @@ def atomic_publish(root: Path, batch_id: str, files: Mapping[str, str]) -> Path:
     return target
 
 
-def _jsonl_shards(records: Sequence[Mapping[str, Any]], prefix: str, max_bytes: int) -> dict[str, str]:
+def _json_shards(records: Sequence[Mapping[str, Any]], prefix: str, max_bytes: int) -> dict[str, str]:
     files: dict[str, str] = {}
-    lines: list[str] = []
-    size = 0
+    items: list[str] = []
+    size = 3
     index = 1
     for record in records:
-        line = canonical_json(record) + "\n"
-        encoded = len(line.encode("utf-8"))
-        if lines and size + encoded > max_bytes:
-            files[f"members/{prefix}-{index:03d}.jsonl"] = "".join(lines)
+        item = canonical_json(record)
+        encoded = len(item.encode("utf-8")) + (2 if items else 0)
+        if items and size + encoded > max_bytes:
+            files[f"members/{prefix}-{index:03d}.json"] = "[\n" + ",\n".join(items) + "\n]\n"
             index += 1
-            lines = []
-            size = 0
-        lines.append(line)
+            items = []
+            size = 3
+            encoded = len(item.encode("utf-8"))
+        items.append(item)
         size += encoded
-    if lines:
-        files[f"members/{prefix}-{index:03d}.jsonl"] = "".join(lines)
+    if items:
+        files[f"members/{prefix}-{index:03d}.json"] = "[\n" + ",\n".join(items) + "\n]\n"
     return files
 
 
@@ -721,12 +722,12 @@ def execute(config_path: Path, output_root: Path, repo_root: Path) -> Path:
     }
     files: dict[str, str] = {
         "summary.json": json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-        "exclusions.jsonl": "".join(canonical_json(item) + "\n" for item in sorted(exclusions, key=lambda item: (item["group"], item["path"]))),
+        "exclusions.json": json.dumps(sorted(exclusions, key=lambda item: (item["group"], item["path"])), ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
         "schema-catalog.json": json.dumps({"schema_version": "binance-field-mapping/1", "mappings": FIELD_MAPPINGS, "fingerprint": sha256_bytes(canonical_json(FIELD_MAPPINGS).encode("utf-8"))}, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
     }
     for group in groups:
         records = [record for record in all_records if record["group"] == group["id"]]
-        files.update(_jsonl_shards(records, group["id"], config["limits"]["shard_bytes"]))
+        files.update(_json_shards(records, group["id"], config["limits"]["shard_bytes"]))
     resources = summary["resource_facts"]
     if resources["process_max_rss_bytes"] > config["limits"]["memory_bytes"]:
         raise ValueError("MEMORY_LIMIT_EXCEEDED")

@@ -6,7 +6,7 @@
 
 **Goal:** Validate the fixed local Binance BTC/ETH archive set without copying source data, bind every accepted ZIP to its CHECKSUM and the fixed public object listing, and publish a compact immutable provenance batch.
 
-**Architecture:** A standard-library Python CLI loads an immutable JSON contract, deterministically discovers three allowlisted groups, validates official listing facts, streams local SHA-256 checks, inspects bounded ZIP schema facts, and atomically publishes split JSONL evidence plus a summary. Unit tests use only temporary miniature archives and injected listing fixtures; the real run is single-process and read-only.
+**Architecture:** A standard-library Python CLI loads an immutable JSON contract, deterministically discovers three allowlisted groups, validates official listing facts, streams local SHA-256 checks, inspects bounded ZIP schema facts, and atomically publishes split JSON evidence plus a summary. Unit tests use only temporary miniature archives and injected listing fixtures; the real run is single-process and read-only.
 
 **Tech Stack:** Python 3 standard library, `/usr/bin/curl`, JSON/JSONL, Markdown, unittest.
 
@@ -31,7 +31,7 @@
 - [x] Add `config/数据/任务-000092Binance历史归档来源身份.json` with exact local and remote allowlists.
 - [x] Add `scripts/数据/验证Binance历史归档来源身份.py` using only the standard library and direct argument-array curl invocation.
 - [x] Keep hashing and ZIP reads bounded and serial; never extract, copy, rename or write to source paths.
-- [x] Publish compact JSONL shards, exclusions, summary and fingerprints through an atomic new directory.
+- [x] Publish compact JSON shards, exclusions, summary and fingerprints through an atomic new directory.
 - [x] Run focused tests until GREEN, then the full data test suite.
 
 ## Task 4: Produce one real immutable batch

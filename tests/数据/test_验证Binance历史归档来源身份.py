@@ -158,6 +158,11 @@ class BinanceArchiveProvenanceTests(unittest.TestCase):
                 self.root, "batch-1", {"summary.json": json.dumps({"ok": True})}
             )
 
+    def test_member_shards_are_standard_json_files(self):
+        files = MODULE._json_shards([{"id": 1}, {"id": 2}], "group", 1024)
+        self.assertEqual(["members/group-001.json"], list(files))
+        self.assertEqual([{"id": 1}, {"id": 2}], json.loads(next(iter(files.values()))))
+
 
 if __name__ == "__main__":
     unittest.main()
