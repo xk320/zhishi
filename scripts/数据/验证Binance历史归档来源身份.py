@@ -103,12 +103,17 @@ EXPECTED_CONFIG = {
     "limits": {
         "single_file_bytes": 17179869184,
         "member_count": 8192,
+        "directory_entry_count": 16384,
+        "inventory_entry_count": 50000,
+        "exclusion_count": 8192,
         "zip_sample_bytes": 1048576,
         "remote_total_bytes": 33554432,
         "output_bytes": 26214400,
         "shard_bytes": 4718592,
         "total_seconds": 14400,
         "memory_bytes": 268435456,
+        "min_available_memory_percent": 20,
+        "min_free_disk_bytes": 5368709120,
     },
 }
 
@@ -180,14 +185,34 @@ def _member_pattern(contract: str, dataset: str) -> re.Pattern[str]:
     return re.compile(rf"^{re.escape(contract)}-{re.escape(dataset)}-{DATE_PATTERN}\.zip$")
 
 
-def discover_group(root: Path, contract: str, dataset: str) -> Discovery:
+def _bounded_sorted_children(
+    root: Path, *, max_entries: int, error_code: str
+) -> list[Path]:
+    if max_entries < 1:
+        raise ValueError(error_code)
+    children: list[Path] = []
+    with os.scandir(root) as entries:
+        for entry in entries:
+            if len(children) >= max_entries:
+                raise ValueError(error_code)
+            children.append(Path(entry.path))
+    return sorted(children, key=lambda item: item.name.encode("utf-8"))
+
+
+def discover_group(
+    root: Path, contract: str, dataset: str, *, max_entries: int
+) -> Discovery:
     if root.is_symlink() or not root.is_dir():
         raise ValueError("GROUP_ROOT_INVALID")
     pattern = _member_pattern(contract, dataset)
     zips: dict[str, Path] = {}
     checksums: dict[str, Path] = {}
     exclusions: list[Exclusion] = []
-    for path in sorted(root.iterdir(), key=lambda item: item.name.encode("utf-8")):
+    for path in _bounded_sorted_children(
+        root,
+        max_entries=max_entries,
+        error_code="DIRECTORY_ENTRY_LIMIT_EXCEEDED",
+    ):
         info = path.lstat()
         if path.name.startswith("."):
             exclusions.append(Exclusion(path.name, "HIDDEN_FILE_REJECTED"))
@@ -486,7 +511,9 @@ def validate_member(
     remote_archive: RemoteObject | None = None
     remote_checksum: RemoteObject | None = None
     failed = False
+    archive_size: int | None = None
     try:
+        archive_size = archive.stat().st_size
         expected_sha = parse_checksum(checksum, archive.name)
         checksum_bytes = checksum.read_bytes()
         checksum_size = len(checksum_bytes)
@@ -502,7 +529,7 @@ def validate_member(
         if remote_archive is None or remote_checksum is None:
             reasons.append("REMOTE_OBJECT_MISSING")
         else:
-            if remote_archive.size != archive.stat().st_size:
+            if remote_archive.size != archive_size:
                 reasons.append("REMOTE_ZIP_SIZE_MISMATCH")
             if (
                 "-" in remote_checksum.etag
@@ -525,7 +552,7 @@ def validate_member(
         reasons.append("MEMBER_IO_FAILED")
         failed = True
     base["local_evidence"] = {
-        "zip_size_bytes": archive.stat().st_size if archive.exists() else None,
+        "zip_size_bytes": archive_size,
         "zip_content_sha256": actual_sha,
         "checksum_declared_zip_sha256": expected_sha,
         "checksum_file_size_bytes": checksum_size,
@@ -551,7 +578,7 @@ def validate_member(
                 "status": "已证明",
                 "content_sha256": actual_sha,
                 "checksum_sha256": expected_sha,
-                "size_bytes": archive.stat().st_size,
+                "size_bytes": archive_size,
                 "schema": schema,
                 "source_identity": {
                     "source_provider": "Binance",
@@ -580,15 +607,30 @@ def validate_member(
     return base
 
 
-def inventory_fingerprint(paths: Sequence[Path], root: Path) -> tuple[str, int]:
+def inventory_fingerprint(
+    paths: Sequence[Path], root: Path, *, max_entries: int
+) -> tuple[str, int]:
     rows: list[dict[str, Any]] = []
+
+    def append_row(row: dict[str, Any]) -> None:
+        if len(rows) >= max_entries:
+            raise ValueError("INVENTORY_ENTRY_LIMIT_EXCEEDED")
+        rows.append(row)
+
     for parent in paths:
         if not parent.exists() and not parent.is_symlink():
-            rows.append({"path": str(parent), "kind": "missing"})
+            append_row({"path": str(parent), "kind": "missing"})
             continue
         candidates = [parent]
         if parent.is_dir() and not parent.is_symlink():
-            candidates.extend(sorted(parent.iterdir(), key=lambda item: item.name.encode("utf-8")))
+            remaining = max_entries - len(rows)
+            candidates.extend(
+                _bounded_sorted_children(
+                    parent,
+                    max_entries=remaining,
+                    error_code="INVENTORY_ENTRY_LIMIT_EXCEEDED",
+                )
+            )
         for path in candidates:
             info = path.lstat()
             try:
@@ -596,7 +638,7 @@ def inventory_fingerprint(paths: Sequence[Path], root: Path) -> tuple[str, int]:
             except ValueError:
                 relative = str(path)
             kind = "symlink" if stat.S_ISLNK(info.st_mode) else "directory" if stat.S_ISDIR(info.st_mode) else "file" if stat.S_ISREG(info.st_mode) else "other"
-            rows.append(
+            append_row(
                 {
                     "path": relative,
                     "kind": kind,
@@ -688,16 +730,114 @@ def _curl_identity(path: str) -> dict[str, str]:
     return {"path": path, "version": version, "sha256": sha256_file(binary)}
 
 
-def _resource_facts(started: float, output_root: Path) -> dict[str, Any]:
+def _system_memory_facts() -> dict[str, Any]:
+    if sys.platform == "darwin":
+        result = subprocess.run(
+            ["/usr/bin/memory_pressure", "-Q"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+            timeout=5,
+            check=True,
+        )
+        if len(result.stdout) > 4096 or len(result.stderr) > 4096:
+            raise ValueError("SYSTEM_MEMORY_PROBE_INVALID")
+        total_match = re.search(rb"The system has (\d+)", result.stdout)
+        percent_match = re.search(
+            rb"System-wide memory free percentage:\s*(\d+)%", result.stdout
+        )
+        if total_match is None or percent_match is None:
+            raise ValueError("SYSTEM_MEMORY_PROBE_INVALID")
+        total = int(total_match.group(1))
+        percent = float(percent_match.group(1))
+        return {
+            "system_memory_total_bytes": total,
+            "system_memory_available_bytes": int(total * percent / 100),
+            "system_memory_available_percent": percent,
+            "system_memory_probe": "macos-memory-pressure-q/1",
+        }
+    if sys.platform.startswith("linux"):
+        path = Path("/proc/meminfo")
+        if path.stat().st_size > 65536:
+            raise ValueError("SYSTEM_MEMORY_PROBE_INVALID")
+        content = path.read_text(encoding="ascii")
+        values: dict[str, int] = {}
+        for line in content.splitlines():
+            match = re.fullmatch(r"(MemTotal|MemAvailable):\s+(\d+) kB", line)
+            if match:
+                values[match.group(1)] = int(match.group(2)) * 1024
+        if set(values) != {"MemTotal", "MemAvailable"} or values["MemTotal"] < 1:
+            raise ValueError("SYSTEM_MEMORY_PROBE_INVALID")
+        return {
+            "system_memory_total_bytes": values["MemTotal"],
+            "system_memory_available_bytes": values["MemAvailable"],
+            "system_memory_available_percent": round(
+                values["MemAvailable"] * 100 / values["MemTotal"], 3
+            ),
+            "system_memory_probe": "linux-proc-meminfo/1",
+        }
+    raise ValueError("SYSTEM_MEMORY_PROBE_UNSUPPORTED")
+
+
+def _resource_snapshot(
+    output_root: Path, source_root: Path | None = None
+) -> dict[str, Any]:
+    disk_path = output_root.parent if output_root.parent.exists() else Path.cwd()
+    disk = shutil.disk_usage(disk_path)
+    facts = {
+        **_system_memory_facts(),
+        "measured_at": datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "output_disk_path": str(disk_path.resolve()),
+        "disk_free_bytes": disk.free,
+    }
+    if source_root is not None:
+        facts["source_disk_path"] = str(source_root.resolve())
+        facts["source_disk_free_bytes"] = shutil.disk_usage(source_root).free
+    return facts
+
+
+def _assert_resource_headroom(
+    snapshot: Mapping[str, Any],
+    *,
+    min_memory_percent: float,
+    min_disk_free_bytes: int,
+    planned_output_bytes: int,
+) -> None:
+    if float(snapshot["system_memory_available_percent"]) < min_memory_percent:
+        raise ValueError("SYSTEM_MEMORY_HEADROOM_LOW")
+    if int(snapshot["disk_free_bytes"]) - planned_output_bytes < min_disk_free_bytes:
+        raise ValueError("DISK_HEADROOM_LOW")
+
+
+def _process_max_rss_bytes() -> int:
     usage = __import__("resource").getrusage(__import__("resource").RUSAGE_SELF)
     max_rss_bytes = int(usage.ru_maxrss) if sys.platform != "darwin" else int(usage.ru_maxrss)
     if sys.platform != "darwin":
         max_rss_bytes *= 1024
-    disk = shutil.disk_usage(output_root.parent if output_root.parent.exists() else Path.cwd())
+    return max_rss_bytes
+
+
+def _resource_facts(
+    started: float,
+    start_snapshot: Mapping[str, Any],
+    pre_publish_snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
     return {
         "elapsed_seconds": round(time.monotonic() - started, 3),
-        "process_max_rss_bytes": max_rss_bytes,
-        "disk_free_bytes_at_publish": disk.free,
+        "process_max_rss_bytes": _process_max_rss_bytes(),
+        "start_snapshot": dict(start_snapshot),
+        "pre_publish_snapshot": dict(pre_publish_snapshot),
+        "system_memory_available_bytes_at_publish": pre_publish_snapshot[
+            "system_memory_available_bytes"
+        ],
+        "system_memory_available_percent_at_publish": pre_publish_snapshot[
+            "system_memory_available_percent"
+        ],
+        "system_memory_probe": pre_publish_snapshot["system_memory_probe"],
+        "disk_free_bytes_at_publish": pre_publish_snapshot["disk_free_bytes"],
         "processes": 1,
         "hash_chunk_bytes": CHUNK_SIZE,
     }
@@ -708,12 +848,24 @@ def execute(config_path: Path, output_root: Path, repo_root: Path) -> Path:
     _validate_execution_paths(config_path, output_root, repo_root)
     started_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     config, config_sha = _load_config(config_path)
+    limits = config["limits"]
     local_root = Path(config["local_root"])
+    start_snapshot = _resource_snapshot(output_root, local_root)
+    _assert_resource_headroom(
+        start_snapshot,
+        min_memory_percent=limits["min_available_memory_percent"],
+        min_disk_free_bytes=limits["min_free_disk_bytes"],
+        planned_output_bytes=0,
+    )
     groups = config["groups"]
     inventory_paths = [local_root / item["relative_dir"] for item in groups]
     inventory_paths.extend(local_root / value for value in config.get("observations", []))
     inventory_paths.extend(local_root / value for value in config.get("manifests", []))
-    before_fingerprint, inventory_count = inventory_fingerprint(inventory_paths, local_root)
+    before_fingerprint, inventory_count = inventory_fingerprint(
+        inventory_paths,
+        local_root,
+        max_entries=limits["inventory_entry_count"],
+    )
     curl = _curl_identity(config["curl_path"])
     readme_sha, readme_bytes = fetch_pinned_readme(
         config["curl_path"],
@@ -744,14 +896,22 @@ def execute(config_path: Path, output_root: Path, repo_root: Path) -> Path:
     all_records: list[dict[str, Any]] = []
     exclusions: list[dict[str, Any]] = []
     group_summaries: dict[str, Any] = {}
+    discovered_candidate_total = 0
     for group in groups:
         discovery = discover_group(
-            local_root / group["relative_dir"], group["contract"], group["dataset"]
+            local_root / group["relative_dir"],
+            group["contract"],
+            group["dataset"],
+            max_entries=limits["directory_entry_count"],
         )
-        if len(discovery.members) + sum(
+        group_candidate_total = len(discovery.members) + sum(
             item.counts_as_candidate for item in discovery.exclusions
-        ) > config["limits"]["member_count"]:
+        )
+        discovered_candidate_total += group_candidate_total
+        if discovered_candidate_total > limits["member_count"]:
             raise ValueError("MEMBER_COUNT_LIMIT_EXCEEDED")
+        if len(exclusions) + len(discovery.exclusions) > limits["exclusion_count"]:
+            raise ValueError("EXCLUSION_COUNT_LIMIT_EXCEEDED")
         for item in discovery.exclusions:
             exclusions.append(
                 {
@@ -786,6 +946,15 @@ def execute(config_path: Path, output_root: Path, repo_root: Path) -> Path:
             records.append(record)
             if index % 100 == 0 or index == len(discovery.members):
                 print(f"{group['id']}: {index}/{len(discovery.members)}", file=sys.stderr, flush=True)
+                progress_snapshot = _resource_snapshot(output_root, local_root)
+                _assert_resource_headroom(
+                    progress_snapshot,
+                    min_memory_percent=limits["min_available_memory_percent"],
+                    min_disk_free_bytes=limits["min_free_disk_bytes"],
+                    planned_output_bytes=0,
+                )
+                if _process_max_rss_bytes() > limits["memory_bytes"]:
+                    raise ValueError("MEMORY_LIMIT_EXCEEDED")
             if time.monotonic() - started > config["limits"]["total_seconds"]:
                 raise TimeoutError("TOTAL_TIME_LIMIT_EXCEEDED")
         counts = {status: sum(record["status"] == status for record in records) for status in ("已证明", "拒绝", "无法判定", "失败", "未成熟", "失效")}
@@ -802,7 +971,11 @@ def execute(config_path: Path, output_root: Path, repo_root: Path) -> Path:
         }
         all_records.extend(records)
 
-    after_fingerprint, after_count = inventory_fingerprint(inventory_paths, local_root)
+    after_fingerprint, after_count = inventory_fingerprint(
+        inventory_paths,
+        local_root,
+        max_entries=limits["inventory_entry_count"],
+    )
     if before_fingerprint != after_fingerprint or inventory_count != after_count:
         raise ValueError("SOURCE_INVENTORY_DRIFT")
     total_counts = {status: sum(record["status"] == status for record in all_records) for status in ("已证明", "拒绝", "无法判定", "失败", "未成熟", "失效")}
@@ -853,7 +1026,7 @@ def execute(config_path: Path, output_root: Path, repo_root: Path) -> Path:
         "source_data_modified": False,
         "task_000084_status_changed": False,
         "stage_gate_changed": False,
-        "resource_facts": _resource_facts(started, output_root),
+        "resource_facts": {},
     }
     files: dict[str, str] = {
         "summary.json": json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
@@ -863,8 +1036,11 @@ def execute(config_path: Path, output_root: Path, repo_root: Path) -> Path:
     for group in groups:
         records = [record for record in all_records if record["group"] == group["id"]]
         files.update(_json_shards(records, group["id"], config["limits"]["shard_bytes"]))
-    resources = summary["resource_facts"]
-    if resources["process_max_rss_bytes"] > config["limits"]["memory_bytes"]:
+    pre_publish_snapshot = _resource_snapshot(output_root, local_root)
+    summary["resource_facts"] = _resource_facts(
+        started, start_snapshot, pre_publish_snapshot
+    )
+    if summary["resource_facts"]["process_max_rss_bytes"] > limits["memory_bytes"]:
         raise ValueError("MEMORY_LIMIT_EXCEEDED")
     summary["planned_output_bytes"] = 0
     for _ in range(8):
@@ -879,6 +1055,36 @@ def execute(config_path: Path, output_root: Path, repo_root: Path) -> Path:
         raise ValueError("OUTPUT_SIZE_FIXPOINT_FAILED")
     if total_output > config["limits"]["output_bytes"]:
         raise ValueError("OUTPUT_LIMIT_EXCEEDED")
+    pre_publish_snapshot = _resource_snapshot(output_root, local_root)
+    _assert_resource_headroom(
+        pre_publish_snapshot,
+        min_memory_percent=limits["min_available_memory_percent"],
+        min_disk_free_bytes=limits["min_free_disk_bytes"],
+        planned_output_bytes=total_output,
+    )
+    summary["resource_facts"] = _resource_facts(
+        started, start_snapshot, pre_publish_snapshot
+    )
+    if summary["resource_facts"]["process_max_rss_bytes"] > limits["memory_bytes"]:
+        raise ValueError("MEMORY_LIMIT_EXCEEDED")
+    for _ in range(8):
+        files["summary.json"] = (
+            json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+        )
+        total_output = sum(len(value.encode("utf-8")) for value in files.values())
+        if summary["planned_output_bytes"] == total_output:
+            break
+        summary["planned_output_bytes"] = total_output
+    else:
+        raise ValueError("OUTPUT_SIZE_FIXPOINT_FAILED")
+    if total_output > limits["output_bytes"]:
+        raise ValueError("OUTPUT_LIMIT_EXCEEDED")
+    _assert_resource_headroom(
+        pre_publish_snapshot,
+        min_memory_percent=limits["min_available_memory_percent"],
+        min_disk_free_bytes=limits["min_free_disk_bytes"],
+        planned_output_bytes=total_output,
+    )
     return atomic_publish(output_root, batch_id, files)
 
 

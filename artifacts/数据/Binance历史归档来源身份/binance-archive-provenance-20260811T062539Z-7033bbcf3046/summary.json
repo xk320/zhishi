@@ -1,14 +1,14 @@
 {
   "authorization_fingerprint": "ed076ea49d6a8d7f37dfdabe775f9962261ee3b6cf1d6a3146e1958014b6d25b",
-  "batch_id": "binance-archive-provenance-20260811T060549Z-07653ed5b8cd",
-  "completed_at": "2026-08-11T06:09:14Z",
-  "config_sha256": "ddf090c249762460762fc82bc1138621864daa615eb21d83fb0ec51a843a94cc",
+  "batch_id": "binance-archive-provenance-20260811T062539Z-7033bbcf3046",
+  "completed_at": "2026-08-11T06:29:18Z",
+  "config_sha256": "453d8a00c881f6c1f83d7cc9353c975c9c8d7d6fe08ae2f8cc64e97626022f13",
   "curl": {
     "path": "/usr/bin/curl",
     "sha256": "d9431c1ea04612844996bcbdf11d052afdc560116718f338ae6365ddb417e155",
     "version": "curl 8.7.1 (x86_64-apple-darwin25.0) libcurl/8.7.1 (SecureTransport) LibreSSL/3.3.6 zlib/1.2.12 nghttp2/1.67.1"
   },
-  "executor_sha256": "870fa072c8f2c5d38a52aa1a1e78eba4ad5861c0fe22c19c36f09a6e5e3276b5",
+  "executor_sha256": "51002fb0a7a9f63ad5cabb282f2003c9f0cadd67beeafc2ff4153b5ae686ca9e",
   "group_summaries": {
     "BTCUSDT-aggTrades": {
       "candidate_total": 423,
@@ -66,7 +66,7 @@
     "document_uri": "https://raw.githubusercontent.com/binance/binance-public-data/5c7f3197591c0d54d85dc43066226bc4c671d47a/README.md",
     "sha256": "085ab91377aa9325d44f4c7ad27cce4ab381e158403e1d7df2bad39d1a66f7c6"
   },
-  "planned_output_bytes": 12746833,
+  "planned_output_bytes": 12748036,
   "remote_listing_total_bytes": 4291419,
   "remote_listings": {
     "BTCUSDT-aggTrades": {
@@ -89,11 +89,36 @@
     }
   },
   "resource_facts": {
-    "disk_free_bytes_at_publish": 149439729664,
-    "elapsed_seconds": 205.626,
+    "disk_free_bytes_at_publish": 148785147904,
+    "elapsed_seconds": 219.483,
     "hash_chunk_bytes": 1048576,
-    "process_max_rss_bytes": 122667008,
-    "processes": 1
+    "pre_publish_snapshot": {
+      "disk_free_bytes": 148785147904,
+      "measured_at": "2026-08-11T06:29:18Z",
+      "output_disk_path": "/private/tmp/zhishi-task089-final/artifacts/数据",
+      "source_disk_free_bytes": 521846755328,
+      "source_disk_path": "/Volumes/data/data/binance/futures/um",
+      "system_memory_available_bytes": 22419729285,
+      "system_memory_available_percent": 58.0,
+      "system_memory_probe": "macos-memory-pressure-q/1",
+      "system_memory_total_bytes": 38654705664
+    },
+    "process_max_rss_bytes": 185925632,
+    "processes": 1,
+    "start_snapshot": {
+      "disk_free_bytes": 148828213248,
+      "measured_at": "2026-08-11T06:25:39Z",
+      "output_disk_path": "/private/tmp/zhishi-task089-final/artifacts/数据",
+      "source_disk_free_bytes": 521846919168,
+      "source_disk_path": "/Volumes/data/data/binance/futures/um",
+      "system_memory_available_bytes": 24352464568,
+      "system_memory_available_percent": 63.0,
+      "system_memory_probe": "macos-memory-pressure-q/1",
+      "system_memory_total_bytes": 38654705664
+    },
+    "system_memory_available_bytes_at_publish": 22419729285,
+    "system_memory_available_percent_at_publish": 58.0,
+    "system_memory_probe": "macos-memory-pressure-q/1"
   },
   "schema_version": "binance-archive-provenance-batch/1",
   "source_data_modified": false,
@@ -101,9 +126,9 @@
   "source_inventory_before_sha256": "03897f148c771096f4567575c0fb270a30cb0e60d696865dab079bd19583dfe5",
   "source_inventory_entry_count": 11972,
   "stage_gate_changed": false,
-  "started_at": "2026-08-11T06:05:49Z",
+  "started_at": "2026-08-11T06:25:39Z",
   "task_000084_status_changed": false,
-  "task_contract_sha256_at_execution": "657b454fa4118ab4483995fd113bdaac24e00cc123f6d6fc5830fa3aed53da45",
+  "task_contract_sha256_at_execution": "5822f625ae6957e01cde6dcd8ee998994b7d239b4f29a83f1aa1a427aad35f11",
   "task_id": "000092",
   "totals": {
     "candidate_total": 5387,
