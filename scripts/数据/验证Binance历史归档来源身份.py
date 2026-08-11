@@ -10,6 +10,7 @@ import io
 import json
 import os
 import re
+import selectors
 import shutil
 import stat
 import subprocess
@@ -61,6 +62,53 @@ FIELD_MAPPINGS = {
         "last_trade_id": "末个成交编号",
         "transact_time": "事件时间（Unix毫秒）",
         "is_buyer_maker": "买方是否挂单方",
+    },
+}
+
+EXPECTED_CONFIG = {
+    "schema_version": SCHEMA_VERSION,
+    "task_id": "000092",
+    "local_root": "/Volumes/data/data/binance/futures/um",
+    "curl_path": "/usr/bin/curl",
+    "s3_endpoint": ALLOWED_ENDPOINT,
+    "official_readme": {
+        "document_uri": PINNED_README_URL,
+        "sha256": PINNED_README_SHA256,
+    },
+    "groups": [
+        {
+            "id": "BTCUSDT-trades",
+            "contract": "BTCUSDT",
+            "dataset": "trades",
+            "relative_dir": "trades/BTCUSDT",
+            "remote_prefix": "data/futures/um/daily/trades/BTCUSDT/",
+        },
+        {
+            "id": "ETHUSDT-trades",
+            "contract": "ETHUSDT",
+            "dataset": "trades",
+            "relative_dir": "trades/ETHUSDT",
+            "remote_prefix": "data/futures/um/daily/trades/ETHUSDT/",
+        },
+        {
+            "id": "BTCUSDT-aggTrades",
+            "contract": "BTCUSDT",
+            "dataset": "aggTrades",
+            "relative_dir": "aggTrades/BTCUSDT",
+            "remote_prefix": "data/futures/um/daily/aggTrades/BTCUSDT/",
+        },
+    ],
+    "observations": ["klines_1d/BTCUSDT.csv", "klines_1d/ETHUSDT.csv"],
+    "manifests": ["klines_1d_manifest.json", "full_history_download_summary.json"],
+    "limits": {
+        "single_file_bytes": 17179869184,
+        "member_count": 8192,
+        "zip_sample_bytes": 1048576,
+        "remote_total_bytes": 33554432,
+        "output_bytes": 26214400,
+        "shard_bytes": 4718592,
+        "total_seconds": 14400,
+        "memory_bytes": 268435456,
     },
 }
 
@@ -296,20 +344,56 @@ def _safe_curl_environment() -> dict[str, str]:
 def _run_curl(args: Sequence[str], *, limit: int, timeout: int = 70) -> bytes:
     if not args or args[0] != "/usr/bin/curl":
         raise ValueError("CURL_EXECUTABLE_REJECTED")
-    result = subprocess.run(
+    if limit < 1 or timeout < 1:
+        raise ValueError("REMOTE_LIMIT_INVALID")
+    process = subprocess.Popen(
         list(args),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=_safe_curl_environment(),
-        timeout=timeout,
-        check=False,
     )
-    if len(result.stdout) > limit:
-        raise ValueError("REMOTE_RESPONSE_TOO_LARGE")
-    if result.returncode != 0:
-        raise ValueError(f"REMOTE_GET_FAILED_{result.returncode}")
-    return result.stdout
+    assert process.stdout is not None and process.stderr is not None
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ, ("stdout", limit))
+    selector.register(process.stderr, selectors.EVENT_READ, ("stderr", 64 * 1024))
+    buffers = {"stdout": bytearray(), "stderr": bytearray()}
+    deadline = time.monotonic() + timeout
+    try:
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ValueError("REMOTE_GET_TIMEOUT")
+            for key, _ in selector.select(min(0.2, remaining)):
+                label, cap = key.data
+                chunk = os.read(key.fileobj.fileno(), 64 * 1024)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    key.fileobj.close()
+                    continue
+                if len(buffers[label]) + len(chunk) > cap:
+                    if label == "stdout":
+                        raise ValueError("REMOTE_RESPONSE_TOO_LARGE")
+                    raise ValueError("REMOTE_STDERR_TOO_LARGE")
+                buffers[label].extend(chunk)
+        return_code = process.wait(timeout=max(0.1, deadline - time.monotonic()))
+    except BaseException:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=1)
+        raise
+    finally:
+        selector.close()
+        for stream in (process.stdout, process.stderr):
+            if not stream.closed:
+                stream.close()
+    if return_code != 0:
+        raise ValueError(f"REMOTE_GET_FAILED_{return_code}")
+    return bytes(buffers["stdout"])
 
 
 def fetch_s3_listing(curl_path: str, service_uri: str, prefix: str, *, total_limit: int) -> tuple[dict[str, RemoteObject], str, int]:
@@ -393,8 +477,23 @@ def validate_member(
         "reason_codes": [],
     }
     reasons: list[str] = []
+    expected_sha = ""
+    actual_sha = ""
+    checksum_content_sha = ""
+    checksum_content_md5 = ""
+    checksum_size = 0
+    schema: dict[str, Any] = {}
+    remote_archive: RemoteObject | None = None
+    remote_checksum: RemoteObject | None = None
+    failed = False
     try:
         expected_sha = parse_checksum(checksum, archive.name)
+        checksum_bytes = checksum.read_bytes()
+        checksum_size = len(checksum_bytes)
+        checksum_content_sha = sha256_bytes(checksum_bytes)
+        checksum_content_md5 = hashlib.md5(
+            checksum_bytes, usedforsecurity=False
+        ).hexdigest()
         actual_sha = sha256_file(archive)
         if actual_sha != expected_sha:
             reasons.append("LOCAL_CHECKSUM_MISMATCH")
@@ -405,10 +504,10 @@ def validate_member(
         else:
             if remote_archive.size != archive.stat().st_size:
                 reasons.append("REMOTE_ZIP_SIZE_MISMATCH")
-            local_checksum_md5 = hashlib.md5(
-                checksum.read_bytes(), usedforsecurity=False
-            ).hexdigest()
-            if "-" in remote_checksum.etag or remote_checksum.etag != local_checksum_md5:
+            if (
+                "-" in remote_checksum.etag
+                or remote_checksum.etag != checksum_content_md5
+            ):
                 reasons.append("REMOTE_CHECKSUM_ETAG_MISMATCH")
         schema = inspect_zip(
             archive,
@@ -422,9 +521,29 @@ def validate_member(
             reasons.append("SCHEMA_HEADER_MISMATCH")
     except ValueError as error:
         reasons.append(str(error))
-        actual_sha = ""
-        expected_sha = ""
-        schema = {}
+    except OSError:
+        reasons.append("MEMBER_IO_FAILED")
+        failed = True
+    base["local_evidence"] = {
+        "zip_size_bytes": archive.stat().st_size if archive.exists() else None,
+        "zip_content_sha256": actual_sha,
+        "checksum_declared_zip_sha256": expected_sha,
+        "checksum_file_size_bytes": checksum_size,
+        "checksum_file_sha256": checksum_content_sha,
+        "checksum_file_md5": checksum_content_md5,
+    }
+    base["remote_evidence"] = {
+        "zip_key": remote_prefix + archive.name,
+        "zip_size_bytes": remote_archive.size if remote_archive else None,
+        "zip_etag_observed_not_content_hash": remote_archive.etag if remote_archive else "",
+        "zip_last_modified": remote_archive.last_modified if remote_archive else "",
+        "checksum_key": remote_prefix + checksum.name,
+        "checksum_size_bytes": remote_checksum.size if remote_checksum else None,
+        "checksum_etag": remote_checksum.etag if remote_checksum else "",
+        "checksum_last_modified": remote_checksum.last_modified if remote_checksum else "",
+    }
+    if schema:
+        base["schema"] = schema
     if not reasons:
         mapping = FIELD_MAPPINGS[dataset]
         base.update(
@@ -454,7 +573,9 @@ def validate_member(
         )
     else:
         base["reason_codes"] = sorted(set(reasons))
-        if reasons == ["REMOTE_OBJECT_MISSING"]:
+        if failed:
+            base["status"] = "失败"
+        elif reasons == ["REMOTE_OBJECT_MISSING"]:
             base["status"] = "无法判定"
     return base
 
@@ -528,6 +649,8 @@ def _json_shards(records: Sequence[Mapping[str, Any]], prefix: str, max_bytes: i
 def _load_config(path: Path) -> tuple[dict[str, Any], str]:
     payload = path.read_bytes()
     config = json.loads(payload)
+    if config != EXPECTED_CONFIG:
+        raise ValueError("CONFIG_CONTRACT_INVALID")
     if config.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("CONFIG_VERSION_INVALID")
     if config.get("s3_endpoint") != ALLOWED_ENDPOINT:
@@ -539,6 +662,17 @@ def _load_config(path: Path) -> tuple[dict[str, Any], str]:
     if readme.get("document_uri") != PINNED_README_URL or readme.get("sha256") != PINNED_README_SHA256:
         raise ValueError("CONFIG_README_INVALID")
     return config, sha256_bytes(payload)
+
+
+def _validate_execution_paths(config_path: Path, output_root: Path, repo_root: Path) -> None:
+    expected_config = (
+        repo_root / "config/数据/任务-000092Binance历史归档来源身份.json"
+    ).resolve()
+    expected_output = (
+        repo_root / "artifacts/数据/Binance历史归档来源身份"
+    ).resolve()
+    if config_path.resolve() != expected_config or output_root.resolve() != expected_output:
+        raise ValueError("EXECUTION_PATH_REJECTED")
 
 
 def _curl_identity(path: str) -> dict[str, str]:
@@ -571,6 +705,7 @@ def _resource_facts(started: float, output_root: Path) -> dict[str, Any]:
 
 def execute(config_path: Path, output_root: Path, repo_root: Path) -> Path:
     started = time.monotonic()
+    _validate_execution_paths(config_path, output_root, repo_root)
     started_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     config, config_sha = _load_config(config_path)
     local_root = Path(config["local_root"])
@@ -731,12 +866,17 @@ def execute(config_path: Path, output_root: Path, repo_root: Path) -> Path:
     resources = summary["resource_facts"]
     if resources["process_max_rss_bytes"] > config["limits"]["memory_bytes"]:
         raise ValueError("MEMORY_LIMIT_EXCEEDED")
-    total_output = sum(len(value.encode("utf-8")) for value in files.values())
-    if total_output > config["limits"]["output_bytes"]:
-        raise ValueError("OUTPUT_LIMIT_EXCEEDED")
-    summary["planned_output_bytes"] = total_output
-    files["summary.json"] = json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
-    total_output = sum(len(value.encode("utf-8")) for value in files.values())
+    summary["planned_output_bytes"] = 0
+    for _ in range(8):
+        files["summary.json"] = (
+            json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+        )
+        total_output = sum(len(value.encode("utf-8")) for value in files.values())
+        if summary["planned_output_bytes"] == total_output:
+            break
+        summary["planned_output_bytes"] = total_output
+    else:
+        raise ValueError("OUTPUT_SIZE_FIXPOINT_FAILED")
     if total_output > config["limits"]["output_bytes"]:
         raise ValueError("OUTPUT_LIMIT_EXCEEDED")
     return atomic_publish(output_root, batch_id, files)

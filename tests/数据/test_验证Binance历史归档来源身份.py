@@ -7,6 +7,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -121,6 +122,15 @@ class BinanceArchiveProvenanceTests(unittest.TestCase):
         self.assertEqual("已证明", record["status"])
         self.assertEqual(digest, record["content_sha256"])
         self.assertEqual("BTC", record["source_identity"]["underlying"])
+        self.assertEqual(archive.stat().st_size, record["remote_evidence"]["zip_size_bytes"])
+        self.assertEqual(
+            hashlib.md5(checksum.read_bytes(), usedforsecurity=False).hexdigest(),
+            record["remote_evidence"]["checksum_etag"],
+        )
+        self.assertEqual(
+            hashlib.sha256(checksum.read_bytes()).hexdigest(),
+            record["local_evidence"]["checksum_file_sha256"],
+        )
         objects[prefix + checksum.name] = MODULE.RemoteObject(
             prefix + checksum.name, checksum.stat().st_size, "wrong", "t"
         )
@@ -136,6 +146,21 @@ class BinanceArchiveProvenanceTests(unittest.TestCase):
         self.assertEqual("拒绝", rejected["status"])
         self.assertIn("REMOTE_CHECKSUM_ETAG_MISMATCH", rejected["reason_codes"])
 
+    def test_member_io_error_is_a_structured_failure(self):
+        archive, checksum, _ = self.make_pair()
+        with mock.patch.object(MODULE, "sha256_file", side_effect=OSError("denied")):
+            record = MODULE.validate_member(
+                archive,
+                checksum,
+                expected_contract="BTCUSDT",
+                dataset="trades",
+                remote_prefix="data/futures/um/daily/trades/BTCUSDT/",
+                remote_objects={},
+                max_sample_bytes=1024,
+            )
+        self.assertEqual("失败", record["status"])
+        self.assertIn("MEMBER_IO_FAILED", record["reason_codes"])
+
     def test_curl_arguments_are_fixed_and_do_not_follow_redirects(self):
         args = MODULE.build_s3_curl_args(
             "/usr/bin/curl",
@@ -147,6 +172,21 @@ class BinanceArchiveProvenanceTests(unittest.TestCase):
         self.assertNotIn("--insecure", args)
         self.assertIn("prefix=data/futures/um/daily/trades/BTCUSDT/", args)
         self.assertIn("marker=key one", args)
+
+    def test_curl_reader_stops_while_response_exceeds_limit(self):
+        payload = self.root / "large-response.bin"
+        payload.write_bytes(b"x" * 2048)
+        with mock.patch.object(
+            MODULE.subprocess,
+            "run",
+            side_effect=AssertionError("响应读取不得使用事后无界缓冲"),
+        ):
+            with self.assertRaisesRegex(ValueError, "REMOTE_RESPONSE_TOO_LARGE"):
+                MODULE._run_curl(
+                    ["/usr/bin/curl", "--silent", payload.as_uri()],
+                    limit=1024,
+                    timeout=2,
+                )
 
     def test_atomic_publish_refuses_overwrite(self):
         target = MODULE.atomic_publish(
@@ -162,6 +202,40 @@ class BinanceArchiveProvenanceTests(unittest.TestCase):
         files = MODULE._json_shards([{"id": 1}, {"id": 2}], "group", 1024)
         self.assertEqual(["members/group-001.json"], list(files))
         self.assertEqual([{"id": 1}, {"id": 2}], json.loads(next(iter(files.values()))))
+
+    def test_output_size_field_can_reach_exact_fixed_point(self):
+        summary = {"planned_output_bytes": 0}
+        files = {"members/items.json": "[]\n"}
+        for _ in range(8):
+            files["summary.json"] = json.dumps(summary, indent=2) + "\n"
+            total = sum(len(value.encode()) for value in files.values())
+            if summary["planned_output_bytes"] == total:
+                break
+            summary["planned_output_bytes"] = total
+        self.assertEqual(total, summary["planned_output_bytes"])
+
+    def test_config_contract_rejects_local_executable_and_limit_drift(self):
+        source = ROOT / "config" / "数据" / "任务-000092Binance历史归档来源身份.json"
+        original = json.loads(source.read_text(encoding="utf-8"))
+        mutations = (
+            ("curl_path", "/tmp/not-curl"),
+            ("local_root", "/tmp/other-data"),
+            ("limits", {**original["limits"], "memory_bytes": 999999999}),
+        )
+        for key, value in mutations:
+            with self.subTest(key=key):
+                config = {**original, key: value}
+                path = self.root / f"{key}.json"
+                path.write_text(json.dumps(config), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "CONFIG_CONTRACT_INVALID"):
+                    MODULE._load_config(path)
+
+    def test_execution_paths_must_stay_in_repository_contract(self):
+        config = ROOT / "config/数据/任务-000092Binance历史归档来源身份.json"
+        output = ROOT / "artifacts/数据/Binance历史归档来源身份"
+        MODULE._validate_execution_paths(config, output, ROOT)
+        with self.assertRaisesRegex(ValueError, "EXECUTION_PATH_REJECTED"):
+            MODULE._validate_execution_paths(config, self.root / "outside", ROOT)
 
 
 if __name__ == "__main__":
