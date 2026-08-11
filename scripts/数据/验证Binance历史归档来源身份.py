@@ -492,6 +492,7 @@ def validate_member(
     remote_prefix: str,
     remote_objects: Mapping[str, RemoteObject],
     max_sample_bytes: int,
+    max_archive_bytes: int,
 ) -> dict[str, Any]:
     base = {
         "member_id": f"{expected_contract}:{dataset}:{archive.name}",
@@ -514,6 +515,8 @@ def validate_member(
     archive_size: int | None = None
     try:
         archive_size = archive.stat().st_size
+        if archive_size > max_archive_bytes:
+            raise ValueError("SOURCE_FILE_TOO_LARGE")
         expected_sha = parse_checksum(checksum, archive.name)
         checksum_bytes = checksum.read_bytes()
         checksum_size = len(checksum_bytes)
@@ -923,25 +926,16 @@ def execute(config_path: Path, output_root: Path, repo_root: Path) -> Path:
             )
         records: list[dict[str, Any]] = []
         for index, (archive, checksum) in enumerate(discovery.members, start=1):
-            if archive.stat().st_size > config["limits"]["single_file_bytes"]:
-                record = {
-                    "member_id": f"{group['contract']}:{group['dataset']}:{archive.name}",
-                    "relative_name": archive.name,
-                    "contract": group["contract"],
-                    "dataset": group["dataset"],
-                    "status": "拒绝",
-                    "reason_codes": ["SOURCE_FILE_TOO_LARGE"],
-                }
-            else:
-                record = validate_member(
-                    archive,
-                    checksum,
-                    expected_contract=group["contract"],
-                    dataset=group["dataset"],
-                    remote_prefix=group["remote_prefix"],
-                    remote_objects=remote_by_prefix[group["remote_prefix"]],
-                    max_sample_bytes=config["limits"]["zip_sample_bytes"],
-                )
+            record = validate_member(
+                archive,
+                checksum,
+                expected_contract=group["contract"],
+                dataset=group["dataset"],
+                remote_prefix=group["remote_prefix"],
+                remote_objects=remote_by_prefix[group["remote_prefix"]],
+                max_sample_bytes=limits["zip_sample_bytes"],
+                max_archive_bytes=limits["single_file_bytes"],
+            )
             record["group"] = group["id"]
             records.append(record)
             if index % 100 == 0 or index == len(discovery.members):

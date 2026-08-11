@@ -138,6 +138,7 @@ class BinanceArchiveProvenanceTests(unittest.TestCase):
             remote_prefix=prefix,
             remote_objects=objects,
             max_sample_bytes=1024,
+            max_archive_bytes=1024 * 1024,
         )
         self.assertEqual("已证明", record["status"])
         self.assertEqual(digest, record["content_sha256"])
@@ -162,6 +163,7 @@ class BinanceArchiveProvenanceTests(unittest.TestCase):
             remote_prefix=prefix,
             remote_objects=objects,
             max_sample_bytes=1024,
+            max_archive_bytes=1024 * 1024,
         )
         self.assertEqual("拒绝", rejected["status"])
         self.assertIn("REMOTE_CHECKSUM_ETAG_MISMATCH", rejected["reason_codes"])
@@ -177,6 +179,7 @@ class BinanceArchiveProvenanceTests(unittest.TestCase):
                 remote_prefix="data/futures/um/daily/trades/BTCUSDT/",
                 remote_objects={},
                 max_sample_bytes=1024,
+                max_archive_bytes=1024 * 1024,
             )
         self.assertEqual("失败", record["status"])
         self.assertIn("MEMBER_IO_FAILED", record["reason_codes"])
@@ -192,9 +195,25 @@ class BinanceArchiveProvenanceTests(unittest.TestCase):
                 remote_prefix="data/futures/um/daily/trades/BTCUSDT/",
                 remote_objects={},
                 max_sample_bytes=1024,
+                max_archive_bytes=1024 * 1024,
             )
         self.assertEqual("失败", record["status"])
         self.assertIn("MEMBER_IO_FAILED", record["reason_codes"])
+
+    def test_member_size_limit_is_inside_structured_validation(self):
+        archive, checksum, _ = self.make_pair()
+        record = MODULE.validate_member(
+            archive,
+            checksum,
+            expected_contract="BTCUSDT",
+            dataset="trades",
+            remote_prefix="data/futures/um/daily/trades/BTCUSDT/",
+            remote_objects={},
+            max_sample_bytes=1024,
+            max_archive_bytes=1,
+        )
+        self.assertEqual("拒绝", record["status"])
+        self.assertIn("SOURCE_FILE_TOO_LARGE", record["reason_codes"])
 
     def test_curl_arguments_are_fixed_and_do_not_follow_redirects(self):
         args = MODULE.build_s3_curl_args(
