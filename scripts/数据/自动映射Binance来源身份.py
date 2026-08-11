@@ -13,11 +13,11 @@ import hashlib
 import json
 import os
 import re
+import selectors
 import shutil
+import subprocess
 import tempfile
 import time
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -25,6 +25,7 @@ from typing import Any, Mapping
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TASK_ID = "任务-000090"
+REPAIR_TASK_ID = "任务-000091"
 CONTRACT_VERSION = "binance-source-identity-auto-mapping-1.0"
 EVIDENCE_VERSION = "source-identity-evidence-1.0"
 BINDING_VERSION = "source-identity-binding-1.0"
@@ -34,10 +35,15 @@ MEMBERS_PATH = REPO_ROOT / "artifacts/数据/来源身份声明九字段复验/s
 CONFIG_PATH = REPO_ROOT / "config/数据/任务-000090Binance来源身份自动映射.json"
 DEFAULT_BATCH_ROOT = REPO_ROOT / "artifacts/数据/Binance来源身份自动映射"
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
+MAX_EXECUTABLE_BYTES = 16 * 1024 * 1024
 MAX_OUTPUT_BYTES = 32 * 1024 * 1024
 MAX_LOG_BYTES = 64 * 1024
 TOTAL_TIMEOUT_SECONDS = 900
 HTTP_TIMEOUT_SECONDS = 60
+CURL_CONNECT_TIMEOUT_SECONDS = 15
+CURL_PATH = Path("/usr/bin/curl")
+CURL_SAFE_ENV = {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"}
+HTTP_STATUS_MARKER = b"\n__ZHISHI_HTTP_STATUS__:"
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 TARGETS = ("BTC", "ETH")
 IDENTITY_FIELDS = (
@@ -90,6 +96,8 @@ def task_contract_fingerprint(path: Path) -> str:
         if line.startswith(mutable_prefixes):
             continue
         lines.append(line.rstrip())
+    while lines and not lines[-1].strip():
+        lines.pop()
     return sha256_bytes(("\n".join(lines) + "\n").encode("utf-8"))
 
 
@@ -101,7 +109,7 @@ def load_json(path: Path, label: str) -> tuple[Any, str]:
 
 
 def validate_config(config: Mapping[str, Any]) -> None:
-    required = {"合同版本", "任务编号", "本地只读根目录", "固定清单文件", "成员清单", "Binance公开接口", "标的", "主研究尺度", "事后结果观察窗口", "身份字段", "字段中文映射", "资源上限", "安全边界", "匹配规则", "输出绑定"}
+    required = {"合同版本", "任务编号", "本地只读根目录", "固定清单文件", "成员清单", "Binance公开接口", "标的", "主研究尺度", "事后结果观察窗口", "身份字段", "字段中文映射", "资源上限", "可信HTTPS传输", "安全边界", "匹配规则", "输出绑定"}
     if set(config) != required:
         raise ValueError("任务-000090配置字段漂移")
     if config["合同版本"] != CONTRACT_VERSION or config["任务编号"] != TASK_ID:
@@ -118,8 +126,41 @@ def validate_config(config: Mapping[str, Any]) -> None:
     limits = config["资源上限"]
     if limits.get("批次总超时秒") != TOTAL_TIMEOUT_SECONDS or limits.get("最大API响应字节") != MAX_RESPONSE_BYTES or limits.get("最大输出字节") != MAX_OUTPUT_BYTES or limits.get("单进程串行") is not True:
         raise ValueError("任务-000090资源上限漂移")
+    transport = config["可信HTTPS传输"]
+    expected_transport = {
+        "可执行文件": str(CURL_PATH),
+        "HTTP方法": "GET",
+        "允许协议": "https",
+        "跟随重定向": False,
+        "连接超时秒": CURL_CONNECT_TIMEOUT_SECONDS,
+        "单端点总超时秒": HTTP_TIMEOUT_SECONDS,
+        "最大响应字节": MAX_RESPONSE_BYTES,
+        "禁止参数": ["--insecure", "-k", "--location", "-L"],
+    }
+    if transport != expected_transport:
+        raise ValueError("任务-000090可信HTTPS传输合同漂移")
     if config["输出绑定"].get("严格顶层证据版本") != EVIDENCE_VERSION or config["输出绑定"].get("绑定清单版本") != BINDING_VERSION:
         raise ValueError("任务-000090输出版本漂移")
+
+
+def rules_fingerprint(config: Mapping[str, Any]) -> str:
+    """绑定身份门、公开端点、资源上限和可信传输合同。"""
+
+    return sha256_bytes(
+        canonical(
+            {
+                "合同版本": CONTRACT_VERSION,
+                "身份字段": IDENTITY_FIELDS,
+                "接口": API_ENDPOINTS,
+                "资源": {
+                    "总超时": TOTAL_TIMEOUT_SECONDS,
+                    "响应上限": MAX_RESPONSE_BYTES,
+                },
+                "可信HTTPS传输": config["可信HTTPS传输"],
+                "匹配": config["匹配规则"],
+            }
+        )
+    )
 
 
 def load_members(path: Path) -> tuple[list[dict[str, str]], str]:
@@ -206,30 +247,328 @@ def schema_fingerprint(payload: Mapping[str, Any]) -> str:
     return "sha256:" + sha256_bytes(canonical(shape))
 
 
-def fetch_exchange_info(uri: str, started: float) -> dict[str, Any]:
-    market = API_ENDPOINTS[uri]
-    request = urllib.request.Request(uri, headers={"User-Agent": "zhishi-task-000090/1"}, method="GET")
-    summary: dict[str, Any] = {"端点": uri, "市场类型": market, "方法": "GET", "授权边界": "Binance公开无认证GET"}
+class CurlTransportError(Exception):
+    """只携带稳定错误码和脱敏细节指纹的传输异常。"""
+
+    def __init__(
+        self,
+        code: str,
+        detail: bytes = b"",
+        *,
+        detail_fingerprint: str | None = None,
+    ) -> None:
+        super().__init__(code)
+        self.code = code
+        self.detail_fingerprint = detail_fingerprint or sha256_bytes(detail[:MAX_LOG_BYTES])
+
+
+class BoundedProcessResult:
+    """子进程的有界输出结果；stderr 哈希覆盖完整字节流。"""
+
+    def __init__(
+        self,
+        returncode: int,
+        stdout: bytes,
+        stderr: bytes,
+        stderr_sha256: str,
+        stderr_truncated: bool,
+    ) -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+        self.stderr_sha256 = stderr_sha256
+        self.stderr_truncated = stderr_truncated
+
+
+def run_bounded_process(
+    command: list[str],
+    *,
+    timeout: int,
+    stdout_limit: int,
+    stderr_limit: int,
+) -> BoundedProcessResult:
+    """无 shell 执行并在读取期间强制 stdout/stderr 资源边界。"""
+
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=CURL_SAFE_ENV,
+        bufsize=0,
+    )
+    if process.stdout is None or process.stderr is None:
+        process.kill()
+        process.wait()
+        raise CurlTransportError("PROCESS_PIPE_UNAVAILABLE")
+
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+    selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+    stdout = bytearray()
+    stderr = bytearray()
+    stderr_hasher = hashlib.sha256()
+    stderr_total = 0
+    deadline = time.monotonic() + timeout
     try:
-        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
-            status = int(response.getcode() or 0)
-            raw = response.read(MAX_RESPONSE_BYTES + 1)
-        if len(raw) > MAX_RESPONSE_BYTES:
-            raise ValueError("API_RESPONSE_TOO_LARGE")
-        payload = json.loads(raw.decode("utf-8"))
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                process.kill()
+                process.wait()
+                raise CurlTransportError("PROCESS_TIMEOUT")
+            events = selector.select(min(remaining, 0.1))
+            if not events and process.poll() is not None:
+                events = [(key, selectors.EVENT_READ) for key in selector.get_map().values()]
+            for key, _mask in events:
+                chunk = os.read(key.fileobj.fileno(), 64 * 1024)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                if key.data == "stdout":
+                    if len(stdout) + len(chunk) > stdout_limit:
+                        process.kill()
+                        process.wait()
+                        raise CurlTransportError("PROCESS_STDOUT_TOO_LARGE")
+                    stdout.extend(chunk)
+                else:
+                    stderr_hasher.update(chunk)
+                    stderr_total += len(chunk)
+                    keep = max(0, stderr_limit - len(stderr))
+                    if keep:
+                        stderr.extend(chunk[:keep])
+        returncode = process.wait()
+    except BaseException:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        raise
+    finally:
+        selector.close()
+        process.stdout.close()
+        process.stderr.close()
+    return BoundedProcessResult(
+        returncode,
+        bytes(stdout),
+        bytes(stderr),
+        stderr_hasher.hexdigest(),
+        stderr_total > stderr_limit,
+    )
+
+
+def validate_curl_command(command: list[str], uri: str) -> None:
+    """拒绝白名单外端点、可执行文件及会削弱TLS边界的参数。"""
+
+    if uri not in API_ENDPOINTS:
+        raise ValueError("公开端点不在白名单")
+    if not command or command[0] != str(CURL_PATH) or command[-1] != uri:
+        raise ValueError("curl命令边界漂移")
+    forbidden = {
+        "--insecure", "-k", "--location", "-L", "--location-trusted",
+        "--proxy", "-x", "--proxy-user", "-U", "--user", "-u",
+        "--cacert", "--capath",
+    }
+    if forbidden.intersection(command):
+        raise ValueError("curl命令包含禁止参数")
+
+
+def build_curl_command(uri: str, *, curl_path: Path = CURL_PATH) -> list[str]:
+    """构建固定、无shell、默认TLS校验的公开GET命令。"""
+
+    if uri not in API_ENDPOINTS:
+        raise ValueError("公开端点不在白名单")
+    if curl_path != CURL_PATH:
+        raise ValueError("curl可执行文件不在白名单")
+    command = [
+        str(curl_path),
+        "--disable",
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--proto",
+        "=https",
+        "--tlsv1.2",
+        "--request",
+        "GET",
+        "--connect-timeout",
+        str(CURL_CONNECT_TIMEOUT_SECONDS),
+        "--max-time",
+        str(HTTP_TIMEOUT_SECONDS),
+        "--max-filesize",
+        str(MAX_RESPONSE_BYTES),
+        "--header",
+        "User-Agent: zhishi-task-000091/1",
+        "--output",
+        "-",
+        "--write-out",
+        "\n__ZHISHI_HTTP_STATUS__:%{http_code}",
+        uri,
+    ]
+    validate_curl_command(command, uri)
+    return command
+
+
+def _run_process(
+    runner,
+    command: list[str],
+    *,
+    timeout: int,
+    stdout_limit: int,
+    stderr_limit: int,
+) -> BoundedProcessResult:
+    if runner is subprocess.run:
+        return run_bounded_process(
+            command,
+            timeout=timeout,
+            stdout_limit=stdout_limit,
+            stderr_limit=stderr_limit,
+        )
+    completed = runner(
+        command,
+        check=False,
+        capture_output=True,
+        timeout=timeout,
+        env=CURL_SAFE_ENV,
+    )
+    stdout = bytes(completed.stdout or b"")
+    full_stderr = bytes(completed.stderr or b"")
+    if len(stdout) > stdout_limit:
+        raise CurlTransportError("PROCESS_STDOUT_TOO_LARGE")
+    return BoundedProcessResult(
+        completed.returncode,
+        stdout,
+        full_stderr[:stderr_limit],
+        sha256_bytes(full_stderr),
+        len(full_stderr) > stderr_limit,
+    )
+
+
+def inspect_curl_transport(*, runner=subprocess.run, curl_path: Path = CURL_PATH) -> dict[str, str]:
+    """冻结固定curl二进制、版本和TLS校验边界。"""
+
+    if curl_path != CURL_PATH:
+        raise ValueError("curl可执行文件不在白名单")
+    if not curl_path.exists() or curl_path.is_symlink() or not os.access(curl_path, os.X_OK):
+        raise CurlTransportError("CURL_EXECUTABLE_UNAVAILABLE")
+    try:
+        completed = _run_process(
+            runner,
+            [str(curl_path), "--version"],
+            timeout=CURL_CONNECT_TIMEOUT_SECONDS,
+            stdout_limit=4096,
+            stderr_limit=MAX_LOG_BYTES,
+        )
+    except CurlTransportError as exc:
+        if exc.code == "PROCESS_TIMEOUT":
+            raise CurlTransportError("CURL_VERSION_TIMEOUT") from exc
+        raise
+    except subprocess.TimeoutExpired as exc:
+        raise CurlTransportError("CURL_VERSION_TIMEOUT") from exc
+    except OSError as exc:
+        raise CurlTransportError("CURL_EXECUTION_FAILED") from exc
+    if completed.returncode != 0:
+        raise CurlTransportError(
+            "CURL_VERSION_FAILED",
+            completed.stderr,
+            detail_fingerprint=completed.stderr_sha256,
+        )
+    version_line = completed.stdout.decode("utf-8", errors="replace").splitlines()
+    if not version_line:
+        raise CurlTransportError("CURL_VERSION_INVALID")
+    return {
+        "可执行文件": str(curl_path),
+        "版本": version_line[0][:120],
+        "二进制SHA-256": sha256_file(curl_path, max_bytes=MAX_EXECUTABLE_BYTES),
+        "TLS校验": "系统默认证书与主机名校验",
+        "环境边界SHA-256": sha256_bytes(canonical(CURL_SAFE_ENV)),
+    }
+
+
+def run_curl(
+    uri: str,
+    *,
+    runner=subprocess.run,
+    curl_path: Path = CURL_PATH,
+) -> tuple[bytes, int, dict[str, str]]:
+    """执行固定公开GET并返回内存响应、HTTP状态和脱敏传输事实。"""
+
+    command = build_curl_command(uri, curl_path=curl_path)
+    transport = inspect_curl_transport(runner=runner, curl_path=curl_path)
+    transport["参数SHA-256"] = sha256_bytes(canonical(command[1:-1]))
+    try:
+        completed = _run_process(
+            runner,
+            command,
+            timeout=HTTP_TIMEOUT_SECONDS,
+            stdout_limit=MAX_RESPONSE_BYTES + len(HTTP_STATUS_MARKER) + 3,
+            stderr_limit=MAX_LOG_BYTES,
+        )
+    except CurlTransportError as exc:
+        if exc.code == "PROCESS_TIMEOUT":
+            raise CurlTransportError("CURL_TIMEOUT") from exc
+        if exc.code == "PROCESS_STDOUT_TOO_LARGE":
+            raise CurlTransportError("API_RESPONSE_TOO_LARGE") from exc
+        raise
+    except subprocess.TimeoutExpired as exc:
+        raise CurlTransportError("CURL_TIMEOUT") from exc
+    except OSError as exc:
+        raise CurlTransportError("CURL_EXECUTION_FAILED") from exc
+    if completed.returncode != 0:
+        code = {
+            28: "CURL_TIMEOUT",
+            60: "TLS_CERTIFICATE_VERIFY_FAILED",
+            63: "API_RESPONSE_TOO_LARGE",
+        }.get(completed.returncode, f"CURL_EXIT_{completed.returncode}")
+        raise CurlTransportError(
+            code,
+            completed.stderr,
+            detail_fingerprint=completed.stderr_sha256,
+        )
+    raw, marker, status_raw = completed.stdout.rpartition(HTTP_STATUS_MARKER)
+    if marker != HTTP_STATUS_MARKER or not re.fullmatch(rb"\d{3}", status_raw):
+        raise CurlTransportError("HTTP_STATUS_MISSING")
+    status = int(status_raw)
+    if status != 200:
+        raise CurlTransportError(f"HTTP_STATUS_{status}")
+    if len(raw) > MAX_RESPONSE_BYTES:
+        raise CurlTransportError("API_RESPONSE_TOO_LARGE")
+    return raw, status, transport
+
+
+def fetch_exchange_info(
+    uri: str,
+    started: float,
+    *,
+    runner=subprocess.run,
+    curl_path: Path = CURL_PATH,
+) -> dict[str, Any]:
+    if uri not in API_ENDPOINTS:
+        raise ValueError("公开端点不在白名单")
+    market = API_ENDPOINTS[uri]
+    summary: dict[str, Any] = {
+        "端点": uri,
+        "市场类型": market,
+        "方法": "GET",
+        "授权边界": "Binance公开无认证GET",
+    }
+    try:
+        raw, status, transport = run_curl(uri, runner=runner, curl_path=curl_path)
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise CurlTransportError("API_JSON_INVALID") from exc
         if not isinstance(payload, dict) or not isinstance(payload.get("symbols"), list):
-            raise ValueError("API_SCHEMA_INVALID")
+            raise CurlTransportError("API_SCHEMA_INVALID")
         index_fields = ("symbol", "baseAsset", "quoteAsset", "contractType", "status")
         symbol_index = [
             {key: row[key] for key in index_fields if key in row and isinstance(row[key], (str, int, float, bool))}
             for row in payload["symbols"]
             if isinstance(row, dict) and isinstance(row.get("symbol"), str)
         ]
-        summary.update({"HTTP状态": status, "响应字节数": len(raw), "响应SHA-256": sha256_bytes(raw), "Schema确切版本指纹": schema_fingerprint(payload), "合约条目数": len(payload["symbols"]), "状态": "成功", "_合约索引": symbol_index})
+        summary.update({"HTTP状态": status, "响应字节数": len(raw), "响应SHA-256": sha256_bytes(raw), "Schema确切版本指纹": schema_fingerprint(payload), "合约条目数": len(payload["symbols"]), "传输器": transport, "状态": "成功", "_合约索引": symbol_index})
         return summary
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
-        code = str(exc)[:120] or exc.__class__.__name__
-        summary.update({"状态": "失败", "失败原因代码": code, "失败原因指纹": sha256_bytes(code.encode("utf-8")), "已观察秒数": round(time.monotonic() - started, 3)})
+    except CurlTransportError as exc:
+        reason_material = f"{exc.code}|{exc.detail_fingerprint}".encode("utf-8")
+        summary.update({"状态": "失败", "失败原因代码": exc.code, "失败原因指纹": sha256_bytes(reason_material), "已观察秒数": round(time.monotonic() - started, 3)})
         return summary
 
 
@@ -266,10 +605,10 @@ def member_status(member: Mapping[str, str], *, manifest_stats: Mapping[str, Any
     }
     complete = all(checks.values()) and has_api
     reason = "EXACT_MATCH_INCOMPLETE"
-    if not has_api:
-        reason = "PUBLIC_API_METADATA_UNAVAILABLE"
-    elif not candidates or inventory is None:
+    if not candidates or inventory is None:
         reason = "MEMBER_ASSET_BINDING_MISSING"
+    elif not has_api:
+        reason = "PUBLIC_API_METADATA_UNAVAILABLE"
     elif complete:
         reason = "EXACT_MATCH_COMPLETE"
     return {
@@ -313,12 +652,13 @@ def build_batch(*, repo_root: Path = REPO_ROOT, batch_root: Path = DEFAULT_BATCH
         "任务-000085": repo_root / "docs/研发中心/任务/任务-000085.md",
         "任务-000089": repo_root / "docs/研发中心/任务/任务-000089.md",
         "任务-000090": task_path,
+        "任务-000091": repo_root / "docs/研发中心/任务/任务-000091.md",
     }
     dependency_shas = {
-        name: (task_contract_fingerprint(path) if name == "任务-000090" else sha256_file(path))
+        name: (task_contract_fingerprint(path) if name in {"任务-000090", "任务-000091"} else sha256_file(path))
         for name, path in dependency_paths.items()
     }
-    rules_sha = sha256_bytes(canonical({"合同版本": CONTRACT_VERSION, "身份字段": IDENTITY_FIELDS, "接口": API_ENDPOINTS, "资源": {"总超时": TOTAL_TIMEOUT_SECONDS, "响应上限": MAX_RESPONSE_BYTES}, "匹配": config["匹配规则"]}))
+    rules_sha = rules_fingerprint(config)
     field_mapping_sha = "sha256:" + sha256_bytes(canonical(config["字段中文映射"]))
     auth_fingerprints = {uri: "sha256:" + sha256_bytes(f"Binance公开无认证GET|{uri}|method=GET".encode("utf-8")) for uri in API_ENDPOINTS}
     manifest_inventory = {
@@ -356,7 +696,7 @@ def build_batch(*, repo_root: Path = REPO_ROOT, batch_root: Path = DEFAULT_BATCH
     if final_dir.exists():
         raise FileExistsError(f"批次已存在，禁止覆盖：{final_dir}")
     payloads = {
-        "批次清单.json": {"合同版本": CONTRACT_VERSION, "任务编号": TASK_ID, "批次": base_id, "冻结时间": frozen.isoformat(), "输入": {"成员清单路径": str(MEMBERS_PATH.relative_to(repo_root)), "成员清单SHA-256": member_sha, "固定清单": manifest_hashes, "配置SHA-256": config_sha, "依赖SHA-256": dependency_shas, "依赖哈希口径": "任务-000090使用去除状态、执行和交付元数据后的合同指纹；任务-000085与任务-000089使用完整文件SHA-256"}, "规则SHA-256": rules_sha, "执行器SHA-256": executor_sha, "字段中文映射指纹": field_mapping_sha, "API": [{key: value for key, value in item.items() if not key.startswith("_")} for item in api_summaries], "Schema确切版本指纹": {item["端点"]: item.get("Schema确切版本指纹", "未知") for item in api_summaries}, "授权边界指纹": auth_fingerprints, "本地清单统计": manifest_stats, "结果摘要": {"总计": counts, "分标的": summary}, "资源事实": {"单进程串行": True, "最大API响应字节": MAX_RESPONSE_BYTES, "批次总超时秒": TOTAL_TIMEOUT_SECONDS, "实际耗时秒": round(time.monotonic() - started, 3)}, "安全声明": {"本地清单只读": True, "公开GET": True, "远端写入": False, "数据库业务记录读取": False, "读取原始业务正文": False, "读取凭据": False, "真实交易": False}, "结论边界": "无法判定不表达来源已证明、数据质量、因果、预测优势、胜率、收益、研究准入或交易许可"},
+        "批次清单.json": {"合同版本": CONTRACT_VERSION, "任务编号": TASK_ID, "修复任务编号": REPAIR_TASK_ID, "批次": base_id, "冻结时间": frozen.isoformat(), "输入": {"成员清单路径": str(MEMBERS_PATH.relative_to(repo_root)), "成员清单SHA-256": member_sha, "固定清单": manifest_hashes, "配置SHA-256": config_sha, "依赖SHA-256": dependency_shas, "依赖哈希口径": "任务-000090与任务-000091使用去除状态、执行和交付元数据后的合同指纹；任务-000085与任务-000089使用完整文件SHA-256"}, "规则SHA-256": rules_sha, "执行器SHA-256": executor_sha, "字段中文映射指纹": field_mapping_sha, "API": [{key: value for key, value in item.items() if not key.startswith("_")} for item in api_summaries], "Schema确切版本指纹": {item["端点"]: item.get("Schema确切版本指纹", "未知") for item in api_summaries}, "授权边界指纹": auth_fingerprints, "本地清单统计": manifest_stats, "结果摘要": {"总计": counts, "分标的": summary}, "资源事实": {"单进程串行": True, "最大API响应字节": MAX_RESPONSE_BYTES, "批次总超时秒": TOTAL_TIMEOUT_SECONDS, "实际耗时秒": round(time.monotonic() - started, 3)}, "安全声明": {"本地清单只读": True, "公开GET": True, "远端写入": False, "数据库业务记录读取": False, "读取原始业务正文": False, "读取凭据": False, "真实交易": False}, "结论边界": "无法判定不表达来源已证明、数据质量、因果、预测优势、胜率、收益、研究准入或交易许可"},
         "成员状态.json": {"批次": base_id, "成员": member_records},
         "source-identity-evidence-1.0.json": evidence,
         "来源身份绑定清单-1.0.json": binding,
