@@ -536,7 +536,7 @@ def _load_config(path: Path) -> tuple[dict[str, Any], str]:
     if prefixes != ALLOWED_PREFIXES:
         raise ValueError("CONFIG_PREFIXES_INVALID")
     readme = config.get("official_readme", {})
-    if readme.get("url") != PINNED_README_URL or readme.get("sha256") != PINNED_README_SHA256:
+    if readme.get("document_uri") != PINNED_README_URL or readme.get("sha256") != PINNED_README_SHA256:
         raise ValueError("CONFIG_README_INVALID")
     return config, sha256_bytes(payload)
 
@@ -582,7 +582,7 @@ def execute(config_path: Path, output_root: Path, repo_root: Path) -> Path:
     curl = _curl_identity(config["curl_path"])
     readme_sha, readme_bytes = fetch_pinned_readme(
         config["curl_path"],
-        config["official_readme"]["url"],
+        config["official_readme"]["document_uri"],
         config["official_readme"]["sha256"],
     )
 
@@ -704,7 +704,7 @@ def execute(config_path: Path, output_root: Path, repo_root: Path) -> Path:
         "config_sha256": config_sha,
         "task_contract_sha256_at_execution": sha256_file(task_path),
         "executor_sha256": sha256_file(script_path),
-        "official_readme": {"url": PINNED_README_URL, "sha256": readme_sha, "bytes": readme_bytes},
+        "official_readme": {"document_uri": PINNED_README_URL, "sha256": readme_sha, "bytes": readme_bytes},
         "curl": curl,
         "remote_listings": listing_facts,
         "remote_listing_total_bytes": total_listing_bytes,

@@ -1,14 +1,14 @@
 {
   "authorization_fingerprint": "ed076ea49d6a8d7f37dfdabe775f9962261ee3b6cf1d6a3146e1958014b6d25b",
-  "batch_id": "binance-archive-provenance-20260811T052921Z-2cfca09300e4",
-  "completed_at": "2026-08-11T05:32:50Z",
-  "config_sha256": "703b2fe2e7b1f5e95e283ff82925be24cc6e104e376467147c9004c6d1368132",
+  "batch_id": "binance-archive-provenance-20260811T053511Z-e693c6af4dd3",
+  "completed_at": "2026-08-11T05:38:43Z",
+  "config_sha256": "ddf090c249762460762fc82bc1138621864daa615eb21d83fb0ec51a843a94cc",
   "curl": {
     "path": "/usr/bin/curl",
     "sha256": "d9431c1ea04612844996bcbdf11d052afdc560116718f338ae6365ddb417e155",
     "version": "curl 8.7.1 (x86_64-apple-darwin25.0) libcurl/8.7.1 (SecureTransport) LibreSSL/3.3.6 zlib/1.2.12 nghttp2/1.67.1"
   },
-  "executor_sha256": "191fb9d04c6f5e8a9a9e4a2d2e094ee3b62d1da73ad15f2686318cb638bcdbe9",
+  "executor_sha256": "1cffaba5b20f4ab09c8b4a0e89b15fc837a03377d9e01b8b6b79757771fcfbef",
   "group_summaries": {
     "BTCUSDT-aggTrades": {
       "candidate_total": 423,
@@ -63,10 +63,10 @@
   ],
   "official_readme": {
     "bytes": 5144,
-    "sha256": "085ab91377aa9325d44f4c7ad27cce4ab381e158403e1d7df2bad39d1a66f7c6",
-    "url": "https://raw.githubusercontent.com/binance/binance-public-data/5c7f3197591c0d54d85dc43066226bc4c671d47a/README.md"
+    "document_uri": "https://raw.githubusercontent.com/binance/binance-public-data/5c7f3197591c0d54d85dc43066226bc4c671d47a/README.md",
+    "sha256": "085ab91377aa9325d44f4c7ad27cce4ab381e158403e1d7df2bad39d1a66f7c6"
   },
-  "planned_output_bytes": 8038313,
+  "planned_output_bytes": 8038322,
   "remote_listing_total_bytes": 4291419,
   "remote_listings": {
     "BTCUSDT-aggTrades": {
@@ -89,10 +89,10 @@
     }
   },
   "resource_facts": {
-    "disk_free_bytes_at_publish": 150045884416,
-    "elapsed_seconds": 208.352,
+    "disk_free_bytes_at_publish": 149642801152,
+    "elapsed_seconds": 212.682,
     "hash_chunk_bytes": 1048576,
-    "process_max_rss_bytes": 113131520,
+    "process_max_rss_bytes": 116408320,
     "processes": 1
   },
   "schema_version": "binance-archive-provenance-batch/1",
@@ -101,9 +101,9 @@
   "source_inventory_before_sha256": "03897f148c771096f4567575c0fb270a30cb0e60d696865dab079bd19583dfe5",
   "source_inventory_entry_count": 11972,
   "stage_gate_changed": false,
-  "started_at": "2026-08-11T05:29:21Z",
+  "started_at": "2026-08-11T05:35:11Z",
   "task_000084_status_changed": false,
-  "task_contract_sha256_at_execution": "18b524be1da556deb8fe58fadf0f68ebfcf7c3f9017f32f3333f2d402636634d",
+  "task_contract_sha256_at_execution": "8bc6b5347789a17b5be8b5348dc1fb792ee521ead16370742427ed4d36d4b90e",
   "task_id": "000092",
   "totals": {
     "candidate_total": 5387,

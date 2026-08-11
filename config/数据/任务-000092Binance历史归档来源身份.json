@@ -5,7 +5,7 @@
   "curl_path": "/usr/bin/curl",
   "s3_endpoint": "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision",
   "official_readme": {
-    "url": "https://raw.githubusercontent.com/binance/binance-public-data/5c7f3197591c0d54d85dc43066226bc4c671d47a/README.md",
+    "document_uri": "https://raw.githubusercontent.com/binance/binance-public-data/5c7f3197591c0d54d85dc43066226bc4c671d47a/README.md",
     "sha256": "085ab91377aa9325d44f4c7ad27cce4ab381e158403e1d7df2bad39d1a66f7c6"
   },
   "groups": [
