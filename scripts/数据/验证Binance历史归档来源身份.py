@@ -254,9 +254,9 @@ def parse_s3_page(payload: bytes, expected_prefix: str) -> S3Page:
 
 
 def build_s3_curl_args(
-    curl_path: str, endpoint: str, prefix: str, *, marker: str | None = None
+    curl_path: str, service_uri: str, prefix: str, *, marker: str | None = None
 ) -> list[str]:
-    if curl_path != "/usr/bin/curl" or endpoint != ALLOWED_ENDPOINT:
+    if curl_path != "/usr/bin/curl" or service_uri != ALLOWED_ENDPOINT:
         raise ValueError("REMOTE_ENDPOINT_REJECTED")
     if prefix not in ALLOWED_PREFIXES:
         raise ValueError("REMOTE_PREFIX_REJECTED")
@@ -285,7 +285,7 @@ def build_s3_curl_args(
     ]
     if marker is not None:
         args.extend(["--data-urlencode", f"marker={marker}"])
-    args.append(endpoint)
+    args.append(service_uri)
     return args
 
 
@@ -312,14 +312,14 @@ def _run_curl(args: Sequence[str], *, limit: int, timeout: int = 70) -> bytes:
     return result.stdout
 
 
-def fetch_s3_listing(curl_path: str, endpoint: str, prefix: str, *, total_limit: int) -> tuple[dict[str, RemoteObject], str, int]:
+def fetch_s3_listing(curl_path: str, service_uri: str, prefix: str, *, total_limit: int) -> tuple[dict[str, RemoteObject], str, int]:
     marker: str | None = None
     objects: dict[str, RemoteObject] = {}
     total = 0
     pages = 0
     while True:
         payload = _run_curl(
-            build_s3_curl_args(curl_path, endpoint, prefix, marker=marker),
+            build_s3_curl_args(curl_path, service_uri, prefix, marker=marker),
             limit=min(4 * 1024 * 1024, total_limit - total),
         )
         total += len(payload)
@@ -340,10 +340,10 @@ def fetch_s3_listing(curl_path: str, endpoint: str, prefix: str, *, total_limit:
     return objects, sha256_bytes(canonical_json(canonical).encode("utf-8")), total
 
 
-def fetch_pinned_readme(curl_path: str, url: str, expected_sha256: str) -> tuple[str, int]:
-    if curl_path != "/usr/bin/curl" or url != PINNED_README_URL or expected_sha256 != PINNED_README_SHA256:
+def fetch_pinned_readme(curl_path: str, document_uri: str, expected_sha256: str) -> tuple[str, int]:
+    if curl_path != "/usr/bin/curl" or document_uri != PINNED_README_URL or expected_sha256 != PINNED_README_SHA256:
         raise ValueError("README_IDENTITY_REJECTED")
-    parsed = urlparse(url)
+    parsed = urlparse(document_uri)
     if parsed.scheme != "https" or parsed.hostname != "raw.githubusercontent.com":
         raise ValueError("README_IDENTITY_REJECTED")
     args = [
@@ -365,7 +365,7 @@ def fetch_pinned_readme(curl_path: str, url: str, expected_sha256: str) -> tuple
         str(1024 * 1024),
         "-H",
         "User-Agent: zhishi-binance-provenance/1",
-        url,
+        document_uri,
     ]
     payload = _run_curl(args, limit=1024 * 1024)
     actual = sha256_bytes(payload)

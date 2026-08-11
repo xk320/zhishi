@@ -1,14 +1,14 @@
 {
   "authorization_fingerprint": "ed076ea49d6a8d7f37dfdabe775f9962261ee3b6cf1d6a3146e1958014b6d25b",
-  "batch_id": "binance-archive-provenance-20260811T053511Z-e693c6af4dd3",
-  "completed_at": "2026-08-11T05:38:43Z",
+  "batch_id": "binance-archive-provenance-20260811T054321Z-a94ecd60116d",
+  "completed_at": "2026-08-11T05:46:50Z",
   "config_sha256": "ddf090c249762460762fc82bc1138621864daa615eb21d83fb0ec51a843a94cc",
   "curl": {
     "path": "/usr/bin/curl",
     "sha256": "d9431c1ea04612844996bcbdf11d052afdc560116718f338ae6365ddb417e155",
     "version": "curl 8.7.1 (x86_64-apple-darwin25.0) libcurl/8.7.1 (SecureTransport) LibreSSL/3.3.6 zlib/1.2.12 nghttp2/1.67.1"
   },
-  "executor_sha256": "1cffaba5b20f4ab09c8b4a0e89b15fc837a03377d9e01b8b6b79757771fcfbef",
+  "executor_sha256": "dac7157eef627bc4b7b87a870a1a5da595cef94c55818974bbb7434baab11b2e",
   "group_summaries": {
     "BTCUSDT-aggTrades": {
       "candidate_total": 423,
@@ -89,10 +89,10 @@
     }
   },
   "resource_facts": {
-    "disk_free_bytes_at_publish": 149642801152,
-    "elapsed_seconds": 212.682,
+    "disk_free_bytes_at_publish": 149767434240,
+    "elapsed_seconds": 208.929,
     "hash_chunk_bytes": 1048576,
-    "process_max_rss_bytes": 116408320,
+    "process_max_rss_bytes": 115064832,
     "processes": 1
   },
   "schema_version": "binance-archive-provenance-batch/1",
@@ -101,9 +101,9 @@
   "source_inventory_before_sha256": "03897f148c771096f4567575c0fb270a30cb0e60d696865dab079bd19583dfe5",
   "source_inventory_entry_count": 11972,
   "stage_gate_changed": false,
-  "started_at": "2026-08-11T05:35:11Z",
+  "started_at": "2026-08-11T05:43:21Z",
   "task_000084_status_changed": false,
-  "task_contract_sha256_at_execution": "8bc6b5347789a17b5be8b5348dc1fb792ee521ead16370742427ed4d36d4b90e",
+  "task_contract_sha256_at_execution": "12444bdfd6483a2fdf04653373cf0758ca3fe07d29a4c08f473bc5313b8038a5",
   "task_id": "000092",
   "totals": {
     "candidate_total": 5387,
