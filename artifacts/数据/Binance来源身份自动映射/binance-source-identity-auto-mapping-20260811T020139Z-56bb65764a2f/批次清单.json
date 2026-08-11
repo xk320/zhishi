@@ -1,0 +1,140 @@
+{
+  "API": [
+    {
+      "HTTP状态": 200,
+      "Schema确切版本指纹": "sha256:7649a3cfd7c89df8461c9908b8c57f80687759f5b40bfd9e8498ef6b713a644b",
+      "传输器": {
+        "TLS校验": "系统默认证书与主机名校验",
+        "二进制SHA-256": "d9431c1ea04612844996bcbdf11d052afdc560116718f338ae6365ddb417e155",
+        "参数SHA-256": "88725698fbf0c97d4f9d4d61a5db9b36f1cf57d5203fb32c0123bd5615d843e1",
+        "可执行文件": "/usr/bin/curl",
+        "版本": "curl 8.7.1 (x86_64-apple-darwin25.0) libcurl/8.7.1 (SecureTransport) LibreSSL/3.3.6 zlib/1.2.12 nghttp2/1.67.1",
+        "环境边界SHA-256": "37325ce8957b1b42f6a7d58f743fbc01b44df615bae14df36e74becf4dd19625"
+      },
+      "合约条目数": 858,
+      "响应SHA-256": "902f2b815fb143c716fccd816e199b5819c66beb36870d7e59035b43452a2413",
+      "响应字节数": 1061033,
+      "市场类型": "USDⓈ-M合约",
+      "授权边界": "Binance公开无认证GET",
+      "方法": "GET",
+      "状态": "成功",
+      "端点": "https://fapi.binance.com/fapi/v1/exchangeInfo"
+    },
+    {
+      "HTTP状态": 200,
+      "Schema确切版本指纹": "sha256:2b64afde258ce708c0b26df339bdfdc3ede3b1fc20fff9bd03489357424cbcf3",
+      "传输器": {
+        "TLS校验": "系统默认证书与主机名校验",
+        "二进制SHA-256": "d9431c1ea04612844996bcbdf11d052afdc560116718f338ae6365ddb417e155",
+        "参数SHA-256": "88725698fbf0c97d4f9d4d61a5db9b36f1cf57d5203fb32c0123bd5615d843e1",
+        "可执行文件": "/usr/bin/curl",
+        "版本": "curl 8.7.1 (x86_64-apple-darwin25.0) libcurl/8.7.1 (SecureTransport) LibreSSL/3.3.6 zlib/1.2.12 nghttp2/1.67.1",
+        "环境边界SHA-256": "37325ce8957b1b42f6a7d58f743fbc01b44df615bae14df36e74becf4dd19625"
+      },
+      "合约条目数": 30,
+      "响应SHA-256": "cbb2d11119dbc4679bc3db16a5a5d5ed5e7b9e747849e7344539aa24e6b188b8",
+      "响应字节数": 35676,
+      "市场类型": "币本位合约",
+      "授权边界": "Binance公开无认证GET",
+      "方法": "GET",
+      "状态": "成功",
+      "端点": "https://dapi.binance.com/dapi/v1/exchangeInfo"
+    }
+  ],
+  "Schema确切版本指纹": {
+    "https://dapi.binance.com/dapi/v1/exchangeInfo": "sha256:2b64afde258ce708c0b26df339bdfdc3ede3b1fc20fff9bd03489357424cbcf3",
+    "https://fapi.binance.com/fapi/v1/exchangeInfo": "sha256:7649a3cfd7c89df8461c9908b8c57f80687759f5b40bfd9e8498ef6b713a644b"
+  },
+  "任务编号": "任务-000090",
+  "修复任务编号": "任务-000091",
+  "冻结时间": "2026-08-11T02:01:39.143322+00:00",
+  "合同版本": "binance-source-identity-auto-mapping-1.0",
+  "字段中文映射指纹": "sha256:40de98cc0b1f4689ed7b6743e3d8f15366c5a2ae7e73c3924fc32ae652370ddb",
+  "安全声明": {
+    "公开GET": true,
+    "数据库业务记录读取": false,
+    "本地清单只读": true,
+    "真实交易": false,
+    "读取凭据": false,
+    "读取原始业务正文": false,
+    "远端写入": false
+  },
+  "执行器SHA-256": "3b286c00759da303c1344a6816d25509b1b2b675dbca8b5635e65543862459f2",
+  "批次": "binance-source-identity-auto-mapping-20260811T020139Z-56bb65764a2f",
+  "授权边界指纹": {
+    "https://dapi.binance.com/dapi/v1/exchangeInfo": "sha256:1a2b23f29f5fe6c10bb56332a4244e073928ea58686687d7e5fb2664d8b4e1db",
+    "https://fapi.binance.com/fapi/v1/exchangeInfo": "sha256:e237f370ed7b13120c99de5a3a98aea179126ef50b1830b82de2a130ffefa1c3"
+  },
+  "本地清单统计": {
+    "BTC线索数": 7,
+    "ETH线索数": 5,
+    "固定根目录内路径数": 602,
+    "清单条目总数": 602,
+    "符号链接数": 0,
+    "路径越界数": 0
+  },
+  "结果摘要": {
+    "分标的": {
+      "BTC": {
+        "候选总体": 315,
+        "失效": 0,
+        "失败": 0,
+        "已观察": 0,
+        "已证明": 0,
+        "拒绝": 0,
+        "无法判定": 315,
+        "未成熟": 0
+      },
+      "ETH": {
+        "候选总体": 315,
+        "失效": 0,
+        "失败": 0,
+        "已观察": 0,
+        "已证明": 0,
+        "拒绝": 0,
+        "无法判定": 315,
+        "未成熟": 0
+      }
+    },
+    "总计": {
+      "候选总体": 630,
+      "失效": 0,
+      "失败": 0,
+      "已观察": 0,
+      "已证明": 0,
+      "拒绝": 0,
+      "无法判定": 630,
+      "未成熟": 0,
+      "计数守恒": true
+    }
+  },
+  "结论边界": "无法判定不表达来源已证明、数据质量、因果、预测优势、胜率、收益、研究准入或交易许可",
+  "规则SHA-256": "156b9f6bcd4a52dd1d5f5ba0b5605a8415eaa1e1b277057410c7ec36a8006ab8",
+  "资源事实": {
+    "单进程串行": true,
+    "实际耗时秒": 1.324,
+    "批次总超时秒": 900,
+    "最大API响应字节": 16777216
+  },
+  "输入": {
+    "依赖SHA-256": {
+      "任务-000085": "752472312c1f6d7672abc293ff51fa480b8bede29fffa38edcbe122064059d83",
+      "任务-000089": "f338428755ab9193bbcadf5b1b55809de53d9bed533458500be41b824ef58b09",
+      "任务-000090": "6d0e5e0b3a705783c72e5ee97c8a51da3c5c1d37ebf6cf68a9054776c4422e75",
+      "任务-000091": "9cdcbc48ba238573d478e592d98582889ff6cb8213ec166ed445953c12eeee7c"
+    },
+    "依赖哈希口径": "任务-000090与任务-000091使用去除状态、执行和交付元数据后的合同指纹；任务-000085与任务-000089使用完整文件SHA-256",
+    "固定清单": {
+      "full_history_download_summary.json": "6af81564bc87be11713360c423c4a14789498aad484849a263c6839c42bd0073",
+      "klines_1d_manifest.json": "69886bc84a15f1cb91cf9d80935d4fc35803451a25e53b744bcdab075d855015"
+    },
+    "成员清单SHA-256": "74a1034fdee473da1d4e750debf474a9b3f171c913ded93f514cf4f0648ba524",
+    "成员清单路径": "artifacts/数据/来源身份声明九字段复验/source-identity-nine-fields-20260808T074100+0800-v4/来源身份声明九字段复验清单.csv",
+    "配置SHA-256": "08b5edc850617746dfb4f641f5f29ca20d7af3d3e8d4c99ea895856c233be7c7"
+  },
+  "输出SHA-256": {
+    "source-identity-evidence-1.0.json": "56f13d21ed7ddff8d362660b0e64d83438e343ec3ff6c1847d436c87bccc956e",
+    "成员状态.json": "aa6322829b945bd4b1d0d729b3ac3fe211aed9072f04831e773a66945eee7304",
+    "来源身份绑定清单-1.0.json": "de2b901db43a96cdd36042b1db051e26104fc7ec3927ef486188368b0a05dc21"
+  }
+}

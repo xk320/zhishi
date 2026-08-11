@@ -6,7 +6,7 @@
 
 **Goal:** 用固定系统`/usr/bin/curl`替换任务-000090执行器失败的Python证书链请求，同时保持TLS校验、630成员证据门和历史批次不变。
 
-**Architecture:** 在现有单文件执行器中新增一个小型传输适配器，负责固定端点、固定参数、无shell进程调用、响应上限和传输指纹；JSON解析后继续进入原有证据流水线。配置只增加传输合同，批次只追加传输器脱敏事实，不保存完整响应。
+**Architecture:** 在现有单文件执行器中新增一个小型传输适配器，负责固定端点、固定参数、无shell进程调用、边读边执行响应/日志硬上限和传输指纹；JSON解析后继续进入原有证据流水线。配置只增加传输合同，批次只追加传输器脱敏事实，不保存完整响应。
 
 **Tech Stack:** Python 3标准库、`/usr/bin/curl`、`unittest`、JSON、GitHub Actions可信资格检查。
 
@@ -89,11 +89,14 @@ Expected: FAIL，因为现有函数仍使用`urllib`且不接受`runner`与`curl
 def run_curl(uri: str, *, runner=subprocess.run, curl_path: Path = CURL_PATH) -> tuple[bytes, dict[str, Any]]:
     validate_endpoint(uri)
     command = build_curl_command(uri, curl_path=curl_path)
-    completed = runner(command, check=False, capture_output=True, timeout=HTTP_TIMEOUT_SECONDS)
+    completed = run_bounded_process(
+        command,
+        timeout=HTTP_TIMEOUT_SECONDS,
+        stdout_limit=MAX_RESPONSE_BYTES + HTTP_STATUS_OVERHEAD,
+        stderr_limit=MAX_LOG_BYTES,
+    )
     if completed.returncode != 0:
         raise CurlTransportError(map_curl_error(completed.returncode), completed.stderr)
-    if len(completed.stdout) > MAX_RESPONSE_BYTES:
-        raise CurlTransportError("API_RESPONSE_TOO_LARGE", b"")
     return completed.stdout, transport_facts(curl_path, command)
 ```
 
