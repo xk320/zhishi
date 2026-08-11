@@ -41,10 +41,12 @@ Schema确切版本指纹
 1. 配置校验器：固定本地根、三组成员、两个观察项、远端桶/前缀、命名规则和资源上限。
 2. 发现器：按UTF-8文件名字节序确定性枚举普通ZIP与CHECKSUM，拒绝越界、符号链接、隐藏资源分叉和未知文件。
 3. 完整性验证器：严格解析CHECKSUM，以1MiB块复算ZIP SHA-256，不把ZIP内容写入输出。
-4. 官方清单读取器：固定系统curl、可信TLS、串行S3分页；只保留对象键、Size、ETag和LastModified的规范化指纹。
+4. 官方清单读取器：固定系统curl、可信TLS、串行S3分页；端点固定为`https://s3-ap-northeast-1.amazonaws.com/data.binance.vision`，`prefix`只允许`data/futures/um/daily/trades/BTCUSDT/`、`data/futures/um/daily/trades/ETHUSDT/`、`data/futures/um/daily/aggTrades/BTCUSDT/`三个完整字面值，只保留对象键、Size、ETag和LastModified的规范化指纹。
 5. Schema验证器：检查ZIP只有一个同名普通CSV成员，最多解压读取1MiB用于列数、表头形状和Schema指纹；不保存业务行。
 6. 身份裁决器：对来源、场所、市场、标的、合约、对象、Schema、授权和字段映射逐项裁决，输出紧凑成员记录。
 7. 批次发布器：按BTC/ETH和数据对象分片，以临时目录构建后原子改名；禁止覆盖历史批次。
+
+官方规则文档固定为Binance`binance-public-data`提交`5c7f3197591c0d54d85dc43066226bc4c671d47a`的`https://raw.githubusercontent.com/binance/binance-public-data/5c7f3197591c0d54d85dc43066226bc4c671d47a/README.md`，预期内容SHA-256为`085ab91377aa9325d44f4c7ad27cce4ab381e158403e1d7df2bad39d1a66f7c6`。实现只允许读取这个不可变URL；提交、路径或内容SHA漂移即失败关闭。
 
 ## 数据与资源
 
