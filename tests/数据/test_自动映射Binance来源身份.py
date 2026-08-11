@@ -4,6 +4,7 @@ import copy
 import importlib.util
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -71,6 +72,28 @@ class AutoMappingTests(unittest.TestCase):
                 curl_path=MODULE.CURL_PATH,
             )
 
+    def test_trusted_curl_rejects_forbidden_parameters(self):
+        uri = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+        with self.assertRaisesRegex(ValueError, "禁止参数"):
+            MODULE.validate_curl_command(
+                ["/usr/bin/curl", "--disable", "--insecure", uri], uri
+            )
+
+    def test_trusted_curl_maps_certificate_verification_failure(self):
+        def fake_runner(command, **_kwargs):
+            if command[1:] == ["--version"]:
+                return subprocess.CompletedProcess(command, 0, b"curl 8.7.1 test\n", b"")
+            return subprocess.CompletedProcess(command, 60, b"", b"certificate failure")
+
+        summary = MODULE.fetch_exchange_info(
+            "https://fapi.binance.com/fapi/v1/exchangeInfo",
+            started=0.0,
+            runner=fake_runner,
+            curl_path=MODULE.CURL_PATH,
+        )
+        self.assertEqual(summary["状态"], "失败")
+        self.assertEqual(summary["失败原因代码"], "TLS_CERTIFICATE_VERIFY_FAILED")
+
     def test_trusted_curl_maps_timeout_without_response_body(self):
         def fake_runner(command, **_kwargs):
             if command[1:] == ["--version"]:
@@ -115,12 +138,56 @@ class AutoMappingTests(unittest.TestCase):
         )
         self.assertEqual(invalid["失败原因代码"], "API_JSON_INVALID")
 
+    def test_bounded_process_stops_stdout_above_limit(self):
+        command = [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.buffer.write(b'x' * 4096)",
+        ]
+        with self.assertRaisesRegex(MODULE.CurlTransportError, "PROCESS_STDOUT_TOO_LARGE"):
+            MODULE.run_bounded_process(
+                command,
+                timeout=5,
+                stdout_limit=32,
+                stderr_limit=32,
+            )
+
+    def test_bounded_process_truncates_and_hashes_stderr(self):
+        command = [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.buffer.write(b'ok'); sys.stderr.buffer.write(b'e' * 128)",
+        ]
+        result = MODULE.run_bounded_process(
+            command,
+            timeout=5,
+            stdout_limit=32,
+            stderr_limit=32,
+        )
+        self.assertEqual(result.stdout, b"ok")
+        self.assertEqual(result.stderr, b"e" * 32)
+        self.assertTrue(result.stderr_truncated)
+        self.assertEqual(result.stderr_sha256, MODULE.sha256_bytes(b"e" * 128))
+
     def test_member_status_never_infers_from_binance_api(self):
         member = {"成员编号": "m1", "资产编号": "DS-1", "标的": "BTC", "输入成员SHA-256": "a" * 64}
         row = MODULE.member_status(member, manifest_stats={"固定根目录内路径数": 1}, api_summaries=[{"状态": "成功", "市场类型": "USDⓈ-M合约"}])
         self.assertEqual(row["状态"], "无法判定")
-        self.assertEqual(row["原因代码"], "PUBLIC_API_METADATA_UNAVAILABLE")
+        self.assertEqual(row["原因代码"], "MEMBER_ASSET_BINDING_MISSING")
         self.assertEqual(row["匹配符号"], "")
+
+    def test_task_contract_fingerprint_ignores_execution_record_separator(self):
+        base = "# 任务\n\n- 状态：执行中\n\n## 回滚方式\n\n保持不变。\n"
+        with_record = base + "\n## 执行记录\n\n- 运行事实\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            base_path = Path(tmp) / "base.md"
+            record_path = Path(tmp) / "record.md"
+            base_path.write_text(base, encoding="utf-8")
+            record_path.write_text(with_record, encoding="utf-8")
+            self.assertEqual(
+                MODULE.task_contract_fingerprint(base_path),
+                MODULE.task_contract_fingerprint(record_path),
+            )
 
     def test_member_status_requires_exact_symbol_and_field_checks(self):
         member = {"成员编号": "m1", "资产编号": "DS-1", "标的": "BTC", "输入成员SHA-256": "a" * 64}

@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import selectors
 import shutil
 import subprocess
 import tempfile
@@ -95,6 +96,8 @@ def task_contract_fingerprint(path: Path) -> str:
         if line.startswith(mutable_prefixes):
             continue
         lines.append(line.rstrip())
+    while lines and not lines[-1].strip():
+        lines.pop()
     return sha256_bytes(("\n".join(lines) + "\n").encode("utf-8"))
 
 
@@ -247,10 +250,125 @@ def schema_fingerprint(payload: Mapping[str, Any]) -> str:
 class CurlTransportError(Exception):
     """只携带稳定错误码和脱敏细节指纹的传输异常。"""
 
-    def __init__(self, code: str, detail: bytes = b"") -> None:
+    def __init__(
+        self,
+        code: str,
+        detail: bytes = b"",
+        *,
+        detail_fingerprint: str | None = None,
+    ) -> None:
         super().__init__(code)
         self.code = code
-        self.detail_fingerprint = sha256_bytes(detail[:MAX_LOG_BYTES])
+        self.detail_fingerprint = detail_fingerprint or sha256_bytes(detail[:MAX_LOG_BYTES])
+
+
+class BoundedProcessResult:
+    """子进程的有界输出结果；stderr 哈希覆盖完整字节流。"""
+
+    def __init__(
+        self,
+        returncode: int,
+        stdout: bytes,
+        stderr: bytes,
+        stderr_sha256: str,
+        stderr_truncated: bool,
+    ) -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+        self.stderr_sha256 = stderr_sha256
+        self.stderr_truncated = stderr_truncated
+
+
+def run_bounded_process(
+    command: list[str],
+    *,
+    timeout: int,
+    stdout_limit: int,
+    stderr_limit: int,
+) -> BoundedProcessResult:
+    """无 shell 执行并在读取期间强制 stdout/stderr 资源边界。"""
+
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=CURL_SAFE_ENV,
+        bufsize=0,
+    )
+    if process.stdout is None or process.stderr is None:
+        process.kill()
+        process.wait()
+        raise CurlTransportError("PROCESS_PIPE_UNAVAILABLE")
+
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+    selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+    stdout = bytearray()
+    stderr = bytearray()
+    stderr_hasher = hashlib.sha256()
+    stderr_total = 0
+    deadline = time.monotonic() + timeout
+    try:
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                process.kill()
+                process.wait()
+                raise CurlTransportError("PROCESS_TIMEOUT")
+            events = selector.select(min(remaining, 0.1))
+            if not events and process.poll() is not None:
+                events = [(key, selectors.EVENT_READ) for key in selector.get_map().values()]
+            for key, _mask in events:
+                chunk = os.read(key.fileobj.fileno(), 64 * 1024)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                if key.data == "stdout":
+                    if len(stdout) + len(chunk) > stdout_limit:
+                        process.kill()
+                        process.wait()
+                        raise CurlTransportError("PROCESS_STDOUT_TOO_LARGE")
+                    stdout.extend(chunk)
+                else:
+                    stderr_hasher.update(chunk)
+                    stderr_total += len(chunk)
+                    keep = max(0, stderr_limit - len(stderr))
+                    if keep:
+                        stderr.extend(chunk[:keep])
+        returncode = process.wait()
+    except BaseException:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        raise
+    finally:
+        selector.close()
+        process.stdout.close()
+        process.stderr.close()
+    return BoundedProcessResult(
+        returncode,
+        bytes(stdout),
+        bytes(stderr),
+        stderr_hasher.hexdigest(),
+        stderr_total > stderr_limit,
+    )
+
+
+def validate_curl_command(command: list[str], uri: str) -> None:
+    """拒绝白名单外端点、可执行文件及会削弱TLS边界的参数。"""
+
+    if uri not in API_ENDPOINTS:
+        raise ValueError("公开端点不在白名单")
+    if not command or command[0] != str(CURL_PATH) or command[-1] != uri:
+        raise ValueError("curl命令边界漂移")
+    forbidden = {
+        "--insecure", "-k", "--location", "-L", "--location-trusted",
+        "--proxy", "-x", "--proxy-user", "-U", "--user", "-u",
+        "--cacert", "--capath",
+    }
+    if forbidden.intersection(command):
+        raise ValueError("curl命令包含禁止参数")
 
 
 def build_curl_command(uri: str, *, curl_path: Path = CURL_PATH) -> list[str]:
@@ -285,19 +403,42 @@ def build_curl_command(uri: str, *, curl_path: Path = CURL_PATH) -> list[str]:
         "\n__ZHISHI_HTTP_STATUS__:%{http_code}",
         uri,
     ]
-    forbidden = {"--insecure", "-k", "--location", "-L"}
-    if forbidden.intersection(command):
-        raise ValueError("curl命令包含禁止参数")
+    validate_curl_command(command, uri)
     return command
 
 
-def _run_process(runner, command: list[str], *, timeout: int):
-    return runner(
+def _run_process(
+    runner,
+    command: list[str],
+    *,
+    timeout: int,
+    stdout_limit: int,
+    stderr_limit: int,
+) -> BoundedProcessResult:
+    if runner is subprocess.run:
+        return run_bounded_process(
+            command,
+            timeout=timeout,
+            stdout_limit=stdout_limit,
+            stderr_limit=stderr_limit,
+        )
+    completed = runner(
         command,
         check=False,
         capture_output=True,
         timeout=timeout,
         env=CURL_SAFE_ENV,
+    )
+    stdout = bytes(completed.stdout or b"")
+    full_stderr = bytes(completed.stderr or b"")
+    if len(stdout) > stdout_limit:
+        raise CurlTransportError("PROCESS_STDOUT_TOO_LARGE")
+    return BoundedProcessResult(
+        completed.returncode,
+        stdout,
+        full_stderr[:stderr_limit],
+        sha256_bytes(full_stderr),
+        len(full_stderr) > stderr_limit,
     )
 
 
@@ -313,13 +454,23 @@ def inspect_curl_transport(*, runner=subprocess.run, curl_path: Path = CURL_PATH
             runner,
             [str(curl_path), "--version"],
             timeout=CURL_CONNECT_TIMEOUT_SECONDS,
+            stdout_limit=4096,
+            stderr_limit=MAX_LOG_BYTES,
         )
+    except CurlTransportError as exc:
+        if exc.code == "PROCESS_TIMEOUT":
+            raise CurlTransportError("CURL_VERSION_TIMEOUT") from exc
+        raise
     except subprocess.TimeoutExpired as exc:
         raise CurlTransportError("CURL_VERSION_TIMEOUT") from exc
     except OSError as exc:
         raise CurlTransportError("CURL_EXECUTION_FAILED") from exc
     if completed.returncode != 0:
-        raise CurlTransportError("CURL_VERSION_FAILED", completed.stderr)
+        raise CurlTransportError(
+            "CURL_VERSION_FAILED",
+            completed.stderr,
+            detail_fingerprint=completed.stderr_sha256,
+        )
     version_line = completed.stdout.decode("utf-8", errors="replace").splitlines()
     if not version_line:
         raise CurlTransportError("CURL_VERSION_INVALID")
@@ -344,7 +495,19 @@ def run_curl(
     transport = inspect_curl_transport(runner=runner, curl_path=curl_path)
     transport["参数SHA-256"] = sha256_bytes(canonical(command[1:-1]))
     try:
-        completed = _run_process(runner, command, timeout=HTTP_TIMEOUT_SECONDS)
+        completed = _run_process(
+            runner,
+            command,
+            timeout=HTTP_TIMEOUT_SECONDS,
+            stdout_limit=MAX_RESPONSE_BYTES + len(HTTP_STATUS_MARKER) + 3,
+            stderr_limit=MAX_LOG_BYTES,
+        )
+    except CurlTransportError as exc:
+        if exc.code == "PROCESS_TIMEOUT":
+            raise CurlTransportError("CURL_TIMEOUT") from exc
+        if exc.code == "PROCESS_STDOUT_TOO_LARGE":
+            raise CurlTransportError("API_RESPONSE_TOO_LARGE") from exc
+        raise
     except subprocess.TimeoutExpired as exc:
         raise CurlTransportError("CURL_TIMEOUT") from exc
     except OSError as exc:
@@ -355,7 +518,11 @@ def run_curl(
             60: "TLS_CERTIFICATE_VERIFY_FAILED",
             63: "API_RESPONSE_TOO_LARGE",
         }.get(completed.returncode, f"CURL_EXIT_{completed.returncode}")
-        raise CurlTransportError(code, completed.stderr)
+        raise CurlTransportError(
+            code,
+            completed.stderr,
+            detail_fingerprint=completed.stderr_sha256,
+        )
     raw, marker, status_raw = completed.stdout.rpartition(HTTP_STATUS_MARKER)
     if marker != HTTP_STATUS_MARKER or not re.fullmatch(rb"\d{3}", status_raw):
         raise CurlTransportError("HTTP_STATUS_MISSING")
@@ -438,10 +605,10 @@ def member_status(member: Mapping[str, str], *, manifest_stats: Mapping[str, Any
     }
     complete = all(checks.values()) and has_api
     reason = "EXACT_MATCH_INCOMPLETE"
-    if not has_api:
-        reason = "PUBLIC_API_METADATA_UNAVAILABLE"
-    elif not candidates or inventory is None:
+    if not candidates or inventory is None:
         reason = "MEMBER_ASSET_BINDING_MISSING"
+    elif not has_api:
+        reason = "PUBLIC_API_METADATA_UNAVAILABLE"
     elif complete:
         reason = "EXACT_MATCH_COMPLETE"
     return {
