@@ -1,0 +1,378 @@
+[
+  {
+    "decision": "阻塞",
+    "formal_member_count": 2937,
+    "gates": {
+      "三类时间": {
+        "reason_code": "ARRIVAL_AND_CAPTURE_TIME_MISSING",
+        "status": "无法判定"
+      },
+      "历史重放": {
+        "reason_code": "REPLAY_EVIDENCE_NOT_COMPATIBLE",
+        "status": "无法判定"
+      },
+      "容量": {
+        "reason_code": "RESEARCH_PIPELINE_CAPACITY_NOT_PROVEN",
+        "status": "无法判定"
+      },
+      "恢复": {
+        "reason_code": "ISOLATED_RECOVERY_NOT_PROVEN",
+        "status": "无法判定"
+      },
+      "成本与执行": {
+        "reason_code": "COST_EXECUTION_DATA_MISSING",
+        "status": "无法判定"
+      },
+      "来源身份": {
+        "reason_code": "FORMAL_SOURCE_IDENTITY_BOUND",
+        "status": "通过"
+      },
+      "血缘": {
+        "reason_code": "CONTENT_ADDRESSED_LINEAGE",
+        "status": "通过"
+      },
+      "质量": {
+        "reason_code": "FULL_ROW_QUALITY_NOT_AUDITED",
+        "status": "无法判定"
+      }
+    },
+    "horizon_hours": 4,
+    "market_type": "USDⓈ-M合约",
+    "observed_member_count": 2937,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "underlying": "BTC",
+    "venue": "Binance"
+  },
+  {
+    "decision": "阻塞",
+    "formal_member_count": 2937,
+    "gates": {
+      "三类时间": {
+        "reason_code": "ARRIVAL_AND_CAPTURE_TIME_MISSING",
+        "status": "无法判定"
+      },
+      "历史重放": {
+        "reason_code": "REPLAY_EVIDENCE_NOT_COMPATIBLE",
+        "status": "无法判定"
+      },
+      "容量": {
+        "reason_code": "RESEARCH_PIPELINE_CAPACITY_NOT_PROVEN",
+        "status": "无法判定"
+      },
+      "恢复": {
+        "reason_code": "ISOLATED_RECOVERY_NOT_PROVEN",
+        "status": "无法判定"
+      },
+      "成本与执行": {
+        "reason_code": "COST_EXECUTION_DATA_MISSING",
+        "status": "无法判定"
+      },
+      "来源身份": {
+        "reason_code": "FORMAL_SOURCE_IDENTITY_BOUND",
+        "status": "通过"
+      },
+      "血缘": {
+        "reason_code": "CONTENT_ADDRESSED_LINEAGE",
+        "status": "通过"
+      },
+      "质量": {
+        "reason_code": "FULL_ROW_QUALITY_NOT_AUDITED",
+        "status": "无法判定"
+      }
+    },
+    "horizon_hours": 8,
+    "market_type": "USDⓈ-M合约",
+    "observed_member_count": 2937,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "underlying": "BTC",
+    "venue": "Binance"
+  },
+  {
+    "decision": "阻塞",
+    "formal_member_count": 2937,
+    "gates": {
+      "三类时间": {
+        "reason_code": "ARRIVAL_AND_CAPTURE_TIME_MISSING",
+        "status": "无法判定"
+      },
+      "历史重放": {
+        "reason_code": "REPLAY_EVIDENCE_NOT_COMPATIBLE",
+        "status": "无法判定"
+      },
+      "容量": {
+        "reason_code": "RESEARCH_PIPELINE_CAPACITY_NOT_PROVEN",
+        "status": "无法判定"
+      },
+      "恢复": {
+        "reason_code": "ISOLATED_RECOVERY_NOT_PROVEN",
+        "status": "无法判定"
+      },
+      "成本与执行": {
+        "reason_code": "COST_EXECUTION_DATA_MISSING",
+        "status": "无法判定"
+      },
+      "来源身份": {
+        "reason_code": "FORMAL_SOURCE_IDENTITY_BOUND",
+        "status": "通过"
+      },
+      "血缘": {
+        "reason_code": "CONTENT_ADDRESSED_LINEAGE",
+        "status": "通过"
+      },
+      "质量": {
+        "reason_code": "FULL_ROW_QUALITY_NOT_AUDITED",
+        "status": "无法判定"
+      }
+    },
+    "horizon_hours": 24,
+    "market_type": "USDⓈ-M合约",
+    "observed_member_count": 2937,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "underlying": "BTC",
+    "venue": "Binance"
+  },
+  {
+    "decision": "阻塞",
+    "formal_member_count": 2937,
+    "gates": {
+      "三类时间": {
+        "reason_code": "ARRIVAL_AND_CAPTURE_TIME_MISSING",
+        "status": "无法判定"
+      },
+      "历史重放": {
+        "reason_code": "REPLAY_EVIDENCE_NOT_COMPATIBLE",
+        "status": "无法判定"
+      },
+      "容量": {
+        "reason_code": "RESEARCH_PIPELINE_CAPACITY_NOT_PROVEN",
+        "status": "无法判定"
+      },
+      "恢复": {
+        "reason_code": "ISOLATED_RECOVERY_NOT_PROVEN",
+        "status": "无法判定"
+      },
+      "成本与执行": {
+        "reason_code": "COST_EXECUTION_DATA_MISSING",
+        "status": "无法判定"
+      },
+      "来源身份": {
+        "reason_code": "FORMAL_SOURCE_IDENTITY_BOUND",
+        "status": "通过"
+      },
+      "血缘": {
+        "reason_code": "CONTENT_ADDRESSED_LINEAGE",
+        "status": "通过"
+      },
+      "质量": {
+        "reason_code": "FULL_ROW_QUALITY_NOT_AUDITED",
+        "status": "无法判定"
+      }
+    },
+    "horizon_hours": 48,
+    "market_type": "USDⓈ-M合约",
+    "observed_member_count": 2937,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "underlying": "BTC",
+    "venue": "Binance"
+  },
+  {
+    "decision": "阻塞",
+    "formal_member_count": 2243,
+    "gates": {
+      "三类时间": {
+        "reason_code": "ARRIVAL_AND_CAPTURE_TIME_MISSING",
+        "status": "无法判定"
+      },
+      "历史重放": {
+        "reason_code": "REPLAY_EVIDENCE_NOT_COMPATIBLE",
+        "status": "无法判定"
+      },
+      "容量": {
+        "reason_code": "RESEARCH_PIPELINE_CAPACITY_NOT_PROVEN",
+        "status": "无法判定"
+      },
+      "恢复": {
+        "reason_code": "ISOLATED_RECOVERY_NOT_PROVEN",
+        "status": "无法判定"
+      },
+      "成本与执行": {
+        "reason_code": "COST_EXECUTION_DATA_MISSING",
+        "status": "无法判定"
+      },
+      "来源身份": {
+        "reason_code": "FORMAL_SOURCE_IDENTITY_BOUND",
+        "status": "通过"
+      },
+      "血缘": {
+        "reason_code": "CONTENT_ADDRESSED_LINEAGE",
+        "status": "通过"
+      },
+      "质量": {
+        "reason_code": "FULL_ROW_QUALITY_NOT_AUDITED",
+        "status": "无法判定"
+      }
+    },
+    "horizon_hours": 4,
+    "market_type": "USDⓈ-M合约",
+    "observed_member_count": 2243,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "underlying": "ETH",
+    "venue": "Binance"
+  },
+  {
+    "decision": "阻塞",
+    "formal_member_count": 2243,
+    "gates": {
+      "三类时间": {
+        "reason_code": "ARRIVAL_AND_CAPTURE_TIME_MISSING",
+        "status": "无法判定"
+      },
+      "历史重放": {
+        "reason_code": "REPLAY_EVIDENCE_NOT_COMPATIBLE",
+        "status": "无法判定"
+      },
+      "容量": {
+        "reason_code": "RESEARCH_PIPELINE_CAPACITY_NOT_PROVEN",
+        "status": "无法判定"
+      },
+      "恢复": {
+        "reason_code": "ISOLATED_RECOVERY_NOT_PROVEN",
+        "status": "无法判定"
+      },
+      "成本与执行": {
+        "reason_code": "COST_EXECUTION_DATA_MISSING",
+        "status": "无法判定"
+      },
+      "来源身份": {
+        "reason_code": "FORMAL_SOURCE_IDENTITY_BOUND",
+        "status": "通过"
+      },
+      "血缘": {
+        "reason_code": "CONTENT_ADDRESSED_LINEAGE",
+        "status": "通过"
+      },
+      "质量": {
+        "reason_code": "FULL_ROW_QUALITY_NOT_AUDITED",
+        "status": "无法判定"
+      }
+    },
+    "horizon_hours": 8,
+    "market_type": "USDⓈ-M合约",
+    "observed_member_count": 2243,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "underlying": "ETH",
+    "venue": "Binance"
+  },
+  {
+    "decision": "阻塞",
+    "formal_member_count": 2243,
+    "gates": {
+      "三类时间": {
+        "reason_code": "ARRIVAL_AND_CAPTURE_TIME_MISSING",
+        "status": "无法判定"
+      },
+      "历史重放": {
+        "reason_code": "REPLAY_EVIDENCE_NOT_COMPATIBLE",
+        "status": "无法判定"
+      },
+      "容量": {
+        "reason_code": "RESEARCH_PIPELINE_CAPACITY_NOT_PROVEN",
+        "status": "无法判定"
+      },
+      "恢复": {
+        "reason_code": "ISOLATED_RECOVERY_NOT_PROVEN",
+        "status": "无法判定"
+      },
+      "成本与执行": {
+        "reason_code": "COST_EXECUTION_DATA_MISSING",
+        "status": "无法判定"
+      },
+      "来源身份": {
+        "reason_code": "FORMAL_SOURCE_IDENTITY_BOUND",
+        "status": "通过"
+      },
+      "血缘": {
+        "reason_code": "CONTENT_ADDRESSED_LINEAGE",
+        "status": "通过"
+      },
+      "质量": {
+        "reason_code": "FULL_ROW_QUALITY_NOT_AUDITED",
+        "status": "无法判定"
+      }
+    },
+    "horizon_hours": 24,
+    "market_type": "USDⓈ-M合约",
+    "observed_member_count": 2243,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "underlying": "ETH",
+    "venue": "Binance"
+  },
+  {
+    "decision": "阻塞",
+    "formal_member_count": 2243,
+    "gates": {
+      "三类时间": {
+        "reason_code": "ARRIVAL_AND_CAPTURE_TIME_MISSING",
+        "status": "无法判定"
+      },
+      "历史重放": {
+        "reason_code": "REPLAY_EVIDENCE_NOT_COMPATIBLE",
+        "status": "无法判定"
+      },
+      "容量": {
+        "reason_code": "RESEARCH_PIPELINE_CAPACITY_NOT_PROVEN",
+        "status": "无法判定"
+      },
+      "恢复": {
+        "reason_code": "ISOLATED_RECOVERY_NOT_PROVEN",
+        "status": "无法判定"
+      },
+      "成本与执行": {
+        "reason_code": "COST_EXECUTION_DATA_MISSING",
+        "status": "无法判定"
+      },
+      "来源身份": {
+        "reason_code": "FORMAL_SOURCE_IDENTITY_BOUND",
+        "status": "通过"
+      },
+      "血缘": {
+        "reason_code": "CONTENT_ADDRESSED_LINEAGE",
+        "status": "通过"
+      },
+      "质量": {
+        "reason_code": "FULL_ROW_QUALITY_NOT_AUDITED",
+        "status": "无法判定"
+      }
+    },
+    "horizon_hours": 48,
+    "market_type": "USDⓈ-M合约",
+    "observed_member_count": 2243,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "underlying": "ETH",
+    "venue": "Binance"
+  }
+]
