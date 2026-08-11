@@ -198,6 +198,22 @@ def _member_date(name: str) -> str:
     return match.group(1)
 
 
+def assert_no_symlink_components(path: Path, *, stop: Path | None = None) -> None:
+    """拒绝目标自身及从固定根到目标之间的任一级符号链接。"""
+
+    current = path.absolute()
+    boundary = stop.absolute() if stop is not None else current
+    while True:
+        if current.is_symlink():
+            raise ValueError("SOURCE_PATH_SYMLINK_REJECTED")
+        if current == boundary:
+            return
+        parent = current.parent
+        if parent == current or boundary not in (current, *current.parents):
+            raise ValueError("SOURCE_PATH_BOUNDARY_INVALID")
+        current = parent
+
+
 def resolve_member_path(root: Path, group: Mapping[str, Any], member: Mapping[str, Any]) -> Path:
     relative_name = str(member.get("relative_name") or "")
     if Path(relative_name).name != relative_name or not relative_name.endswith(".zip"):
@@ -205,8 +221,10 @@ def resolve_member_path(root: Path, group: Mapping[str, Any], member: Mapping[st
     expected_prefix = f"{group['contract']}-{group['dataset']}-"
     if not relative_name.startswith(expected_prefix):
         raise ValueError("PATH_REJECTED")
+    assert_no_symlink_components(root)
     root_resolved = root.resolve(strict=True)
     group_root = root / str(group["relative_dir"])
+    assert_no_symlink_components(group_root, stop=root)
     if group_root.is_symlink() or not group_root.is_dir():
         raise ValueError("GROUP_ROOT_INVALID")
     path = group_root / relative_name
@@ -489,6 +507,7 @@ def inventory_fingerprint(paths: Sequence[Path], root: Path, limit: int) -> tupl
         rows.append({"path": relative, "kind": kind, **({"size": size, "mtime_ns": mtime_ns} if kind != "missing" else {})})
 
     for parent in paths:
+        assert_no_symlink_components(parent, stop=root)
         if not parent.exists() and not parent.is_symlink():
             append(parent, "missing")
             continue
@@ -561,6 +580,11 @@ def assert_resource_limits(snapshot: Mapping[str, Any], limits: Mapping[str, Any
         raise ValueError("DISK_HEADROOM_INSUFFICIENT")
     if int(snapshot["process_max_rss_bytes"]) > int(limits["memory_bytes"]):
         raise ValueError("PROCESS_MEMORY_LIMIT_EXCEEDED")
+
+
+def assert_time_limit(started: float, limits: Mapping[str, Any]) -> None:
+    if time.monotonic() - started > float(limits["total_seconds"]):
+        raise TimeoutError("TOTAL_TIME_LIMIT_EXCEEDED")
 
 
 def _compact_member(member: Mapping[str, Any]) -> dict[str, Any]:
@@ -655,6 +679,7 @@ def run(config_path: Path, repo_root: Path, output_root: Path, batch_id: str) ->
         raise ValueError("SOURCE_DENOMINATOR_DRIFT")
 
     source_root = Path(config["local_root"])
+    assert_no_symlink_components(source_root)
     inventory_paths = [source_root / item["relative_dir"] for item in config["groups"]]
     inventory_paths.extend(source_root / value for value in config["observations"])
     inventory_paths.extend(source_root / value for value in config["manifests"])
@@ -690,8 +715,7 @@ def run(config_path: Path, repo_root: Path, output_root: Path, batch_id: str) ->
             print(f"正式输入观察: {index}/{len(accepted)}，失败={len(failures)}", file=sys.stderr, flush=True)
             snapshot = _resource_snapshot(output_root, source_root)
             assert_resource_limits(snapshot, limits)
-            if time.monotonic() - started > limits["total_seconds"]:
-                raise TimeoutError("TOTAL_TIME_LIMIT_EXCEEDED")
+            assert_time_limit(started, limits)
 
     after_fingerprint, after_count = inventory_fingerprint(inventory_paths, source_root, limits["inventory_entry_count"])
     if before_fingerprint != after_fingerprint or inventory_count != after_count:
@@ -747,6 +771,9 @@ def run(config_path: Path, repo_root: Path, output_root: Path, batch_id: str) ->
         "legacy_task_000084_current_gate": False,
         "legacy_task_000084_modified": False,
         "source_data_modified": False,
+        "source_root_symlink": source_root.is_symlink(),
+        "source_path_symlink_policy": "固定根自身及根内相对路径每级均拒绝符号链接",
+        "total_time_limit_checked_before_publish": True,
         "inspection_scope": "5180个正式输入逐文件内容SHA复验并全量解压流读取；仅解析首末有效记录，未执行逐行业务质量验证",
         "remaining_blockers": [
             "到达时间与采集时间缺失",
@@ -774,17 +801,21 @@ def run(config_path: Path, repo_root: Path, output_root: Path, batch_id: str) ->
     files.update(_json_shards(observations, "member-observations", limits["output_file_bytes"] - 1024))
     prepublish_snapshot = _resource_snapshot(output_root, source_root)
     assert_resource_limits(prepublish_snapshot, limits)
+    assert_time_limit(started, limits)
     summary["resource_facts"]["prepublish"] = prepublish_snapshot
     files["summary.json"] = json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+
+    def assert_publish_safe() -> None:
+        assert_time_limit(started, limits)
+        assert_resource_limits(_resource_snapshot(output_root, source_root), limits)
+
     target = atomic_publish(
         output_root,
         batch_id,
         files,
         max_file_bytes=limits["output_file_bytes"],
         max_total_bytes=limits["output_total_bytes"],
-        before_rename=lambda: assert_resource_limits(
-            _resource_snapshot(output_root, source_root), limits
-        ),
+        before_rename=assert_publish_safe,
     )
     print(json.dumps({"batch_id": batch_id, "output": str(target), "summary": summary}, ensure_ascii=False), flush=True)
     return target

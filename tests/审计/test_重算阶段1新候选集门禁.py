@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "审计" / "重算阶段1新候选集门禁.py"
 CONFIG = ROOT / "config" / "审计" / "任务-000093阶段1新候选集重算.json"
 SOURCE_BATCH = ROOT / "artifacts" / "数据" / "Binance历史归档来源身份" / "binance-archive-provenance-20260811T063739Z-7a6da0087493"
-BATCH = ROOT / "artifacts" / "审计" / "阶段1新候选集重算" / "stage1-candidate-recompute-20260811T120000Z-c88fa0502d54"
+BATCH = ROOT / "artifacts" / "审计" / "阶段1新候选集重算" / "stage1-candidate-recompute-20260811T131000Z-c88fa0502d54"
 SPEC = importlib.util.spec_from_file_location("stage1_candidate_recompute", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -100,6 +100,26 @@ class Stage1CandidateRecomputeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "CONTENT_SHA_DRIFT"):
                 MODULE.verify_file_identity(root, self.groups()["BTCUSDT-trades"], member)
 
+    def test_固定数据根和相对路径任一级符号链接均被拒绝(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            target = base / "target"
+            path = target / "trades/BTCUSDT/BTCUSDT-trades-2024-01-01.zip"
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b"data")
+            member = self.member("BTCUSDT-trades", path.name, "已证明", MODULE.sha256_file(path))
+            member["size_bytes"] = path.stat().st_size
+            linked_root = base / "linked-root"
+            linked_root.symlink_to(target, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "SOURCE_PATH_SYMLINK_REJECTED"):
+                MODULE.resolve_member_path(linked_root, self.groups()["BTCUSDT-trades"], member)
+
+            ordinary_root = base / "ordinary-root"
+            ordinary_root.mkdir()
+            (ordinary_root / "trades").symlink_to(target / "trades", target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "SOURCE_PATH_SYMLINK_REJECTED"):
+                MODULE.resolve_member_path(ordinary_root, self.groups()["BTCUSDT-trades"], member)
+
     def test_配置完整冻结且任何字段漂移失败安全(self):
         valid = MODULE.load_config(CONFIG)
         self.assertEqual("000093", valid["task_id"])
@@ -156,6 +176,8 @@ class Stage1CandidateRecomputeTests(unittest.TestCase):
             changed[field] = value
             with self.assertRaisesRegex(ValueError, reason):
                 MODULE.assert_resource_limits(changed, limits)
+        with self.assertRaisesRegex(TimeoutError, "TOTAL_TIME_LIMIT_EXCEEDED"):
+            MODULE.assert_time_limit(MODULE.time.monotonic() - 2, {"total_seconds": 1})
 
     def test_单源文件超过固定上限时在哈希前拒绝(self):
         with tempfile.TemporaryDirectory() as directory:
