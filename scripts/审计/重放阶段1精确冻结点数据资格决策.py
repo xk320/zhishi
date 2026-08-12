@@ -32,6 +32,34 @@ INTENT_SCHEMA = "zhishi-stage1-decision-intent/v1"
 REPLAY_SCHEMA = "zhishi-stage1-independent-replay/v1"
 SHA_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+INTENT_FIELDS = frozenset(
+    {
+        "batch_id", "config_canonical_sha256", "config_file_sha256",
+        "data_cutoff_at", "executor_sha256", "intent_created_at", "process_id",
+        "process_run_id", "process_started_at", "replay_contract_sha256",
+        "schema_version", "source_batch_files_fingerprint", "source_batch_id",
+        "source_batch_relative_path", "source_completed_at", "source_expected_files",
+        "source_payload_opened", "source_sizes_from_lstat", "task_000094_merge_commit",
+        "task_contract_sha256", "task_id",
+    }
+)
+DECISION_FIELDS = frozenset(
+    {
+        "batch_id", "data_cutoff_at", "decision_at", "decision_status",
+        "intent_process_id", "intent_process_run_id", "intent_sha256", "process_id",
+        "process_run_id", "process_started_at", "result", "result_sha256",
+        "schema_version", "source_completed_at", "stage1_complete", "stage2_released",
+        "task_id",
+    }
+)
+REPLAY_FIELDS = frozenset(
+    {
+        "batch_id", "data_cutoff_at", "decision_at", "decision_sha256",
+        "intent_sha256", "process_id", "process_run_id", "process_started_at",
+        "replay_slot", "result", "result_sha256", "schema_version",
+        "stage1_complete", "stage2_released", "status", "task_id",
+    }
+)
 TASK_CONTRACT_HEADER_PREFIXES = (
     "# 任务-000099：",
     "- 类型：",
@@ -605,18 +633,40 @@ def _atomic_rename_noreplace(source: Path, target: Path) -> None:
     raise OSError(error_number, os.strerror(error_number))
 
 
+def _phase_file_manifest(directory: Path) -> dict[str, dict[str, Any]]:
+    """枚举阶段内除完成标记外的完整普通文件集合并内容寻址。"""
+
+    manifest: dict[str, dict[str, Any]] = {}
+    for path in sorted(directory.iterdir(), key=lambda item: item.name.encode("utf-8")):
+        if path.name == "completion.json":
+            continue
+        if path.is_symlink() or not path.is_file() or "/" in path.name:
+            raise ValueError("PHASE_FILE_SET_INVALID")
+        manifest[path.name] = {
+            "bytes": path.stat().st_size,
+            "sha256": sha256_file(path),
+        }
+    if not manifest:
+        raise ValueError("PHASE_FILE_SET_EMPTY")
+    return manifest
+
+
 def _write_completion_evidence(
     temporary: Path,
     phase_name: str,
     started: float,
     config: Mapping[str, Any],
-) -> tuple[str, dict[str, Any]]:
+) -> tuple[str, str, dict[str, Any]]:
     """在原子发布前写入完成标记，并持久化最后一次预提交资源测量。"""
 
-    payload_bytes = sum(path.stat().st_size for path in temporary.iterdir())
+    file_manifest = _phase_file_manifest(temporary)
+    manifest_sha256 = sha256_bytes(canonical_json(file_manifest).encode("utf-8"))
+    payload_bytes = sum(item["bytes"] for item in file_manifest.values())
     facts = _check_resources(started, payload_bytes, config)
     completion = {
         "completion_marker_required": True,
+        "file_manifest": file_manifest,
+        "file_manifest_sha256": manifest_sha256,
         "final_gate_rechecked_after_completion_readback": True,
         "phase": phase_name,
         "final_precommit_resource_facts": facts,
@@ -640,17 +690,19 @@ def _write_completion_evidence(
         int(completion["published_bytes"]),
         config,
     )
-    return completion_sha, final_facts
+    return completion_sha, manifest_sha256, final_facts
 
 
 def _write_publication_marker(
     batch_root: Path,
     phase_name: str,
     completion_sha256: str,
+    file_manifest_sha256: str,
 ) -> dict[str, Any]:
     marker = batch_root / f"{phase_name}-published.json"
     payload = {
         "completion_sha256": completion_sha256,
+        "file_manifest_sha256": file_manifest_sha256,
         "phase": phase_name,
         "published_at": utc_now(),
         "schema_version": "zhishi-stage1-phase-publication/v1",
@@ -685,6 +737,7 @@ def _load_publication_marker(
         marker.get("schema_version") != "zhishi-stage1-phase-publication/v1"
         or marker.get("phase") != phase_name
         or not SHA_PATTERN.fullmatch(str(marker.get("completion_sha256", "")))
+        or not SHA_PATTERN.fullmatch(str(marker.get("file_manifest_sha256", "")))
     ):
         raise ValueError("PUBLICATION_MARKER_INVALID")
     parse_utc(marker.get("published_at"))
@@ -698,8 +751,21 @@ def _load_publication_marker(
         != "zhishi-stage1-atomic-publish-completion/v1"
         or completion.get("phase") != phase_name
         or completion.get("final_gate_rechecked_after_completion_readback") is not True
+        or completion.get("file_manifest_sha256") != marker["file_manifest_sha256"]
     ):
         raise ValueError("PUBLICATION_COMPLETION_DRIFT")
+    file_manifest = completion.get("file_manifest")
+    if not isinstance(file_manifest, dict) or sha256_bytes(
+        canonical_json(file_manifest).encode("utf-8")
+    ) != marker["file_manifest_sha256"]:
+        raise ValueError("PUBLICATION_MANIFEST_INVALID")
+    phase_dir = completion_path.parent
+    if _phase_file_manifest(phase_dir) != file_manifest:
+        raise ValueError("PUBLICATION_FILE_DRIFT")
+    if sum(path.stat().st_size for path in phase_dir.iterdir()) != completion.get(
+        "published_bytes"
+    ):
+        raise ValueError("PUBLICATION_SIZE_DRIFT")
     return marker
 
 
@@ -758,14 +824,14 @@ def _publish_batch_with_intent(
                 if path.is_symlink() or not path.is_file():
                     raise ValueError("OUTPUT_FILE_INVALID")
                 sha256_file(path)
-            completion_sha, final_resources = _write_completion_evidence(
+            completion_sha, manifest_sha, final_resources = _write_completion_evidence(
                 intent_dir, "intent", started, config
             )
             if batch_target.exists() or batch_target.is_symlink():
                 raise ValueError("OUTPUT_BATCH_EXISTS")
             _atomic_rename_noreplace(temporary, batch_target)
             publication = _write_publication_marker(
-                batch_target, "intent", completion_sha
+                batch_target, "intent", completion_sha, manifest_sha
             )
             return {
                 "completion_sha256": completion_sha,
@@ -822,14 +888,14 @@ def _publish_phase(
             fourth = verify_source_files(source_dir, config)
             if fourth != third:
                 raise ValueError("SOURCE_FINAL_DRIFT")
-            completion_sha, final_resources = _write_completion_evidence(
+            completion_sha, manifest_sha, final_resources = _write_completion_evidence(
                 temporary, phase_name, started, config
             )
             if target.exists() or target.is_symlink():
                 raise ValueError("OUTPUT_PHASE_EXISTS")
             _atomic_rename_noreplace(temporary, target)
             publication = _write_publication_marker(
-                batch_root, phase_name, completion_sha
+                batch_root, phase_name, completion_sha, manifest_sha
             )
             return {
                 "completion_sha256": completion_sha,
@@ -893,6 +959,132 @@ def prepare(
     return {"batch_id": batch_id, "phase": "prepare", **published}
 
 
+def _validate_intent_identity(
+    repo_root: Path,
+    batch_id: str,
+    intent: Mapping[str, Any],
+    config: Mapping[str, Any],
+) -> None:
+    """复核事前意图的完整静态身份与时间身份，不接受部分字段匹配。"""
+
+    script_path = repo_root / "scripts/审计/重放阶段1精确冻结点数据资格决策.py"
+    contract_path = repo_root / "docs/数据/阶段1精确输入冻结点与同版本重放合同.md"
+    task_path = repo_root / "docs/研发中心/任务/任务-000099.md"
+    config_path = repo_root / EXPECTED_CONFIG_RELATIVE_PATH
+    if frozenset(intent) != INTENT_FIELDS:
+        raise ValueError("INTENT_FIELDS_INVALID")
+    expected = {
+        "batch_id": batch_id,
+        "config_canonical_sha256": EXPECTED_CONFIG_CANONICAL_SHA256,
+        "config_file_sha256": sha256_file(config_path),
+        "executor_sha256": sha256_file(script_path),
+        "replay_contract_sha256": sha256_file(contract_path),
+        "schema_version": INTENT_SCHEMA,
+        "source_batch_files_fingerprint": config["source_batch_files_fingerprint"],
+        "source_batch_id": config["source_batch_id"],
+        "source_batch_relative_path": config["source_batch_relative_path"],
+        "source_completed_at": config["source_completed_at"],
+        "source_expected_files": config["expected_source_files"],
+        "source_payload_opened": False,
+        "source_sizes_from_lstat": probe_source_without_opening(repo_root, config),
+        "task_000094_merge_commit": config["task_000094_merge_commit"],
+        "task_contract_sha256": task_contract_sha256(task_path),
+        "task_id": "000099",
+    }
+    if any(intent.get(key) != value for key, value in expected.items()):
+        raise ValueError("INTENT_IDENTITY_INVALID")
+    process_id = intent.get("process_id")
+    if isinstance(process_id, bool) or not isinstance(process_id, int) or process_id <= 0:
+        raise ValueError("INTENT_PROCESS_ID_INVALID")
+    try:
+        uuid.UUID(str(intent.get("process_run_id")))
+    except (ValueError, AttributeError) as error:
+        raise ValueError("INTENT_PROCESS_RUN_ID_INVALID") from error
+    started_at = parse_utc(intent.get("process_started_at"))
+    created_at = parse_utc(intent.get("intent_created_at"))
+    cutoff = parse_utc(intent.get("data_cutoff_at"))
+    if started_at > created_at or created_at != cutoff:
+        raise ValueError("INTENT_TIME_ORDER_INVALID")
+    if parse_utc(config["source_completed_at"]) > cutoff:
+        raise ValueError("INTENT_SOURCE_TIME_INVALID")
+
+
+def _validate_decision_identity(
+    batch_id: str,
+    decision: Mapping[str, Any],
+    intent: Mapping[str, Any],
+    intent_sha: str,
+) -> None:
+    """复核发布决策的完整外层门禁，防止仅结果相等却越权放行。"""
+
+    if frozenset(decision) != DECISION_FIELDS:
+        raise ValueError("DECISION_FIELDS_INVALID")
+    expected = {
+        "batch_id": batch_id,
+        "data_cutoff_at": intent["data_cutoff_at"],
+        "decision_status": "已证明",
+        "intent_process_id": intent["process_id"],
+        "intent_process_run_id": intent["process_run_id"],
+        "intent_sha256": intent_sha,
+        "schema_version": DECISION_SCHEMA,
+        "source_completed_at": intent["source_completed_at"],
+        "stage1_complete": False,
+        "stage2_released": False,
+        "task_id": "000099",
+    }
+    if any(decision.get(key) != value for key, value in expected.items()):
+        raise ValueError("DECISION_IDENTITY_INVALID")
+    process_id = decision.get("process_id")
+    if isinstance(process_id, bool) or not isinstance(process_id, int) or process_id <= 0:
+        raise ValueError("DECISION_PROCESS_ID_INVALID")
+    try:
+        uuid.UUID(str(decision.get("process_run_id")))
+    except (ValueError, AttributeError) as error:
+        raise ValueError("DECISION_PROCESS_RUN_ID_INVALID") from error
+    started_at = parse_utc(decision.get("process_started_at"))
+    decided_at = parse_utc(decision.get("decision_at"))
+    if started_at > decided_at or decided_at <= parse_utc(intent["data_cutoff_at"]):
+        raise ValueError("DECISION_TIME_ORDER_INVALID")
+
+
+def _validate_replay_identity(
+    batch_id: str,
+    replay_doc: Mapping[str, Any],
+    slot: int,
+    intent: Mapping[str, Any],
+    intent_sha: str,
+    decision: Mapping[str, Any],
+    decision_sha: str,
+) -> None:
+    if frozenset(replay_doc) != REPLAY_FIELDS:
+        raise ValueError("REPLAY_FIELDS_INVALID")
+    expected = {
+        "batch_id": batch_id,
+        "data_cutoff_at": intent["data_cutoff_at"],
+        "decision_at": decision["decision_at"],
+        "decision_sha256": decision_sha,
+        "intent_sha256": intent_sha,
+        "replay_slot": slot,
+        "result": decision["result"],
+        "result_sha256": decision["result_sha256"],
+        "schema_version": REPLAY_SCHEMA,
+        "stage1_complete": False,
+        "stage2_released": False,
+        "status": "已证明",
+        "task_id": "000099",
+    }
+    if any(replay_doc.get(key) != value for key, value in expected.items()):
+        raise ValueError("REPLAY_IDENTITY_INVALID")
+    process_id = replay_doc.get("process_id")
+    if isinstance(process_id, bool) or not isinstance(process_id, int) or process_id <= 0:
+        raise ValueError("REPLAY_PROCESS_ID_INVALID")
+    try:
+        uuid.UUID(str(replay_doc.get("process_run_id")))
+    except (ValueError, AttributeError) as error:
+        raise ValueError("REPLAY_PROCESS_RUN_ID_INVALID") from error
+    parse_utc(replay_doc.get("process_started_at"))
+
+
 def decide(
     repo_root: Path,
     output_root: Path,
@@ -916,14 +1108,7 @@ def decide(
         repo_root,
         (batch_root / "intent" / "intent.json").relative_to(repo_root),
     )
-    if (
-        intent.get("schema_version") != INTENT_SCHEMA
-        or intent.get("source_payload_opened") is not False
-        or intent.get("source_expected_files") != config["expected_source_files"]
-        or intent.get("source_batch_files_fingerprint")
-        != config["source_batch_files_fingerprint"]
-    ):
-        raise ValueError("INTENT_IDENTITY_INVALID")
+    _validate_intent_identity(repo_root, batch_id, intent, config)
     if intent.get("process_id") == os.getpid():
         raise ValueError("PROCESS_ISOLATION_REQUIRED")
     cutoff = parse_utc(intent.get("data_cutoff_at"))
@@ -987,6 +1172,8 @@ def replay(
         str((output_root / batch_id).relative_to(repo_root)),
         final_kind="directory",
     )
+    _load_publication_marker(repo_root, batch_root, "intent")
+    _load_publication_marker(repo_root, batch_root, "decision")
     prerequisite = "decision" if slot == 1 else "replay-1"
     prerequisite_publication = _load_publication_marker(
         repo_root, batch_root, prerequisite
@@ -1002,10 +1189,8 @@ def replay(
         repo_root,
         (batch_root / "decision" / "decision.json").relative_to(repo_root),
     )
-    if decision.get("schema_version") != DECISION_SCHEMA:
-        raise ValueError("DECISION_VERSION_INVALID")
-    if decision.get("intent_sha256") != intent_sha:
-        raise ValueError("DECISION_INTENT_DRIFT")
+    _validate_intent_identity(repo_root, batch_id, intent, config)
+    _validate_decision_identity(batch_id, decision, intent, intent_sha)
     prior_ids = {
         intent.get("process_run_id"),
         decision.get("process_run_id"),
@@ -1016,8 +1201,9 @@ def replay(
             repo_root,
             (batch_root / "replay-1" / "replay.json").relative_to(repo_root),
         )
-        if first.get("schema_version") != REPLAY_SCHEMA:
-            raise ValueError("FIRST_REPLAY_VERSION_INVALID")
+        _validate_replay_identity(
+            batch_id, first, 1, intent, intent_sha, decision, decision_sha
+        )
         prior_ids.add(first.get("process_run_id"))
         prior_pids.add(first.get("process_id"))
     if os.getpid() in prior_pids:

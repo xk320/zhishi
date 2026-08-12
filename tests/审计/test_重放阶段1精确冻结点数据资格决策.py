@@ -193,6 +193,19 @@ class Stage1PriorFrozenReplayTests(unittest.TestCase):
             with mock.patch.object(MODULE.os, "getpid", return_value=92005):
                 with self.assertRaisesRegex(ValueError, "OUTPUT_PHASE_EXISTS"):
                     MODULE.replay(ROOT, output_root, batch, 1, config)
+            for phase, filename, field in (
+                ("intent", "intent.json", "data_cutoff_at"),
+                ("decision", "decision.json", "stage1_complete"),
+                ("decision", "resource.json", "schema_version"),
+            ):
+                path = output_root / batch / phase / filename
+                original = path.read_bytes()
+                changed = MODULE.load_json_strict(path)
+                changed[field] = True if field == "stage1_complete" else "tampered"
+                path.write_text(MODULE.canonical_json(changed) + "\n", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "PUBLICATION_FILE_DRIFT"):
+                    MODULE._load_publication_marker(ROOT, output_root / batch, phase)
+                path.write_bytes(original)
 
     def test_四个真实子进程按发布标记严格排序(self):
         batch = "stage1-prior-frozen-replay-20260812T120300Z-dddddddddddd"
@@ -300,6 +313,16 @@ class Stage1PriorFrozenReplayTests(unittest.TestCase):
             self.assertTrue(receipt["final_resource_gate_enforced_after_receipt_readback"])
             completion = MODULE.load_json_strict(batch / phase / "completion.json")
             self.assertTrue(completion["completion_marker_required"])
+            manifest = {
+                path.name: {"bytes": path.stat().st_size, "sha256": MODULE.sha256_file(path)}
+                for path in (batch / phase).iterdir()
+                if path.name != "completion.json"
+            }
+            self.assertEqual(manifest, completion["file_manifest"])
+            self.assertEqual(
+                MODULE.sha256_bytes(MODULE.canonical_json(manifest).encode("utf-8")),
+                completion["file_manifest_sha256"],
+            )
             self.assertEqual(
                 sum(path.stat().st_size for path in (batch / phase).iterdir()),
                 completion["published_bytes"],

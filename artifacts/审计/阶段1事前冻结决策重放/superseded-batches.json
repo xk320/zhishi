@@ -15,6 +15,14 @@
       "replacement_executor_sha256": "feeb98e2d2232f3cb4216b9094fb6af81a73592ea34c11a441a01b50893ad42e",
       "replacement_batch_id": "stage1-prior-frozen-replay-20260812T124000Z-ca8ae0a8ecd7",
       "status": "失效"
+    },
+    {
+      "batch_id": "stage1-prior-frozen-replay-20260812T124000Z-ca8ae0a8ecd7",
+      "executor_sha256": "feeb98e2d2232f3cb4216b9094fb6af81a73592ea34c11a441a01b50893ad42e",
+      "reason": "治理评审发现完成标记未内容寻址绑定阶段完整文件集合，后续修复改变执行器SHA-256，原批次保留且不作为最终证据",
+      "replacement_executor_sha256": "4c81b9db70f9803437f76f7cd9e3a82484c6e24cb431e82c0a882e0606ca13ac",
+      "replacement_batch_id": "stage1-prior-frozen-replay-20260812T130000Z-ca8ae0a8ecd7",
+      "status": "失效"
     }
   ],
   "schema_version": "zhishi-stage1-replay-supersession/v1"
