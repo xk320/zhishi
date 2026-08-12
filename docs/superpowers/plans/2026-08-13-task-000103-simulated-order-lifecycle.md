@@ -210,21 +210,21 @@ Expected: PASS.
 - Modify: `docs/研发中心/总体计划.md`
 - Modify: `docs/研发中心/任务/任务-000103.md`
 - Modify: `docs/研发中心/看板.md`
-- Create: `artifacts/模拟交易/阶段1委托生命周期/stage1-simulated-lifecycle-20260812T192916Z-720766dc5013/`
+- Create: `artifacts/模拟交易/阶段1委托生命周期/stage1-simulated-lifecycle-20260812T195103Z-f0f4ff04c8e8/`
 
 - [x] **Step 1: Run the frozen eight-stage batch serially**
 
 Run each command with the same frozen batch ID:
 
 ```bash
-python3 scripts/模拟交易/验证阶段1委托生命周期.py prepare --batch stage1-simulated-lifecycle-20260812T192916Z-720766dc5013
-python3 scripts/模拟交易/验证阶段1委托生命周期.py probe --batch stage1-simulated-lifecycle-20260812T192916Z-720766dc5013
-python3 scripts/模拟交易/验证阶段1委托生命周期.py plan --batch stage1-simulated-lifecycle-20260812T192916Z-720766dc5013
-python3 scripts/模拟交易/验证阶段1委托生命周期.py collect --batch stage1-simulated-lifecycle-20260812T192916Z-720766dc5013
-python3 scripts/模拟交易/验证阶段1委托生命周期.py simulate --batch stage1-simulated-lifecycle-20260812T192916Z-720766dc5013
-python3 scripts/模拟交易/验证阶段1委托生命周期.py replay-1 --batch stage1-simulated-lifecycle-20260812T192916Z-720766dc5013
-python3 scripts/模拟交易/验证阶段1委托生命周期.py replay-2 --batch stage1-simulated-lifecycle-20260812T192916Z-720766dc5013
-python3 scripts/模拟交易/验证阶段1委托生命周期.py validate --batch stage1-simulated-lifecycle-20260812T192916Z-720766dc5013
+python3 scripts/模拟交易/验证阶段1委托生命周期.py prepare --batch stage1-simulated-lifecycle-20260812T195103Z-f0f4ff04c8e8
+python3 scripts/模拟交易/验证阶段1委托生命周期.py probe --batch stage1-simulated-lifecycle-20260812T195103Z-f0f4ff04c8e8
+python3 scripts/模拟交易/验证阶段1委托生命周期.py plan --batch stage1-simulated-lifecycle-20260812T195103Z-f0f4ff04c8e8
+python3 scripts/模拟交易/验证阶段1委托生命周期.py collect --batch stage1-simulated-lifecycle-20260812T195103Z-f0f4ff04c8e8
+python3 scripts/模拟交易/验证阶段1委托生命周期.py simulate --batch stage1-simulated-lifecycle-20260812T195103Z-f0f4ff04c8e8
+python3 scripts/模拟交易/验证阶段1委托生命周期.py replay-1 --batch stage1-simulated-lifecycle-20260812T195103Z-f0f4ff04c8e8
+python3 scripts/模拟交易/验证阶段1委托生命周期.py replay-2 --batch stage1-simulated-lifecycle-20260812T195103Z-f0f4ff04c8e8
+python3 scripts/模拟交易/验证阶段1委托生命周期.py validate --batch stage1-simulated-lifecycle-20260812T195103Z-f0f4ff04c8e8
 ```
 
 Expected: one append-only batch, exact replay hashes, zero remote/database/network orders and resource usage below contract limits.
@@ -249,7 +249,7 @@ Expected: all commands exit0, one test process at a time, Node heap capped at256
 - [x] **Step 4: Commit, push, create PR and enter read-only review**
 
 ```bash
-git add README.md config/模拟交易/任务-000103阶段1委托生命周期.json scripts/数据/验证阶段1成本执行.py scripts/模拟交易/验证阶段1委托生命周期.py tests/模拟交易/test_阶段1委托生命周期.py docs/数据/模拟委托生命周期数据合同.md docs/数据/成本流动性与执行数据合同.md docs/审计/阶段1模拟执行生命周期证据报告.md docs/研发中心/总体计划.md docs/研发中心/任务/任务-000103.md docs/研发中心/看板.md docs/superpowers/plans/2026-08-13-task-000103-simulated-order-lifecycle.md artifacts/模拟交易/阶段1委托生命周期/stage1-simulated-lifecycle-20260812T192916Z-720766dc5013
+git add README.md config/模拟交易/任务-000103阶段1委托生命周期.json scripts/数据/验证阶段1成本执行.py scripts/模拟交易/验证阶段1委托生命周期.py tests/模拟交易/test_阶段1委托生命周期.py docs/数据/模拟委托生命周期数据合同.md docs/数据/成本流动性与执行数据合同.md docs/审计/阶段1模拟执行生命周期证据报告.md docs/研发中心/总体计划.md docs/研发中心/任务/任务-000103.md docs/研发中心/看板.md docs/superpowers/plans/2026-08-13-task-000103-simulated-order-lifecycle.md artifacts/模拟交易/阶段1委托生命周期/stage1-simulated-lifecycle-20260812T195103Z-f0f4ff04c8e8
 git commit -m "feat: 建立阶段1模拟委托生命周期证据"
 git push -u origin codex/task-000103-simulated-order-lifecycle-v1
 ```

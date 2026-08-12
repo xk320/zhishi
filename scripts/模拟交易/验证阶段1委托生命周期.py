@@ -621,8 +621,9 @@ def validate_metadata_snapshot(value: Mapping[str, Any]) -> None:
         or value.get("metadata_query_count") != 4
         or value.get("remote_rss_limit_enforced") is not True
         or value.get("stdout_incrementally_bounded") is not True
+        or isinstance(value.get("remote_peak_rss_bytes"), bool)
         or not isinstance(value.get("remote_peak_rss_bytes"), int)
-        or value["remote_peak_rss_bytes"] > 268435456
+        or not 0 < value["remote_peak_rss_bytes"] <= 268435456
     ):
         raise ValueError("REMOTE_METADATA_IDENTITY_INVALID")
     for name in ("client_sha256", "client_version_sha256"):
@@ -660,6 +661,7 @@ def _validate_process_facts(value: Any, *, rss_limit: int) -> None:
         or set(value) != {"elapsed_seconds", "peak_rss_bytes"}
         or not isinstance(value.get("elapsed_seconds"), (int, float))
         or value["elapsed_seconds"] < 0
+        or isinstance(value.get("peak_rss_bytes"), bool)
         or not isinstance(value.get("peak_rss_bytes"), int)
         or value["peak_rss_bytes"] <= 0
         or value["peak_rss_bytes"] > rss_limit
@@ -823,8 +825,9 @@ for query in queries:
  if {mode!r}=="explain":
   out.append({{"query_id":query["query_id"],"plan":json.loads(payload.decode()),"response_sha256":hashlib.sha256(payload).hexdigest(),"response_bytes":len(payload)}})
  else:
-  lines=[line for line in payload.splitlines() if line]
-  out.append({{"query_id":query["query_id"],"row_count":len(lines),"rows_base64":[base64.b64encode(line).decode() for line in lines],"response_sha256":hashlib.sha256(payload).hexdigest(),"response_bytes":len(payload)}})
+  records=[line for line in payload.splitlines(keepends=True) if line]
+  if b"".join(records)!=payload or any(not line.endswith(b"\\n") or line.endswith(b"\\r\\n") for line in records): raise SystemExit("MYSQL_RESPONSE_FRAMING_INVALID")
+  out.append({{"query_id":query["query_id"],"row_count":len(records),"rows_base64":[base64.b64encode(line).decode() for line in records],"response_sha256":hashlib.sha256(payload).hexdigest(),"response_bytes":len(payload)}})
 self_rss=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024
 child_rss=resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss*1024
 peak=max(self_rss,child_rss)
@@ -905,8 +908,9 @@ def validate_explain_evidence(
         or len(results) != len(plan.get("queries", []))
         or evidence.get("remote_rss_limit_enforced") is not True
         or evidence.get("stdout_incrementally_bounded") is not True
+        or isinstance(evidence.get("remote_peak_rss_bytes"), bool)
         or not isinstance(evidence.get("remote_peak_rss_bytes"), int)
-        or evidence["remote_peak_rss_bytes"] > config["资源上限"]["RSS字节"]
+        or not 0 < evidence["remote_peak_rss_bytes"] <= config["资源上限"]["RSS字节"]
     ):
         raise ValueError("EXPLAIN_EVIDENCE_SEMANTIC_DRIFT")
     total = 0
@@ -1135,6 +1139,18 @@ def validate_member_order(rows: Iterable[Mapping[str, Any]]) -> None:
             raise ValueError("MEMBER_SEQUENCE_INVALID")
 
 
+def _member_response_commitment(members: Iterable[Mapping[str, Any]]) -> str:
+    commitments = [
+        {
+            "member_sequence": member.get("member_sequence"),
+            "raw_row_bytes": member.get("raw_row_bytes"),
+            "raw_row_sha256": member.get("raw_row_sha256"),
+        }
+        for member in members
+    ]
+    return sha256_bytes(canonical_bytes(commitments))
+
+
 def collect(repo_root: Path, batch: str) -> dict[str, Any]:
     started = time.monotonic()
     intent, config, directory = _assert_intent(repo_root, batch)
@@ -1177,13 +1193,25 @@ def collect(repo_root: Path, batch: str) -> dict[str, Any]:
         ):
             raise ValueError("DATABASE_ROW_LIMIT_EXCEEDED")
         raw_rows = []
+        raw_records = []
         for encoded in encoded_rows:
             _assert_rss(config["资源上限"]["RSS字节"])
-            raw_line = base64.b64decode(encoded, validate=True).decode("utf-8")
+            raw_record = base64.b64decode(encoded, validate=True)
+            if not raw_record.endswith(b"\n") or raw_record.endswith(b"\r\n"):
+                raise ValueError("DATABASE_RESPONSE_FRAMING_DRIFT")
+            raw_line = raw_record[:-1].decode("utf-8")
+            raw_records.append(raw_record)
             raw_rows.append(raw_line.split("\t", 4))
+        if (
+            sum(len(record) for record in raw_records) != item.get("response_bytes")
+            or sha256_bytes(b"".join(raw_records)) != item.get("response_sha256")
+        ):
+            raise ValueError("DATABASE_RESPONSE_RECEIPT_DRIFT")
         validate_raw_member_order(raw_rows)
         symbol_members = []
-        for member_sequence, raw_row in enumerate(raw_rows):
+        for member_sequence, (raw_row, raw_record) in enumerate(
+            zip(raw_rows, raw_records, strict=True)
+        ):
             normalized = normalize_snapshot(
                 raw_row,
                 collected_at_ms=collected_at_ms,
@@ -1192,6 +1220,8 @@ def collect(repo_root: Path, batch: str) -> dict[str, Any]:
             if normalized["symbol"] != query["symbol"]:
                 raise ValueError("DATABASE_SYMBOL_DRIFT")
             normalized["member_sequence"] = member_sequence
+            normalized["raw_row_bytes"] = len(raw_record)
+            normalized["raw_row_sha256"] = sha256_bytes(raw_record)
             symbol_members.append(normalized)
         validate_member_order(symbol_members)
         members.extend(symbol_members)
@@ -1202,7 +1232,8 @@ def collect(repo_root: Path, batch: str) -> dict[str, Any]:
                 "symbol": query["symbol"],
                 "row_count": len(symbol_members),
                 "response_bytes": int(item["response_bytes"]),
-                "response_sha256": item["response_sha256"],
+                "source_response_sha256": item["response_sha256"],
+                "member_commitment_sha256": _member_response_commitment(symbol_members),
             }
         )
     if len(members) > config["资源上限"]["总快照"]:
@@ -1276,6 +1307,10 @@ def validate_frozen_semantics(
         or frozen.get("batch_id") != plan.get("batch_id")
         or not isinstance(members, list)
         or not isinstance(receipts, list)
+        or len(receipts) != len(plan.get("queries", []))
+        or isinstance(frozen.get("remote_peak_rss_bytes"), bool)
+        or not isinstance(frozen.get("remote_peak_rss_bytes"), int)
+        or not 0 < frozen["remote_peak_rss_bytes"] <= 268435456
         or frozen.get("remote_rss_limit_enforced") is not True
         or frozen.get("stdout_incrementally_bounded") is not True
         or frozen.get("safety")
@@ -1317,6 +1352,8 @@ def validate_frozen_semantics(
         "aggressive_buy_fillable",
         "aggressive_sell_fillable",
         "member_sequence",
+        "raw_row_bytes",
+        "raw_row_sha256",
     }
     collected = frozen.get("collected_at_ms")
     observed_ms = int(
@@ -1332,6 +1369,37 @@ def validate_frozen_semantics(
         event = member.get("market_event_time_ms")
         arrival = member.get("source_arrival_time_ms")
         visible = int(member["confirmed_visible_time_ms"])
+        producer_proved = member.get("producer_identity_proved")
+        expected_pass = producer_proved is True and event is not None and arrival is not None
+        if (
+            not isinstance(producer_proved, bool)
+            or (event is None) != (member.get("market_event_time_source") is None)
+            or member.get("market_event_time_source")
+            not in {None, "payload.E", "payload.last_event_time_ms"}
+            or (arrival is None) != (member.get("source_arrival_time_source") is None)
+            or member.get("source_arrival_time_source")
+            not in {None, "payload.last_local_recv_ts_ms"}
+            or visible != (int(arrival) if arrival is not None else collected)
+            or member.get("confirmed_visible_time_source")
+            != (
+                "payload.last_local_recv_ts_ms"
+                if arrival is not None
+                else "local_post_receive_clock"
+            )
+            or member.get("time_semantics_status")
+            != ("pass" if expected_pass else "unknown")
+            or member.get("time_semantics_reason")
+            != (None if expected_pass else "SOURCE_TIME_SEMANTICS_INCOMPLETE")
+        ):
+            raise ValueError("FROZEN_TIME_SEMANTICS_DRIFT")
+        if (
+            isinstance(member.get("raw_row_bytes"), bool)
+            or not isinstance(member.get("raw_row_bytes"), int)
+            or member["raw_row_bytes"] <= 0
+            or SHA_PATTERN.fullmatch(str(member.get("raw_row_sha256", ""))) is None
+            or member["raw_row_sha256"] == "0" * 64
+        ):
+            raise ValueError("FROZEN_QUERY_RECEIPT_DRIFT")
         if (
             member["symbol"] not in plan_symbol_set(plan)
             or not lower <= capture < upper
@@ -1344,14 +1412,27 @@ def validate_frozen_semantics(
         ):
             raise ValueError("FROZEN_MEMBER_WINDOW_DRIFT")
     expected_receipts = {}
-    for receipt in receipts:
+    for query, receipt in zip(plan["queries"], receipts, strict=True):
         if (
             not isinstance(receipt, Mapping)
             or set(receipt)
-            != {"query_id", "symbol", "row_count", "response_bytes", "response_sha256"}
-            or SHA_PATTERN.fullmatch(str(receipt.get("response_sha256", ""))) is None
+            != {
+                "query_id",
+                "symbol",
+                "row_count",
+                "response_bytes",
+                "source_response_sha256",
+                "member_commitment_sha256",
+            }
+            or receipt.get("query_id") != query["query_id"]
+            or SHA_PATTERN.fullmatch(str(receipt.get("source_response_sha256", ""))) is None
+            or receipt.get("source_response_sha256") == "0" * 64
+            or SHA_PATTERN.fullmatch(str(receipt.get("member_commitment_sha256", ""))) is None
             or not isinstance(receipt.get("response_bytes"), int)
             or receipt["response_bytes"] <= 0
+            or not isinstance(receipt.get("row_count"), int)
+            or receipt["row_count"] < 0
+            or receipt["query_id"] in expected_receipts
         ):
             raise ValueError("FROZEN_QUERY_RECEIPT_DRIFT")
         expected_receipts[receipt["query_id"]] = receipt
@@ -1359,9 +1440,14 @@ def validate_frozen_semantics(
         raise ValueError("FROZEN_QUERY_RECEIPT_DRIFT")
     for query in plan["queries"]:
         receipt = expected_receipts[query["query_id"]]
+        query_members = [member for member in members if member["symbol"] == query["symbol"]]
         if (
             receipt["symbol"] != query["symbol"]
             or receipt["row_count"] != denominators.get(query["symbol"], 0)
+            or receipt["response_bytes"]
+            != sum(member["raw_row_bytes"] for member in query_members)
+            or receipt["member_commitment_sha256"]
+            != _member_response_commitment(query_members)
         ):
             raise ValueError("FROZEN_QUERY_RECEIPT_DRIFT")
     if frozen.get("database_response_bytes") != sum(
@@ -1628,6 +1714,25 @@ def _stage_resource_facts(
 
 
 def _validate_resource_facts(facts: Mapping[str, Any], limits: Mapping[str, Any]) -> None:
+    positive_values = [
+        facts.get("database_response_bytes"),
+        facts.get("snapshot_count"),
+        facts.get("combined_process_peak_rss_bytes"),
+        *facts.get("stage_peak_rss_bytes", {}).values(),
+        *facts.get("remote_peak_rss_bytes", {}).values(),
+    ]
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0
+        for value in positive_values
+    ):
+        raise ValueError("BATCH_RESOURCE_FACTS_INVALID")
+    for field in ("business_query_count", "estimated_database_rows"):
+        value = facts.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError("BATCH_RESOURCE_FACTS_INVALID")
+    retry_count = facts.get("query_retry_count")
+    if isinstance(retry_count, bool) or not isinstance(retry_count, int) or retry_count < 0:
+        raise ValueError("BATCH_RESOURCE_FACTS_INVALID")
     if facts["elapsed_seconds"] > limits["总时限秒"]:
         raise ValueError("BATCH_ELAPSED_LIMIT_EXCEEDED")
     if facts["combined_process_peak_rss_bytes"] > limits["RSS字节"]:

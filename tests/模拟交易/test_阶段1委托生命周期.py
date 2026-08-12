@@ -12,7 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "模拟交易" / "验证阶段1委托生命周期.py"
 CONFIG = ROOT / "config" / "模拟交易" / "任务-000103阶段1委托生命周期.json"
-FORMAL_BATCH = "stage1-simulated-lifecycle-20260812T192916Z-720766dc5013"
+FORMAL_BATCH = "stage1-simulated-lifecycle-20260812T195103Z-f0f4ff04c8e8"
 
 
 @pytest.fixture(scope="module")
@@ -389,7 +389,7 @@ def test_published_validation_rejects_rehashed_resource_understatement(
 def test_metadata_evidence_rejects_outer_safety_drift(module, metadata):
     evidence = {
         "schema_version": "zhishi-simulated-order-metadata-evidence/v1",
-        "batch_id": "stage1-simulated-lifecycle-20260812T192916Z-720766dc5013",
+        "batch_id": "stage1-simulated-lifecycle-20260812T195103Z-f0f4ff04c8e8",
         "intent_sha256": "a" * 64,
         "observed_at": "2026-08-12T19:11:36Z",
         "root_compatible_read_only": False,
@@ -404,6 +404,65 @@ def test_metadata_evidence_rejects_outer_safety_drift(module, metadata):
             batch=evidence["batch_id"],
             intent_sha="a" * 64,
             rss_limit=268435456,
+        )
+
+
+def test_remote_rss_evidence_rejects_negative_values(module, metadata, config):
+    metadata["remote_peak_rss_bytes"] = -1
+    with pytest.raises(ValueError, match="REMOTE_METADATA_IDENTITY_INVALID"):
+        module.validate_metadata_snapshot(metadata)
+
+    directory = ROOT / "artifacts" / "模拟交易" / "阶段1委托生命周期" / FORMAL_BATCH
+    explain = json.loads((directory / "query-explain.json").read_text(encoding="utf-8"))
+    plan = json.loads((directory / "query-plan.json").read_text(encoding="utf-8"))
+    explain["remote_peak_rss_bytes"] = -1
+    with pytest.raises(ValueError, match="EXPLAIN_EVIDENCE_SEMANTIC_DRIFT"):
+        module.validate_explain_evidence(explain, plan=plan, config=config)
+
+    frozen = json.loads((directory / "frozen-input.json").read_text(encoding="utf-8"))
+    frozen["remote_peak_rss_bytes"] = -1
+    with pytest.raises(ValueError, match="FROZEN_EVIDENCE_SEMANTIC_DRIFT"):
+        module.validate_frozen_semantics(
+            frozen,
+            plan=plan,
+            metadata_observed_at="2026-08-12T19:29:17Z",
+            cutoff_ms=plan["time_upper_ms"],
+        )
+
+
+def test_frozen_evidence_rejects_time_semantic_relation_drift(module):
+    directory = ROOT / "artifacts" / "模拟交易" / "阶段1委托生命周期" / FORMAL_BATCH
+    frozen = json.loads((directory / "frozen-input.json").read_text(encoding="utf-8"))
+    plan = json.loads((directory / "query-plan.json").read_text(encoding="utf-8"))
+    member = frozen["members"][0]
+    member["producer_identity_proved"] = False
+    member["source_arrival_time_ms"] = None
+    member["source_arrival_time_source"] = None
+    member["time_semantics_status"] = "pass"
+    with pytest.raises(ValueError, match="FROZEN_TIME_SEMANTICS_DRIFT"):
+        module.validate_frozen_semantics(
+            frozen,
+            plan=plan,
+            metadata_observed_at="2026-08-12T19:29:17Z",
+            cutoff_ms=plan["time_upper_ms"],
+        )
+
+
+def test_frozen_evidence_rejects_rewritten_response_receipts(module):
+    directory = ROOT / "artifacts" / "模拟交易" / "阶段1委托生命周期" / FORMAL_BATCH
+    frozen = json.loads((directory / "frozen-input.json").read_text(encoding="utf-8"))
+    plan = json.loads((directory / "query-plan.json").read_text(encoding="utf-8"))
+    for receipt in frozen["query_receipts"]:
+        receipt["response_bytes"] = 1
+        receipt["source_response_sha256"] = "a" * 64
+        receipt["member_commitment_sha256"] = "b" * 64
+    frozen["database_response_bytes"] = 2
+    with pytest.raises(ValueError, match="FROZEN_QUERY_RECEIPT_DRIFT"):
+        module.validate_frozen_semantics(
+            frozen,
+            plan=plan,
+            metadata_observed_at="2026-08-12T19:29:17Z",
+            cutoff_ms=plan["time_upper_ms"],
         )
 
 
@@ -664,8 +723,8 @@ def test_formal_batch_manifest_and_replays_are_reproducible(module):
     assert result == {
         "status": "ok",
         "batch_id": FORMAL_BATCH,
-        "manifest_sha256": "5a62de1fe46981c3c934c62f7f4d47eb9501630a9e0111a4b193f45caec71f03",
-        "summary_sha256": "422df2b1d6ae702648d181f973a07eec20b2ca2fee27233bbd19333c219e31ab",
+        "manifest_sha256": "668b5affccbb1fe898205e26c944d8e65a13339741f9024cf2b846d98b537c24",
+        "summary_sha256": "7ad51875c9081ac7b7b05cb720a704ba2f38406841c5964168ee11fd53f6fe54",
     }
     intent = json.loads(
         (
