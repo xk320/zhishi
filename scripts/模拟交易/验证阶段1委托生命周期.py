@@ -26,6 +26,9 @@ from typing import Any, Iterable, Mapping
 SCRIPT_VERSION = "stage1-simulated-order-lifecycle-1.0"
 CONFIG_RELATIVE_PATH = Path("config/模拟交易/任务-000103阶段1委托生命周期.json")
 TASK_RELATIVE_PATH = Path("docs/研发中心/任务/任务-000103.md")
+PRODUCER_EVIDENCE_RELATIVE_PATH = Path(
+    "config/模拟交易/任务-000103订单簿生产者时间语义证据.json"
+)
 BATCH_PATTERN = re.compile(r"^stage1-simulated-lifecycle-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$")
 SHA_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 FORBIDDEN_SQL = re.compile(
@@ -182,6 +185,8 @@ def validate_config(config: Mapping[str, Any]) -> None:
     ]:
         raise ValueError("CONFIG_HORIZON_SCOPE_MISMATCH")
     if config["生产者来源合同"] != {
+        "证据路径": str(PRODUCER_EVIDENCE_RELATIVE_PATH),
+        "证据SHA-256": "96771a789beb74a79aa806553e241699051a71aa94a58cfd9af66d881bbe198a",
         "仓库快照": "orderbook-intelligence-service-release-20260731",
         "提交": "030499faca3d6955d75c75cbc59656a4981f6c05",
         "real_orderbook.py SHA-256": "fdb17777bd325aa52b55a5b03af5187ebc5804ded8ab3cde81237561be17639e",
@@ -242,6 +247,69 @@ def _load_config(repo_root: Path) -> tuple[dict[str, Any], Path]:
         raise ValueError("CONFIG_OBJECT_REQUIRED")
     validate_config(value)
     return value, path
+
+
+def validate_producer_evidence(
+    evidence: Mapping[str, Any], contract: Mapping[str, Any]
+) -> None:
+    expected_governance = {
+        "任务-000071 SHA-256": "f7576c6eaeecd23658872b698878b79ad2a92e30d7dadaa3b947e65c4c9bdaf7",
+        "设计合同 SHA-256": "0ce170d8143ea1874345d447a9757012acf69afb98c9b1c084c219d0220988a7",
+        "源代码合同 SHA-256": "817be170438d94193e91146b1f73b4fff1d295b3f98c6448cf02240a5d15a158",
+    }
+    if (
+        evidence.get("schema_version") != "zhishi-orderbook-producer-time-semantics/v1"
+        or evidence.get("仓库快照") != contract["仓库快照"]
+        or evidence.get("提交") != contract["提交"]
+        or evidence.get("既有治理证据") != expected_governance
+        or evidence.get("字段映射", {}).get("证明条件")
+        != {"source": contract["来源"], "snapshot_schema_version": contract["快照Schema版本"]}
+    ):
+        raise ValueError("PRODUCER_EVIDENCE_IDENTITY_INVALID")
+    files = evidence.get("源码文件")
+    if not isinstance(files, list) or len(files) != 2:
+        raise ValueError("PRODUCER_EVIDENCE_FILES_INVALID")
+    expected_files = {
+        "src/orderbook_service/real_orderbook.py": contract["real_orderbook.py SHA-256"],
+        "src/orderbook_service/storage.py": contract["storage.py SHA-256"],
+    }
+    observed_files = {item.get("路径"): item.get("SHA-256") for item in files}
+    if observed_files != expected_files:
+        raise ValueError("PRODUCER_EVIDENCE_SOURCE_SHA_INVALID")
+    for item in files:
+        fragments = item.get("语义片段")
+        if not isinstance(fragments, list) or not fragments:
+            raise ValueError("PRODUCER_EVIDENCE_FRAGMENT_MISSING")
+        for fragment in fragments:
+            text = fragment.get("原文")
+            digest = fragment.get("SHA-256")
+            if not isinstance(text, str) or sha256_bytes(text.encode("utf-8")) != digest:
+                raise ValueError("PRODUCER_EVIDENCE_FRAGMENT_DRIFT")
+
+
+def _assert_producer_evidence(repo_root: Path, config: Mapping[str, Any]) -> dict[str, Any]:
+    contract = config["生产者来源合同"]
+    path = repo_root / str(contract["证据路径"])
+    if path != repo_root / PRODUCER_EVIDENCE_RELATIVE_PATH:
+        raise ValueError("PRODUCER_EVIDENCE_PATH_INVALID")
+    if sha256_path(path) != contract["证据SHA-256"]:
+        raise ValueError("PRODUCER_EVIDENCE_SHA_DRIFT")
+    evidence = read_json(path)
+    validate_producer_evidence(evidence, contract)
+    governance_paths = {
+        "任务-000071 SHA-256": repo_root / "docs/研发中心/任务/任务-000071.md",
+        "设计合同 SHA-256": repo_root
+        / "docs/superpowers/specs/task-000071-orderbook-shared-schema-design.md",
+        "源代码合同 SHA-256": repo_root
+        / "artifacts/审计/订单簿共享对象映射/源代码合同.json",
+    }
+    for name, governance_path in governance_paths.items():
+        if sha256_path(governance_path) != evidence["既有治理证据"][name]:
+            raise ValueError("PRODUCER_GOVERNANCE_EVIDENCE_DRIFT")
+    return {
+        "path": str(PRODUCER_EVIDENCE_RELATIVE_PATH),
+        "sha256": sha256_path(path),
+    }
 
 
 def _batch_directory(repo_root: Path, batch: str) -> Path:
@@ -310,6 +378,7 @@ def prepare(repo_root: Path, batch: str) -> dict[str, Any]:
         "producer_contract_sha256": sha256_bytes(
             canonical_bytes(config["生产者来源合同"])
         ),
+        "producer_evidence": _assert_producer_evidence(repo_root, config),
         "resource_limits": config["资源上限"],
         "process": {
             "elapsed_seconds": round(time.monotonic() - started, 6),
@@ -336,31 +405,57 @@ def _assert_intent(repo_root: Path, batch: str) -> tuple[dict[str, Any], dict[st
         if intent.get(key) != value:
             raise ValueError(f"INTENT_{key.upper()}_DRIFT")
     _assert_upstream(repo_root, config)
+    if intent.get("producer_evidence") != _assert_producer_evidence(repo_root, config):
+        raise ValueError("INTENT_PRODUCER_EVIDENCE_DRIFT")
     return intent, config, directory
 
 
 REMOTE_METADATA_PROGRAM = r'''
-import hashlib,json,os,shutil,subprocess
+import hashlib,json,os,resource,selectors,shutil,subprocess,time
 table="order_book_raw_snapshots"
 client=shutil.which("mysql") or shutil.which("mariadb")
 if not client: raise SystemExit("MYSQL_CLIENT_MISSING")
 clean_env={"PATH":"/usr/bin:/bin","LC_ALL":"C","MYSQL_TEST_LOGIN_FILE":"/dev/null"}
+rss_limit=268435456
+stdout_limit=65536
+stderr_limit=65536
+resource.setrlimit(resource.RLIMIT_AS,(rss_limit,rss_limit))
 def file_sha(path):
  h=hashlib.sha256()
  with open(path,"rb") as stream:
   for chunk in iter(lambda:stream.read(1048576),b""): h.update(chunk)
  return h.hexdigest()
+def run_command(command):
+ p=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=clean_env)
+ selector=selectors.DefaultSelector(); buffers={"stdout":bytearray(),"stderr":bytearray()}
+ selector.register(p.stdout,selectors.EVENT_READ,("stdout",stdout_limit)); selector.register(p.stderr,selectors.EVENT_READ,("stderr",stderr_limit))
+ deadline=time.monotonic()+30
+ try:
+  while selector.get_map():
+   left=deadline-time.monotonic()
+   if left<=0: raise SystemExit("MYSQL_QUERY_TIMEOUT")
+   for key,_ in selector.select(min(0.1,left)):
+    name,limit=key.data; chunk=os.read(key.fileobj.fileno(),min(65536,limit+1))
+    if not chunk: selector.unregister(key.fileobj); continue
+    buffers[name].extend(chunk)
+    if len(buffers[name])>limit: raise SystemExit("MYSQL_RESPONSE_LIMIT_EXCEEDED" if name=="stdout" else "MYSQL_LOG_LIMIT_EXCEEDED")
+  if p.wait(timeout=max(0.1,deadline-time.monotonic())): raise SystemExit("MYSQL_READ_FAILED")
+  return bytes(buffers["stdout"]).decode()
+ finally:
+  if p.poll() is None: p.kill(); p.wait()
 def run(sql):
- p=subprocess.run([client,"--no-defaults","--batch","--raw","--skip-column-names","--connect-timeout=5","--database=orderbook","--execute",sql],capture_output=True,text=True,timeout=30,check=False,env=clean_env)
- if p.returncode: raise SystemExit("MYSQL_READ_FAILED")
- return p.stdout
+ return run_command([client,"--no-defaults","--batch","--raw","--skip-column-names","--connect-timeout=5","--database=orderbook","--execute",sql])
 def lines(text): return [x.split("\t") for x in text.splitlines() if x]
 tables=run("SELECT TABLE_NAME,ENGINE,COALESCE(TABLE_ROWS,0) FROM information_schema.TABLES WHERE TABLE_SCHEMA='orderbook' AND TABLE_NAME='order_book_raw_snapshots' ORDER BY TABLE_NAME")
 columns=run("SELECT TABLE_NAME,COLUMN_NAME,ORDINAL_POSITION,DATA_TYPE,IS_NULLABLE,COLUMN_COMMENT FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='orderbook' AND TABLE_NAME='order_book_raw_snapshots' ORDER BY ORDINAL_POSITION")
 privileges=run("SELECT TABLE_NAME,PRIVILEGE_TYPE,IS_GRANTABLE FROM information_schema.TABLE_PRIVILEGES WHERE TABLE_SCHEMA='orderbook' AND TABLE_NAME='order_book_raw_snapshots' ORDER BY PRIVILEGE_TYPE")
 indexes=run("SELECT TABLE_NAME,INDEX_NAME,NON_UNIQUE,SEQ_IN_INDEX,COLUMN_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='orderbook' AND TABLE_NAME='order_book_raw_snapshots' ORDER BY INDEX_NAME,SEQ_IN_INDEX")
-version=subprocess.run([client,"--no-defaults","--version"],capture_output=True,text=True,timeout=5,check=True,env=clean_env).stdout
-out={"protocol":"zhishi-stage1-simulated-lifecycle-metadata/1","uid":os.getuid(),"client_sha256":file_sha(client),"client_version_sha256":hashlib.sha256(version.encode()).hexdigest(),"select_capability":True,"option_files_disabled":True,"login_path_redirected":True,"credential_environment_cleared":True,"metadata_query_count":4,"tables":lines(tables),"columns":lines(columns),"table_privileges":lines(privileges),"indexes":lines(indexes),"load1":os.getloadavg()[0],"cpu_count":os.cpu_count() or 1}
+version=run_command([client,"--no-defaults","--version"])
+self_rss=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024
+child_rss=resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss*1024
+peak=max(self_rss,child_rss)
+if peak>rss_limit: raise SystemExit("REMOTE_RSS_LIMIT_EXCEEDED")
+out={"protocol":"zhishi-stage1-simulated-lifecycle-metadata/1","uid":os.getuid(),"client_sha256":file_sha(client),"client_version_sha256":hashlib.sha256(version.encode()).hexdigest(),"select_capability":True,"option_files_disabled":True,"login_path_redirected":True,"credential_environment_cleared":True,"metadata_query_count":4,"tables":lines(tables),"columns":lines(columns),"table_privileges":lines(privileges),"indexes":lines(indexes),"load1":os.getloadavg()[0],"cpu_count":os.cpu_count() or 1,"remote_peak_rss_bytes":peak,"remote_rss_limit_enforced":True,"stdout_incrementally_bounded":True}
 print(json.dumps(out,sort_keys=True,separators=(",",":")))
 '''
 
@@ -469,6 +564,10 @@ def validate_metadata_snapshot(value: Mapping[str, Any]) -> None:
         or value.get("login_path_redirected") is not True
         or value.get("credential_environment_cleared") is not True
         or value.get("metadata_query_count") != 4
+        or value.get("remote_rss_limit_enforced") is not True
+        or value.get("stdout_incrementally_bounded") is not True
+        or not isinstance(value.get("remote_peak_rss_bytes"), int)
+        or value["remote_peak_rss_bytes"] > 268435456
     ):
         raise ValueError("REMOTE_METADATA_IDENTITY_INVALID")
     for name in ("client_sha256", "client_version_sha256"):
@@ -746,7 +845,9 @@ def _source_arrival_time(payload: Mapping[str, Any]) -> tuple[int | None, str | 
     return item, "payload.last_local_recv_ts_ms"
 
 
-def normalize_snapshot(row: list[str], *, collected_at_ms: int) -> dict[str, Any]:
+def normalize_snapshot(
+    row: list[str], *, collected_at_ms: int, producer_evidence_proved: bool = False
+) -> dict[str, Any]:
     if len(row) != 5:
         raise ValueError("SNAPSHOT_ROW_SHAPE_INVALID")
     snapshot_id, symbol, capture_raw, created_raw, payload_raw = row
@@ -758,7 +859,7 @@ def normalize_snapshot(row: list[str], *, collected_at_ms: int) -> dict[str, Any
     if not isinstance(payload, Mapping):
         raise ValueError("PAYLOAD_OBJECT_REQUIRED")
     body = _payload_body(payload)
-    producer_identity_proved = (
+    producer_identity_proved = producer_evidence_proved and (
         payload.get("snapshot_schema_version") == 1
         and payload.get("source") == "canonical_book"
     )
@@ -899,7 +1000,11 @@ def collect(repo_root: Path, batch: str) -> dict[str, Any]:
         validate_raw_member_order(raw_rows)
         symbol_members = []
         for member_sequence, raw_row in enumerate(raw_rows):
-            normalized = normalize_snapshot(raw_row, collected_at_ms=collected_at_ms)
+            normalized = normalize_snapshot(
+                raw_row,
+                collected_at_ms=collected_at_ms,
+                producer_evidence_proved=True,
+            )
             if normalized["symbol"] != query["symbol"]:
                 raise ValueError("DATABASE_SYMBOL_DRIFT")
             normalized["member_sequence"] = member_sequence
@@ -1010,10 +1115,10 @@ def simulate(frozen: Mapping[str, Any]) -> dict[str, Any]:
         )
     groups = []
     stage_statuses = (
-        ("created", ("created",)),
-        ("sent", ("sent",)),
-        ("acknowledged", ("acknowledged",)),
-        ("evaluated", ("evaluated",)),
+        ("created", ("created", "unknown")),
+        ("sent", ("sent", "unknown")),
+        ("acknowledged", ("acknowledged", "unknown")),
+        ("evaluated", ("evaluated", "unknown")),
         ("terminal", ("filled", "canceled", "unknown")),
     )
     all_statuses = (
@@ -1052,7 +1157,7 @@ def simulate(frozen: Mapping[str, Any]) -> dict[str, Any]:
                 )
                 for row in subset
             ]
-            counts = Counter(state for state in observed_states if state is not None)
+            counts = Counter("unknown" if state is None else state for state in observed_states)
             for result_status in statuses:
                 state_counts = {
                     status: counts[status] if status == result_status else 0
@@ -1175,13 +1280,14 @@ def _stage_resource_facts(
         "validate": _rss_bytes() if validate_rss_bytes is None else validate_rss_bytes,
     }
     remote = {
+        "probe": int(metadata["metadata"]["remote_peak_rss_bytes"]),
         "plan": int(explain["remote_peak_rss_bytes"]),
         "collect": int(frozen["remote_peak_rss_bytes"]),
     }
     if not all(
         value.get("remote_rss_limit_enforced") is True
         and value.get("stdout_incrementally_bounded") is True
-        for value in (explain, frozen)
+        for value in (metadata["metadata"], explain, frozen)
     ):
         raise ValueError("REMOTE_RESOURCE_ENFORCEMENT_MISSING")
     return {
@@ -1213,9 +1319,17 @@ def _validate_resource_facts(facts: Mapping[str, Any], limits: Mapping[str, Any]
 
 
 def _validate_evidence(directory: Path, config: Mapping[str, Any]) -> dict[str, Any]:
-    present = {path.name for path in directory.iterdir() if path.is_file()}
-    if not PENDING_FILES_BEFORE_VALIDATE.issubset(present):
-        raise ValueError("BATCH_REQUIRED_FILES_MISSING")
+    entries = list(directory.iterdir())
+    if any(path.is_symlink() or not path.is_file() for path in entries):
+        raise ValueError("BATCH_FILE_SET_INVALID")
+    present = {path.name for path in entries}
+    allowed = (
+        PUBLISHED_FILES | {"manifest.json"}
+        if "summary.json" in present
+        else PENDING_FILES_BEFORE_VALIDATE
+    )
+    if present != allowed:
+        raise ValueError("BATCH_FILE_SET_INVALID")
     frozen = read_json(directory / "frozen-input.json")
     lifecycle = read_json(directory / "lifecycle.json")
     expected = simulate(frozen)
@@ -1246,6 +1360,11 @@ def _validate_evidence(directory: Path, config: Mapping[str, Any]) -> dict[str, 
 def validate_batch(repo_root: Path, batch: str) -> dict[str, Any]:
     intent, config, directory = _assert_intent(repo_root, batch)
     if directory == _batch_directory(repo_root, batch):
+        entries = list(directory.iterdir())
+        if any(path.is_symlink() or not path.is_file() for path in entries):
+            raise ValueError("BATCH_FILE_SET_INVALID")
+        if {path.name for path in entries} != PUBLISHED_FILES | {"manifest.json"}:
+            raise ValueError("BATCH_FILE_SET_INVALID")
         manifest = read_json(directory / "manifest.json")
         if set(manifest.get("files", {})) != PUBLISHED_FILES:
             raise ValueError("BATCH_FILE_SET_INVALID")

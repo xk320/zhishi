@@ -12,7 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "模拟交易" / "验证阶段1委托生命周期.py"
 CONFIG = ROOT / "config" / "模拟交易" / "任务-000103阶段1委托生命周期.json"
-FORMAL_BATCH = "stage1-simulated-lifecycle-20260812T182049Z-9365dbddbc60"
+FORMAL_BATCH = "stage1-simulated-lifecycle-20260812T183616Z-d34b4533bc1d"
 
 
 @pytest.fixture(scope="module")
@@ -39,6 +39,9 @@ def metadata():
         "login_path_redirected": True,
         "credential_environment_cleared": True,
         "metadata_query_count": 4,
+        "remote_peak_rss_bytes": 33554432,
+        "remote_rss_limit_enforced": True,
+        "stdout_incrementally_bounded": True,
         "client_sha256": "a" * 64,
         "client_version_sha256": "b" * 64,
         "tables": [["order_book_raw_snapshots", "InnoDB", "7938"]],
@@ -186,6 +189,13 @@ def test_remote_query_program_enforces_memory_and_stream_limits(module):
     assert "remote_peak_rss_bytes" in program
 
 
+def test_remote_metadata_program_enforces_memory_and_stream_limits(module):
+    assert "setrlimit" in module.REMOTE_METADATA_PROGRAM
+    assert "selectors.DefaultSelector" in module.REMOTE_METADATA_PROGRAM
+    assert "capture_output=True" not in module.REMOTE_METADATA_PROGRAM
+    assert "remote_peak_rss_bytes" in module.REMOTE_METADATA_PROGRAM
+
+
 def test_task_fingerprint_excludes_delivery_execution_record(module, tmp_path):
     task = tmp_path / "task.md"
     task.write_text(
@@ -244,6 +254,38 @@ def test_published_validation_recomputes_semantics(module, config, tmp_path, mon
         module.validate_batch(tmp_path, FORMAL_BATCH)
 
 
+def test_published_validation_rejects_unmanifested_file(module, config, tmp_path, monkeypatch):
+    source = ROOT / "artifacts" / "模拟交易" / "阶段1委托生命周期" / FORMAL_BATCH
+    copied = tmp_path / FORMAL_BATCH
+    shutil.copytree(source, copied)
+    (copied / "unmanifested-raw-evidence.json").write_text(
+        '{"bids":[["100","1"]]}\n', encoding="utf-8"
+    )
+    intent = json.loads((copied / "intent.json").read_text(encoding="utf-8"))
+    monkeypatch.setattr(module, "_batch_directory", lambda _root, _batch: copied)
+    monkeypatch.setattr(module, "_assert_intent", lambda _root, _batch: (intent, config, copied))
+    with pytest.raises(ValueError, match="BATCH_FILE_SET_INVALID"):
+        module.validate_batch(tmp_path, FORMAL_BATCH)
+
+
+@pytest.mark.parametrize("entry_kind", ["directory", "symlink"])
+def test_published_validation_rejects_non_regular_entry(
+    module, config, tmp_path, monkeypatch, entry_kind
+):
+    source = ROOT / "artifacts" / "模拟交易" / "阶段1委托生命周期" / FORMAL_BATCH
+    copied = tmp_path / FORMAL_BATCH
+    shutil.copytree(source, copied)
+    if entry_kind == "directory":
+        (copied / "unexpected").mkdir()
+    else:
+        (copied / "unexpected").symlink_to(copied / "summary.json")
+    intent = json.loads((copied / "intent.json").read_text(encoding="utf-8"))
+    monkeypatch.setattr(module, "_batch_directory", lambda _root, _batch: copied)
+    monkeypatch.setattr(module, "_assert_intent", lambda _root, _batch: (intent, config, copied))
+    with pytest.raises(ValueError, match="BATCH_FILE_SET_INVALID"):
+        module.validate_batch(tmp_path, FORMAL_BATCH)
+
+
 def test_capture_time_never_becomes_market_event_time(module, payload):
     row = module.normalize_snapshot(
         ["id", "BTCUSDT", "1000", "1001", json.dumps(payload)],
@@ -279,11 +321,23 @@ def test_orderbook_wrapper_binds_exact_event_and_arrival_fields(module, proven_w
     row = module.normalize_snapshot(
         ["id", "BTCUSDT", "1000", "1001", json.dumps(proven_wrapper)],
         collected_at_ms=1100,
+        producer_evidence_proved=True,
     )
     assert row["market_event_time_ms"] == 900
     assert row["source_arrival_time_ms"] == 950
     assert row["time_semantics_status"] == "pass"
     assert row["confirmed_visible_time_ms"] == 950
+
+
+def test_self_reported_producer_identity_without_repository_evidence_is_unknown(
+    module, proven_wrapper
+):
+    row = module.normalize_snapshot(
+        ["id", "BTCUSDT", "1000", "1001", json.dumps(proven_wrapper)],
+        collected_at_ms=1100,
+    )
+    assert row["producer_identity_proved"] is False
+    assert row["time_semantics_status"] == "unknown"
 
 
 def test_orderbook_object_levels_are_supported(module):
@@ -300,6 +354,7 @@ def test_orderbook_object_levels_are_supported(module):
     row = module.normalize_snapshot(
         ["id", "BTCUSDT", "1000", "1001", json.dumps(wrapper)],
         collected_at_ms=1100,
+        producer_evidence_proved=True,
     )
     assert row["book_valid"] is True
     assert row["time_semantics_status"] == "pass"
@@ -323,6 +378,7 @@ def test_passive_order_never_fakes_queue_fill(module, proven_wrapper):
     member = module.normalize_snapshot(
         ["id", "BTCUSDT", "1000", "1001", json.dumps(proven_wrapper)],
         collected_at_ms=1100,
+        producer_evidence_proved=True,
     )
     result = module.simulate_member(member, "被动限价撤销", "做多", "基准")
     assert result["terminal_state"] == "canceled"
@@ -340,10 +396,44 @@ def test_unknown_time_prevents_all_lifecycle_actions(module, payload):
     assert result["reason_code"] == "SOURCE_TIME_SEMANTICS_INCOMPLETE"
 
 
+def test_unknown_time_preserves_every_stage_denominator(module, payload):
+    member = module.normalize_snapshot(
+        ["id", "BTCUSDT", "1000", "1001", json.dumps(payload)],
+        collected_at_ms=1100,
+    )
+    result = module.simulate(
+        {"schema_version": "zhishi-simulated-order-frozen-input/v1", "members": [member]}
+    )
+    relevant = [
+        row
+        for row in result["groups"]
+        if row["symbol"] == "BTCUSDT"
+        and row["direction"] == "做多"
+        and row["scenario"] == "被动限价撤销"
+        and row["clock"] == "基准"
+        and row["horizon"] == "主研究尺度：4小时"
+    ]
+    for stage in ("created", "sent", "acknowledged", "evaluated", "terminal"):
+        stage_rows = [row for row in relevant if row["stage"] == stage]
+        assert sum(row["observed"] for row in stage_rows) == 1
+        assert next(row for row in stage_rows if row["result_status"] == "unknown")["observed"] == 1
+
+
+def test_producer_evidence_is_bound_and_reproducible(module, config):
+    evidence_path = ROOT / config["生产者来源合同"]["证据路径"]
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    assert module.sha256_path(evidence_path) == config["生产者来源合同"]["证据SHA-256"]
+    module.validate_producer_evidence(evidence, config["生产者来源合同"])
+    for source_file in evidence["源码文件"]:
+        for fragment in source_file["语义片段"]:
+            assert module.sha256_bytes(fragment["原文"].encode("utf-8")) == fragment["SHA-256"]
+
+
 def test_symmetric_simulation_is_deterministic(module, proven_wrapper):
     member = module.normalize_snapshot(
         ["id", "BTCUSDT", "1000", "1001", json.dumps(proven_wrapper)],
         collected_at_ms=1100,
+        producer_evidence_proved=True,
     )
     frozen = {"schema_version": "zhishi-simulated-order-frozen-input/v1", "members": [member]}
     first = module.simulate(frozen)
@@ -351,7 +441,7 @@ def test_symmetric_simulation_is_deterministic(module, proven_wrapper):
     assert first == second
     assert first["scenario_count"] == 12
     assert {row["direction"] for row in first["results"]} == {"做多", "做空"}
-    assert len(first["groups"]) == 672
+    assert len(first["groups"]) == 1056
     assert {row["stage"] for row in first["groups"]} == {
         "created",
         "sent",
@@ -400,8 +490,8 @@ def test_formal_batch_manifest_and_replays_are_reproducible(module):
     assert result == {
         "status": "ok",
         "batch_id": FORMAL_BATCH,
-        "manifest_sha256": "aa04c49295095794cf74cf92ad0dd56daee1deb0c7a022cff75296e423c5f4d0",
-        "summary_sha256": "e19ddc7cabcf69584a7023aaac5a4eb2d16f10b5b2547cce89ab0f644c7c8972",
+        "manifest_sha256": "37fbbef689678c5a5f5760d3f9adf079a67c8bfce6770734ae8b4712cb234c26",
+        "summary_sha256": "de962495b9a3184cdecc0777cc9708a6757492897942b6f67c7546dacaba0979",
     }
     intent = json.loads(
         (
