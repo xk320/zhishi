@@ -225,7 +225,22 @@ CONTRACT_CONFLICT_REPAIR_ALLOWED_PATHS = frozenset(
 TASK094_CONTRACT_REPAIR_EXECUTOR = "000095"
 TASK094_CONTRACT_REPAIR_TARGET = "000094"
 TASK094_NATIVE_SCANNER_PATH = "scripts/审计/阶段1时间质量扫描器.c"
+TASK094_EXECUTOR_PATH = "scripts/审计/审计阶段1新正式输入时间质量.py"
+TASK094_CONFIG_PATH = "config/审计/任务-000094逐行时间质量审计.json"
+TASK094_TASK_PATH = "docs/研发中心/任务/任务-000094.md"
 TASK094_RESOURCE_LIMIT_BYTES = 512 * 1024 * 1024
+TASK094_RESOURCE_PROTOCOL = "zhishi-process-group-rusage/v1"
+TASK094_RESOURCE_PLATFORM = "darwin-rusage-maxrss-by-process/v1"
+TASK094_CONTRACT_HEADER_PREFIXES = (
+    "# 任务-000094：",
+    "- 类型：",
+    "- 阶段：",
+    "- 优先级：",
+    "- 执行方案：",
+    "- 方案状态：",
+    "- 执行授权：",
+    "- 并行规则：",
+)
 TASK094_CONTRACT_REPLACEMENTS = (
     (
         "3. 对5180个正式成员执行单进程逐ZIP逐行扫描，保存成员级状态、原因码、计数、时间边界、连续段和指纹，不保存原始业务值。",
@@ -274,6 +289,16 @@ def _task094_native_scanner_allowed(
     )
 
 
+def _contract_conflict_executor(body_task_ids: set[str]) -> str | None:
+    """只接受两个已登记的一次性合同修复入口，未知或混合引用失败关闭。"""
+
+    if body_task_ids == {CONTRACT_CONFLICT_REPAIR_EXECUTOR}:
+        return CONTRACT_CONFLICT_REPAIR_EXECUTOR
+    if body_task_ids == {TASK094_CONTRACT_REPAIR_EXECUTOR}:
+        return TASK094_CONTRACT_REPAIR_EXECUTOR
+    return None
+
+
 def _apply_task094_contract_repair(text: str) -> str | None:
     """逐字应用任务-000094一次性完整合同替换。"""
 
@@ -291,19 +316,31 @@ def _task094_resource_fact_reasons(resource_facts: object) -> tuple[str, ...]:
     if not isinstance(resource_facts, Mapping):
         return ("任务-000094缺少进程组资源事实",)
     required = {
+        "measurement_protocol",
+        "measurement_platform",
+        "rss_unit",
         "process_topology",
         "members_parallelism",
         "controller_max_rss_bytes",
-        "children_max_rss_bytes",
+        "compiler_max_rss_bytes",
+        "unzip_max_rss_bytes",
+        "scanner_max_rss_bytes",
+        "children_conservative_sum_max_rss_bytes",
         "conservative_process_group_max_rss_bytes",
-        "measurement_platform",
     }
     reasons: list[str] = []
     if set(resource_facts) != required:
         reasons.append("任务-000094进程组资源字段不完整")
         return tuple(reasons)
+    if resource_facts.get("measurement_protocol") != TASK094_RESOURCE_PROTOCOL:
+        reasons.append("任务-000094资源测量协议不匹配")
+    if resource_facts.get("measurement_platform") != TASK094_RESOURCE_PLATFORM:
+        reasons.append("任务-000094资源测量平台不匹配")
+    if resource_facts.get("rss_unit") != "bytes":
+        reasons.append("任务-000094资源测量单位不匹配")
     if resource_facts.get("process_topology") != [
         "python_controller",
+        "fixed_clang_compile",
         "fixed_unzip",
         "fixed_scanner",
     ]:
@@ -312,21 +349,64 @@ def _task094_resource_fact_reasons(resource_facts: object) -> tuple[str, ...]:
         reasons.append("任务-000094成员扫描不是串行")
     values = [
         resource_facts.get("controller_max_rss_bytes"),
-        resource_facts.get("children_max_rss_bytes"),
+        resource_facts.get("compiler_max_rss_bytes"),
+        resource_facts.get("unzip_max_rss_bytes"),
+        resource_facts.get("scanner_max_rss_bytes"),
+        resource_facts.get("children_conservative_sum_max_rss_bytes"),
         resource_facts.get("conservative_process_group_max_rss_bytes"),
     ]
-    if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in values):
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value <= 0
+        for value in values
+    ):
         reasons.append("任务-000094进程组RSS事实无效")
     else:
-        controller, children, total = values
+        controller, compiler, unzip, scanner, children, total = values
+        if compiler + unzip + scanner != children:
+            reasons.append("任务-000094子进程RSS保守和不守恒")
         if controller + children != total:
             reasons.append("任务-000094进程组RSS保守和不守恒")
         if total > TASK094_RESOURCE_LIMIT_BYTES:
             reasons.append("任务-000094进程组RSS超过512MiB")
-    platform = resource_facts.get("measurement_platform")
-    if not isinstance(platform, str) or not platform.strip():
-        reasons.append("任务-000094资源测量平台无效")
     return tuple(reasons)
+
+
+def _task094_contract_digest(text: str) -> str | None:
+    """按运行元数据之外的固定任务合同计算任务-000094指纹。"""
+
+    lines = text.splitlines()
+    try:
+        body_start = lines.index("## 依赖与阻塞条件")
+    except ValueError:
+        return None
+    try:
+        body_end = lines.index("## 执行记录", body_start + 1)
+    except ValueError:
+        body_end = len(lines)
+    header = [
+        line
+        for line in lines[:body_start]
+        if any(line.startswith(prefix) for prefix in TASK094_CONTRACT_HEADER_PREFIXES)
+    ]
+    if len(header) != len(TASK094_CONTRACT_HEADER_PREFIXES):
+        return None
+    canonical = (
+        "\n".join(header + [""] + lines[body_start:body_end]).rstrip() + "\n"
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _sha256_path_fact(
+    path_facts: Mapping[str, PathFact], path: str
+) -> str | None:
+    fact = path_facts.get(path)
+    if (
+        fact is None
+        or fact.status not in {"A", "M"}
+        or not isinstance(fact.text, str)
+    ):
+        return None
+    return hashlib.sha256(fact.text.encode("utf-8")).hexdigest()
 IMPLEMENTATION_SHA_PATTERN = re.compile(
     r"^- 实现提交SHA：`([0-9a-f]{40})`$", re.MULTILINE
 )
@@ -1170,7 +1250,7 @@ def _validate_path_facts(
 def _validate_task094_batch_resource_evidence(
     path_facts: Sequence[PathFact] | None, reasons: list[str]
 ) -> None:
-    """从新增最终批次摘要复验固定进程组资源硬门。"""
+    """从最终头文件复验批次身份、生成器绑定与进程组资源硬门。"""
 
     if path_facts is None:
         _append_reason(reasons, "任务-000094缺少可验证批次路径事实")
@@ -1193,6 +1273,30 @@ def _validate_task094_batch_resource_evidence(
     if not isinstance(document, Mapping):
         _append_reason(reasons, "任务-000094最终批次摘要无效")
         return
+    summary_path = PurePosixPath(summaries[0].path)
+    batch_id = summary_path.parent.name
+    if document.get("batch_id") != batch_id:
+        _append_reason(reasons, "任务-000094批次身份与摘要路径不一致")
+
+    facts_by_path = {fact.path: fact for fact in path_facts}
+    bindings = {
+        "executor_sha256": _sha256_path_fact(facts_by_path, TASK094_EXECUTOR_PATH),
+        "config_sha256": _sha256_path_fact(facts_by_path, TASK094_CONFIG_PATH),
+        "scanner_source_sha256": _sha256_path_fact(
+            facts_by_path, TASK094_NATIVE_SCANNER_PATH
+        ),
+    }
+    task_fact = facts_by_path.get(TASK094_TASK_PATH)
+    bindings["task_contract_sha256"] = (
+        _task094_contract_digest(task_fact.text)
+        if task_fact is not None and isinstance(task_fact.text, str)
+        else None
+    )
+    for field, expected in bindings.items():
+        if expected is None:
+            _append_reason(reasons, f"任务-000094资源证据缺少可信{field}来源")
+        elif document.get(field) != expected:
+            _append_reason(reasons, f"任务-000094资源证据{field}未绑定最终头文件")
     for reason in _task094_resource_fact_reasons(document.get("process_group_resource_facts")):
         _append_reason(reasons, reason)
 
@@ -3287,6 +3391,22 @@ def main() -> int:
     change_type = parse_change_type(pr_body)
     task_ids = set(parse_task_references(pr_body))
     body_task_ids = set(task_ids)
+    contract_conflict_executor = None
+    if change_type == CONTRACT_CONFLICT_REPAIR_TYPE:
+        contract_conflict_executor = _contract_conflict_executor(body_task_ids)
+        if contract_conflict_executor is None:
+            print(
+                json.dumps(
+                    {
+                        "eligible": False,
+                        "reasons": ["任务合同冲突修复正文必须精确引用已登记执行任务"],
+                        "changed_paths": list(changed_paths),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 1
     for path in changed_paths:
         match = TASK_FILE_PATTERN.fullmatch(path)
         if match is not None:
@@ -3374,7 +3494,7 @@ def main() -> int:
         path_facts=path_facts,
         enforce_board_sync=True,
         task_ids_override=(
-            (CONTRACT_CONFLICT_REPAIR_EXECUTOR,)
+            (contract_conflict_executor,)
             if change_type == CONTRACT_CONFLICT_REPAIR_TYPE
             else None
         ),
@@ -3403,7 +3523,7 @@ def main() -> int:
                 "",
             )
             if change_type == BLOCKED_CONTRACT_REPAIR_TYPE
-            else CONTRACT_CONFLICT_REPAIR_EXECUTOR
+            else contract_conflict_executor or ""
             if change_type == CONTRACT_CONFLICT_REPAIR_TYPE
             else next(iter(ordered_ids), "")
         ),
