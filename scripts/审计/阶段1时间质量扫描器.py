@@ -1,4 +1,7 @@
-#define _POSIX_C_SOURCE 200809L
+#!/usr/bin/env python3
+"""任务-000094冻结的标准库C扫描热路径源码载体。"""
+
+SCANNER_SOURCE = r"""#define _POSIX_C_SOURCE 200809L
 
 #include <errno.h>
 #include <stdbool.h>
@@ -189,3 +192,4 @@ int main(int argc, char **argv) {
     free(line); free(first_key); free(last_key);
     return 0;
 }
+"""

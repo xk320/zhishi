@@ -30,6 +30,8 @@ SHA_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 STATUSES = ("已证明", "拒绝", "无法判定", "失败", "未成熟", "失效")
 EXPECTED_CONFIG_RELATIVE_PATH = Path("config/审计/任务-000094逐行时间质量审计.json")
 EXPECTED_OUTPUT_RELATIVE_PATH = Path("artifacts/审计/阶段1逐行时间质量")
+SCANNER_MODULE_RELATIVE_PATH = Path("scripts/审计/阶段1时间质量扫描器.py")
+SCANNER_SOURCE_LABEL = "scripts/审计/阶段1时间质量扫描器.c"
 TASK_CONTRACT_HEADER_PREFIXES = (
     "# 任务-000094：", "- 类型：", "- 阶段：", "- 优先级：", "- 执行方案：",
     "- 方案状态：", "- 执行授权：", "- 并行规则：",
@@ -486,18 +488,32 @@ def _check_tool(path_value: Any) -> str:
     return path_value
 
 
+def embedded_scanner_source(module_path: Path) -> bytes:
+    """从受测Python载体提取冻结C源码，不依赖可执行导入或独立.c交付。"""
+
+    if module_path.is_symlink() or not module_path.is_file():
+        raise ValueError("SCANNER_SOURCE_INVALID")
+    text = module_path.read_text(encoding="utf-8")
+    marker = 'SCANNER_SOURCE = r"""'
+    start = text.find(marker)
+    end = text.rfind('"""')
+    if start < 0 or end <= start + len(marker):
+        raise ValueError("SCANNER_SOURCE_INVALID")
+    return text[start + len(marker):end].encode("utf-8")
+
+
 def compile_scanner(
-    source: Path, directory: Path, compiler: str, expected_source_sha256: str | None = None
+    source: bytes, directory: Path, compiler: str, expected_source_sha256: str | None = None
 ) -> Path:
     compiler_path = _check_tool(compiler)
-    if source.is_symlink() or not source.is_file():
-        raise ValueError("SCANNER_SOURCE_INVALID")
-    if expected_source_sha256 is not None and sha256_file(source) != expected_source_sha256:
+    if expected_source_sha256 is not None and sha256_bytes(source) != expected_source_sha256:
         raise ValueError("SCANNER_SOURCE_FINGERPRINT_DRIFT")
     directory.mkdir(parents=True, exist_ok=True)
+    source_path = directory / "stage1-time-quality-scanner.c"
+    source_path.write_bytes(source)
     target = directory / "stage1-time-quality-scanner"
     completed = subprocess.run(
-        [compiler_path, "-O2", "-std=c11", "-Wall", "-Wextra", "-Werror", str(source), "-o", str(target)],
+        [compiler_path, "-O2", "-std=c11", "-Wall", "-Wextra", "-Werror", str(source_path), "-o", str(target)],
         capture_output=True,
         timeout=120,
     )
@@ -853,13 +869,16 @@ def scan_all_members(
 ) -> list[dict[str, Any]]:
     limits = config["limits"]
     tools = dict(config["tools"])
-    scanner_source = repo_root / str(tools["scanner_source"])
+    if str(tools.get("scanner_source")) != SCANNER_SOURCE_LABEL:
+        raise ValueError("SCANNER_SOURCE_INVALID")
+    scanner_module = repo_root / SCANNER_MODULE_RELATIVE_PATH
+    scanner_source = embedded_scanner_source(scanner_module)
     with tempfile.TemporaryDirectory(prefix="zhishi-task094-scanner-") as directory:
         scanner = compile_scanner(
             scanner_source, Path(directory), str(tools["compiler"]), str(tools["scanner_source_sha256"])
         )
         scanner_facts = {
-            "source_sha256": sha256_file(scanner_source),
+            "source_sha256": sha256_bytes(scanner_source),
             "binary_sha256": sha256_file(scanner),
             "compiler": str(tools["compiler"]),
         }

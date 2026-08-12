@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "审计" / "审计阶段1新正式输入时间质量.py"
 CONFIG = ROOT / "config" / "审计" / "任务-000094逐行时间质量审计.json"
 FORMAL_BATCH = ROOT / "artifacts" / "审计" / "阶段1新候选集重算" / "stage1-candidate-recompute-20260811T145500Z-22191bf6b82a"
-SCANNER_SOURCE = ROOT / "scripts" / "审计" / "阶段1时间质量扫描器.c"
+SCANNER_MODULE = ROOT / "scripts" / "审计" / "阶段1时间质量扫描器.py"
 FINAL_BATCH = ROOT / "artifacts" / "审计" / "阶段1逐行时间质量" / "stage1-time-quality-20260812T021000Z-d1bc5118ee09"
 
 
@@ -294,10 +294,11 @@ class Stage1TimeQualityAuditTests(unittest.TestCase):
         self.assertEqual(records, rebuilt)
 
     def test_编译扫描器与Python合同输出一致(self):
-        self.assertTrue(SCANNER_SOURCE.is_file(), "编译扫描器源文件尚未实现")
+        self.assertTrue(SCANNER_MODULE.is_file(), "扫描器源码载体尚未实现")
+        source = self.auditor.embedded_scanner_source(SCANNER_MODULE)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            scanner = self.auditor.compile_scanner(SCANNER_SOURCE, root, "/usr/bin/clang")
+            scanner = self.auditor.compile_scanner(source, root, "/usr/bin/clang")
             name = "BTCUSDT-trades-2025-01-01"
             path = self.make_zip(root, name, [
                 "1,100.0,2.0,200.0,1735689600000,true",
@@ -321,12 +322,11 @@ class Stage1TimeQualityAuditTests(unittest.TestCase):
 
     def test_扫描器源文件必须匹配冻结指纹(self):
         config = self.auditor.load_config(CONFIG)
+        source = self.auditor.embedded_scanner_source(SCANNER_MODULE)
         with tempfile.TemporaryDirectory() as directory:
-            target = Path(directory) / "scanner.c"
-            target.write_bytes(SCANNER_SOURCE.read_bytes() + b"\n")
             with self.assertRaisesRegex(ValueError, "SCANNER_SOURCE_FINGERPRINT_DRIFT"):
                 self.auditor.compile_scanner(
-                    target, Path(directory) / "bin", "/usr/bin/clang",
+                    source + b"\n", Path(directory) / "bin", "/usr/bin/clang",
                     config["tools"]["scanner_source_sha256"],
                 )
 
@@ -340,7 +340,10 @@ class Stage1TimeQualityAuditTests(unittest.TestCase):
         self.assertEqual(16121999478, summary["scanned_row_count"])
         self.assertEqual(summary["source_inventory_before_sha256"], summary["source_inventory_after_sha256"])
         self.assertFalse(summary["legacy_task_000084_current_gate"])
-        self.assertEqual(self.auditor.sha256_file(SCANNER_SOURCE), summary["scanner"]["source_sha256"])
+        self.assertEqual(
+            self.auditor.sha256_bytes(self.auditor.embedded_scanner_source(SCANNER_MODULE)),
+            summary["scanner"]["source_sha256"],
+        )
         actual = {
             name: self.auditor.sha256_file(FINAL_BATCH / name)
             for name in summary["output_payload_files"]
