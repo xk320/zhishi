@@ -85,6 +85,27 @@ def task_text(
     )
 
 
+def task094_contract_versions(policy, current: str | None = None) -> tuple[str, str]:
+    """严格接受任务-000094完整修复前或完整修复后合同。"""
+
+    current = current or (
+        REPO_ROOT / "docs/研发中心/任务/任务-000094.md"
+    ).read_text(encoding="utf-8")
+    replacements = policy.TASK094_CONTRACT_REPLACEMENTS
+    repaired = policy._apply_task094_contract_repair(current)
+    if repaired is not None:
+        return current, repaired
+
+    if not all(current.count(new) == 1 for _, new in replacements):
+        raise AssertionError("任务-000094合同不是完整修复前或完整修复后版本")
+    base = current
+    for old, new in reversed(replacements):
+        base = base.replace(new, old, 1)
+    if policy._apply_task094_contract_repair(base) != current:
+        raise AssertionError("任务-000094新合同无法逐字反向复证")
+    return base, current
+
+
 def blocked_contract_repair_executor_text(
     *, status: str, blocker_evidence: str = "任务-000055最新阻塞状态"
 ) -> str:
@@ -535,12 +556,7 @@ class AutoMergeEligibilityTests(unittest.TestCase):
                 )
 
     def test_任务094合同修复必须完整且逐字(self):
-        base = (REPO_ROOT / "docs/研发中心/任务/任务-000094.md").read_text(
-            encoding="utf-8"
-        )
-        repaired = self.policy._apply_task094_contract_repair(base)
-        self.assertIsNotNone(repaired)
-        assert repaired is not None
+        base, repaired = task094_contract_versions(self.policy)
         self.assertEqual(8, len(self.policy.TASK094_CONTRACT_REPLACEMENTS))
         self.assertIn("固定三进程串行流水线", repaired)
         self.assertIn("阶段1时间质量扫描器.c", repaired)
@@ -552,6 +568,16 @@ class AutoMergeEligibilityTests(unittest.TestCase):
                 base.replace("单进程逐ZIP逐行扫描", "抽样扫描", 1)
             )
         )
+        self.assertEqual(
+            (base, repaired),
+            task094_contract_versions(self.policy, repaired),
+        )
+        mixed = base.replace(
+            *self.policy.TASK094_CONTRACT_REPLACEMENTS[0],
+            1,
+        )
+        with self.assertRaisesRegex(AssertionError, "不是完整修复前或完整修复后"):
+            task094_contract_versions(self.policy, mixed)
 
     def test_任务094进程组资源事实严格守恒(self):
         valid = {
@@ -591,12 +617,7 @@ class AutoMergeEligibilityTests(unittest.TestCase):
                 self.assertTrue(self.policy._task094_resource_fact_reasons(mutation))
 
     def test_任务094资源证据绑定最终头文件与批次(self):
-        task_text_value = self.policy._apply_task094_contract_repair(
-            (REPO_ROOT / "docs/研发中心/任务/任务-000094.md").read_text(
-                encoding="utf-8"
-            )
-        )
-        assert task_text_value is not None
+        _, task_text_value = task094_contract_versions(self.policy)
         texts = {
             self.policy.TASK094_EXECUTOR_PATH: "executor\n",
             self.policy.TASK094_CONFIG_PATH: "config\n",
@@ -695,11 +716,7 @@ class AutoMergeEligibilityTests(unittest.TestCase):
                 self.assertIn("任务-000094最终批次摘要无效", reasons)
 
     def test_任务095到094一次性合同修复不允许夹带(self):
-        target_base = (
-            REPO_ROOT / "docs/研发中心/任务/任务-000094.md"
-        ).read_text(encoding="utf-8")
-        target_head = self.policy._apply_task094_contract_repair(target_base)
-        assert target_head is not None
+        target_base, target_head = task094_contract_versions(self.policy)
         executor = task_text(status="已完成", task_type="治理")
         reasons = []
         allowed = self.policy._validate_task094_contract_repair(
@@ -4132,9 +4149,7 @@ class GitPathFactIntegrationTests(unittest.TestCase):
                 )
 
     def test_cli任务095到094真实git基线头正向与错误正文失败关闭(self):
-        task094_base = (
-            REPO_ROOT / "docs/研发中心/任务/任务-000094.md"
-        ).read_text(encoding="utf-8")
+        task094_base, task094_head = task094_contract_versions(self.policy)
         task095_complete = (
             REPO_ROOT / "docs/研发中心/任务/任务-000095.md"
         ).read_text(encoding="utf-8").replace("- 状态：待评审", "- 状态：已完成", 1)
@@ -4144,8 +4159,6 @@ class GitPathFactIntegrationTests(unittest.TestCase):
         self._git("commit", "-qm", "task095 completed base")
         base_ref = self._git("rev-parse", "HEAD").stdout.decode().strip()
 
-        task094_head = self.policy._apply_task094_contract_repair(task094_base)
-        assert task094_head is not None
         self._write("docs/研发中心/任务/任务-000094.md", task094_head)
         self._git("add", "--", ".")
         head_ref = self._commit_head()
