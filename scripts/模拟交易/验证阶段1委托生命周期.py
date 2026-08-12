@@ -9,7 +9,10 @@ import datetime as dt
 import hashlib
 import importlib.util
 import json
+import os
 import re
+import resource
+import selectors
 import subprocess
 import sys
 import time
@@ -58,6 +61,7 @@ PENDING_FILES_BEFORE_VALIDATE = frozenset(
         "query-explain.json",
         "frozen-input.json",
         "lifecycle.json",
+        "simulate-process.json",
         "replay-1.json",
         "replay-2.json",
     }
@@ -87,21 +91,43 @@ validate_explain = BASE.validate_explain
 _rss_bytes = BASE._rss_bytes
 
 
+def _process_facts(started: float) -> dict[str, Any]:
+    return {
+        "elapsed_seconds": round(time.monotonic() - started, 6),
+        "peak_rss_bytes": _rss_bytes(),
+    }
+
+
+def _assert_rss(limit: int) -> None:
+    if _rss_bytes() > limit:
+        raise RuntimeError("PROCESS_RSS_LIMIT_EXCEEDED")
+
+
 def _normalized_task_fingerprint(path: Path) -> str:
     volatile = (
         "- 状态：",
         "- 执行分支：",
         "- 开始时间：",
         "- 提交SHA：",
+        "- 实现提交SHA：",
         "- Pull Request：",
         "- 交付物：",
         "- 验证结果：",
         "- 合并时间：",
         "- 合并提交SHA：",
     )
+    source_lines = path.read_text(encoding="utf-8").splitlines()
+    record_start = next(
+        (
+            index
+            for index, line in enumerate(source_lines)
+            if line.strip() == "## 执行记录"
+        ),
+        len(source_lines),
+    )
     lines = [
         line
-        for line in path.read_text(encoding="utf-8").splitlines()
+        for line in source_lines[:record_start]
         if not line.startswith(volatile)
     ]
     return sha256_bytes(("\n".join(lines) + "\n").encode("utf-8"))
@@ -122,6 +148,7 @@ def validate_config(config: Mapping[str, Any]) -> None:
         "委托场景",
         "时钟场景",
         "主研究尺度",
+        "生产者来源合同",
         "上游输入",
         "资源上限",
     }
@@ -151,6 +178,19 @@ def validate_config(config: Mapping[str, Any]) -> None:
         "主研究尺度：48小时",
     ]:
         raise ValueError("CONFIG_HORIZON_SCOPE_MISMATCH")
+    if config["生产者来源合同"] != {
+        "仓库快照": "orderbook-intelligence-service-release-20260731",
+        "提交": "030499faca3d6955d75c75cbc59656a4981f6c05",
+        "real_orderbook.py SHA-256": "fdb17777bd325aa52b55a5b03af5187ebc5804ded8ab3cde81237561be17639e",
+        "storage.py SHA-256": "d4fed7bf0fc89666a9836a17f144ef41d2a6d13d829124437032c9787bf9b05d",
+        "快照Schema版本": 1,
+        "来源": "canonical_book",
+        "市场事件字段": "payload.last_event_time_ms",
+        "系统到达字段": "payload.last_local_recv_ts_ms",
+        "市场事件语义": "Binance USDⓈ-M深度增量事件E字段，UTC毫秒",
+        "系统到达语义": "订单簿apply_diff处理增量事件时调用now_ms取得的本地墙钟，UTC毫秒",
+    }:
+        raise ValueError("CONFIG_PRODUCER_CONTRACT_MISMATCH")
     limits = config["资源上限"]
     if limits != {
         "单SQL秒": 30,
@@ -263,6 +303,10 @@ def prepare(repo_root: Path, batch: str) -> dict[str, Any]:
             "clock_scenarios": config["时钟场景"],
             "horizons": config["主研究尺度"],
         },
+        "producer_contract": config["生产者来源合同"],
+        "producer_contract_sha256": sha256_bytes(
+            canonical_bytes(config["生产者来源合同"])
+        ),
         "resource_limits": config["资源上限"],
         "process": {
             "elapsed_seconds": round(time.monotonic() - started, 6),
@@ -336,30 +380,81 @@ def _run_ssh_python(
         "-",
     ]
     try:
-        result = subprocess.run(
+        returncode, stdout, stderr = _run_bounded_process(
             command,
-            input=program,
-            text=True,
-            capture_output=True,
+            input_bytes=program.encode("utf-8"),
             timeout=timeout,
-            check=False,
+            max_stdout=max_stdout,
+            max_stderr=max_stderr,
         )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("REMOTE_READ_TIMEOUT") from exc
-    stderr = result.stderr.encode("utf-8", errors="replace")
-    stdout = result.stdout.encode("utf-8", errors="replace")
-    if len(stderr) > max_stderr:
-        raise RuntimeError("REMOTE_LOG_LIMIT_EXCEEDED")
-    if len(stdout) > max_stdout:
-        raise RuntimeError("REMOTE_RESPONSE_LIMIT_EXCEEDED")
-    if result.returncode != 0:
+    except RuntimeError as exc:
+        reason = str(exc)
+        if reason == "PROCESS_TIMEOUT":
+            raise RuntimeError("REMOTE_READ_TIMEOUT") from exc
+        if reason == "PROCESS_STDOUT_LIMIT_EXCEEDED":
+            raise RuntimeError("REMOTE_RESPONSE_LIMIT_EXCEEDED") from exc
+        if reason == "PROCESS_STDERR_LIMIT_EXCEEDED":
+            raise RuntimeError("REMOTE_LOG_LIMIT_EXCEEDED") from exc
+        raise
+    if returncode != 0:
         raise RuntimeError(
-            f"REMOTE_READ_FAILED:{result.returncode}:{sha256_bytes(stderr)}"
+            f"REMOTE_READ_FAILED:{returncode}:{sha256_bytes(stderr)}"
         )
-    value = json.loads(result.stdout)
+    value = json.loads(stdout.decode("utf-8"))
+    _assert_rss(268435456)
     if not isinstance(value, dict):
         raise RuntimeError("REMOTE_RESPONSE_OBJECT_REQUIRED")
     return value
+
+
+def _run_bounded_process(
+    command: list[str],
+    *,
+    input_bytes: bytes,
+    timeout: int,
+    max_stdout: int,
+    max_stderr: int,
+) -> tuple[int, bytes, bytes]:
+    """并发增量读取子进程输出，并在越界发生时立即终止。"""
+
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert process.stdin is not None
+    assert process.stdout is not None
+    assert process.stderr is not None
+    try:
+        process.stdin.write(input_bytes)
+        process.stdin.close()
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ, ("stdout", max_stdout))
+        selector.register(process.stderr, selectors.EVENT_READ, ("stderr", max_stderr))
+        buffers = {"stdout": bytearray(), "stderr": bytearray()}
+        deadline = time.monotonic() + timeout
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("PROCESS_TIMEOUT")
+            for key, _ in selector.select(min(0.1, remaining)):
+                stream_name, limit = key.data
+                chunk = os.read(key.fileobj.fileno(), min(65536, limit + 1))
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                buffers[stream_name].extend(chunk)
+                if len(buffers[stream_name]) > limit:
+                    raise RuntimeError(f"PROCESS_{stream_name.upper()}_LIMIT_EXCEEDED")
+        returncode = process.wait(timeout=max(0.1, deadline - time.monotonic()))
+        return returncode, bytes(buffers["stdout"]), bytes(buffers["stderr"])
+    except (BrokenPipeError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("PROCESS_TIMEOUT") from exc
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
 
 
 def validate_metadata_snapshot(value: Mapping[str, Any]) -> None:
@@ -403,6 +498,7 @@ def validate_metadata_snapshot(value: Mapping[str, Any]) -> None:
 
 
 def probe_metadata(repo_root: Path, batch: str) -> dict[str, Any]:
+    started = time.monotonic()
     intent, config, directory = _assert_intent(repo_root, batch)
     value = _run_ssh_python(
         REMOTE_METADATA_PROGRAM,
@@ -420,6 +516,7 @@ def probe_metadata(repo_root: Path, batch: str) -> dict[str, Any]:
         "remote_write_performed": False,
         "metadata": value,
         "metadata_sha256": sha256_bytes(canonical_bytes(value)),
+        "process": _process_facts(started),
     }
     write_json_exclusive(directory / "metadata.json", evidence)
     return evidence
@@ -466,31 +563,61 @@ def build_query_plan(
 def _remote_query_program(queries: list[Mapping[str, Any]], *, explain_only: bool) -> str:
     encoded = json.dumps(queries, ensure_ascii=False, separators=(",", ":"))
     mode = "explain" if explain_only else "execute"
+    response_limit = 65536 if explain_only else 67108864
     return f'''
-import base64,hashlib,json,shutil,subprocess
+import base64,hashlib,json,os,resource,selectors,shutil,subprocess,time
 queries=json.loads({encoded!r})
 client=shutil.which("mysql") or shutil.which("mariadb")
 if not client: raise SystemExit("MYSQL_CLIENT_MISSING")
 clean_env={{"PATH":"/usr/bin:/bin","LC_ALL":"C","MYSQL_TEST_LOGIN_FILE":"/dev/null"}}
+rss_limit=268435456
+response_limit={response_limit}
+stderr_limit=65536
+resource.setrlimit(resource.RLIMIT_AS,(rss_limit,rss_limit))
+def run(statement,remaining):
+ p=subprocess.Popen([client,"--no-defaults","--batch","--raw","--skip-column-names","--connect-timeout=5","--database=orderbook","--execute",statement],stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=clean_env)
+ selector=selectors.DefaultSelector(); buffers={{"stdout":bytearray(),"stderr":bytearray()}}
+ selector.register(p.stdout,selectors.EVENT_READ,("stdout",remaining)); selector.register(p.stderr,selectors.EVENT_READ,("stderr",stderr_limit))
+ deadline=time.monotonic()+30
+ try:
+  while selector.get_map():
+   left=deadline-time.monotonic()
+   if left<=0: raise SystemExit("MYSQL_QUERY_TIMEOUT")
+   for key,_ in selector.select(min(0.1,left)):
+    name,limit=key.data; chunk=os.read(key.fileobj.fileno(),min(65536,limit+1))
+    if not chunk: selector.unregister(key.fileobj); continue
+    buffers[name].extend(chunk)
+    if len(buffers[name])>limit: raise SystemExit("MYSQL_RESPONSE_LIMIT_EXCEEDED" if name=="stdout" else "MYSQL_LOG_LIMIT_EXCEEDED")
+  code=p.wait(timeout=max(0.1,deadline-time.monotonic()))
+  if code: raise SystemExit("MYSQL_QUERY_FAILED")
+  return bytes(buffers["stdout"])
+ finally:
+  if p.poll() is None: p.kill(); p.wait()
 out=[]
+raw_total=0
 for query in queries:
  sql=query["SQL"]
  lowered=" ".join(sql.strip().split()).lower()
  if not lowered.startswith("select ") or any(x in lowered for x in (" insert "," update "," delete "," replace "," alter "," drop "," create "," truncate "," grant "," revoke "," outfile "," dumpfile ",";","--","/*")) or " limit 256" not in lowered:
   raise SystemExit("REMOTE_SQL_NOT_READ_ONLY")
  statement=("EXPLAIN FORMAT=JSON "+sql) if {mode!r}=="explain" else sql
- p=subprocess.run([client,"--no-defaults","--batch","--raw","--skip-column-names","--connect-timeout=5","--database=orderbook","--execute",statement],capture_output=True,timeout=30,check=False,env=clean_env)
- if p.returncode: raise SystemExit("MYSQL_QUERY_FAILED")
+ payload=run(statement,response_limit-raw_total)
+ raw_total+=len(payload)
  if {mode!r}=="explain":
-  out.append({{"query_id":query["query_id"],"plan":json.loads(p.stdout.decode()),"response_sha256":hashlib.sha256(p.stdout).hexdigest(),"response_bytes":len(p.stdout)}})
+  out.append({{"query_id":query["query_id"],"plan":json.loads(payload.decode()),"response_sha256":hashlib.sha256(payload).hexdigest(),"response_bytes":len(payload)}})
  else:
-  lines=[line for line in p.stdout.splitlines() if line]
-  out.append({{"query_id":query["query_id"],"row_count":len(lines),"rows_base64":[base64.b64encode(line).decode() for line in lines],"response_sha256":hashlib.sha256(p.stdout).hexdigest(),"response_bytes":len(p.stdout)}})
-print(json.dumps({{"protocol":"zhishi-stage1-simulated-lifecycle-query/1","mode":{mode!r},"results":out}},sort_keys=True,separators=(",",":")))
+  lines=[line for line in payload.splitlines() if line]
+  out.append({{"query_id":query["query_id"],"row_count":len(lines),"rows_base64":[base64.b64encode(line).decode() for line in lines],"response_sha256":hashlib.sha256(payload).hexdigest(),"response_bytes":len(payload)}})
+self_rss=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024
+child_rss=resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss*1024
+peak=max(self_rss,child_rss)
+if peak>rss_limit: raise SystemExit("REMOTE_RSS_LIMIT_EXCEEDED")
+print(json.dumps({{"protocol":"zhishi-stage1-simulated-lifecycle-query/1","mode":{mode!r},"results":out,"remote_peak_rss_bytes":peak,"remote_rss_limit_enforced":True,"stdout_incrementally_bounded":True}},sort_keys=True,separators=(",",":")))
 '''
 
 
 def plan_queries(repo_root: Path, batch: str) -> dict[str, Any]:
+    started = time.monotonic()
     intent, config, directory = _assert_intent(repo_root, batch)
     metadata = read_json(directory / "metadata.json")
     plan = build_query_plan(metadata, intent, config)
@@ -519,6 +646,10 @@ def plan_queries(repo_root: Path, batch: str) -> dict[str, Any]:
         "query_plan_sha256": sha256_bytes(canonical_bytes(plan)),
         "estimated_rows": total_rows,
         "results": explain_result["results"],
+        "remote_peak_rss_bytes": explain_result["remote_peak_rss_bytes"],
+        "remote_rss_limit_enforced": explain_result["remote_rss_limit_enforced"],
+        "stdout_incrementally_bounded": explain_result["stdout_incrementally_bounded"],
+        "process": _process_facts(started),
     }
     write_json_exclusive(directory / "query-plan.json", plan)
     write_json_exclusive(directory / "query-explain.json", explain)
@@ -624,6 +755,10 @@ def normalize_snapshot(row: list[str], *, collected_at_ms: int) -> dict[str, Any
     if not isinstance(payload, Mapping):
         raise ValueError("PAYLOAD_OBJECT_REQUIRED")
     body = _payload_body(payload)
+    producer_identity_proved = (
+        payload.get("snapshot_schema_version") == 1
+        and payload.get("source") == "canonical_book"
+    )
     bids, asks = _book_arrays(body)
     if not bids or not asks:
         raise ValueError("BOOK_SIDE_EMPTY")
@@ -656,29 +791,75 @@ def normalize_snapshot(row: list[str], *, collected_at_ms: int) -> dict[str, Any
         "source_arrival_time_source": arrival_source,
         "confirmed_visible_time_ms": arrival_time if arrival_time is not None else collected_at_ms,
         "confirmed_visible_time_source": arrival_source or "local_post_receive_clock",
-        "time_semantics_status": "pass" if event_time is not None and arrival_time is not None else "unknown",
-        "time_semantics_reason": None if event_time is not None and arrival_time is not None else "SOURCE_TIME_SEMANTICS_INCOMPLETE",
+        "producer_identity_proved": producer_identity_proved,
+        "time_semantics_status": (
+            "pass"
+            if producer_identity_proved
+            and event_time is not None
+            and arrival_time is not None
+            else "unknown"
+        ),
+        "time_semantics_reason": (
+            None
+            if producer_identity_proved
+            and event_time is not None
+            and arrival_time is not None
+            else "SOURCE_TIME_SEMANTICS_INCOMPLETE"
+        ),
         "book_valid": True,
         "aggressive_buy_fillable": ask_qty > 0,
         "aggressive_sell_fillable": bid_qty > 0,
     }
 
 
-def validate_member_order(rows: Iterable[Mapping[str, Any]]) -> None:
-    seen: set[tuple[int, str]] = set()
+def validate_raw_member_order(rows: Iterable[list[str]]) -> None:
+    """在脱敏前按数据库声明的原始复合键验证唯一全序。"""
+
+    seen: set[tuple[str, int, str]] = set()
     by_symbol: dict[str, list[tuple[int, str]]] = {}
     for row in rows:
-        identity = (int(row["capture_ts_ms"]), str(row.get("snapshot_id_sha256", row.get("snapshot_id", ""))))
+        if len(row) != 5:
+            raise ValueError("SNAPSHOT_ROW_SHAPE_INVALID")
+        snapshot_id, symbol, capture_raw = row[:3]
+        identity = (symbol, int(capture_raw), snapshot_id)
         if identity in seen:
             raise ValueError("MEMBER_IDENTITY_DUPLICATE")
         seen.add(identity)
-        by_symbol.setdefault(str(row.get("symbol", "")), []).append(identity)
+        by_symbol.setdefault(symbol, []).append((int(capture_raw), snapshot_id))
     for identities in by_symbol.values():
         if identities != sorted(identities, reverse=True):
             raise ValueError("MEMBER_ORDER_INVALID")
 
 
+def validate_member_order(rows: Iterable[Mapping[str, Any]]) -> None:
+    """用脱敏身份与原始顺序承诺验证发布后的成员顺序。"""
+
+    seen: set[tuple[str, str]] = set()
+    by_symbol: dict[str, list[tuple[int, int | None]]] = {}
+    for row in rows:
+        symbol = str(row.get("symbol", ""))
+        identity_sha = str(row.get("snapshot_identity_sha256", ""))
+        identity = (symbol, identity_sha)
+        if not symbol or SHA_PATTERN.fullmatch(identity_sha) is None:
+            raise ValueError("MEMBER_IDENTITY_INVALID")
+        if identity in seen:
+            raise ValueError("MEMBER_IDENTITY_DUPLICATE")
+        seen.add(identity)
+        sequence = row.get("member_sequence")
+        if sequence is not None and (isinstance(sequence, bool) or not isinstance(sequence, int)):
+            raise ValueError("MEMBER_SEQUENCE_INVALID")
+        by_symbol.setdefault(symbol, []).append((int(row["capture_ts_ms"]), sequence))
+    for values in by_symbol.values():
+        timestamps = [capture for capture, _ in values]
+        if timestamps != sorted(timestamps, reverse=True):
+            raise ValueError("MEMBER_ORDER_INVALID")
+        sequences = [sequence for _, sequence in values]
+        if len(sequences) > 1 and sequences != list(range(len(sequences))):
+            raise ValueError("MEMBER_SEQUENCE_INVALID")
+
+
 def collect(repo_root: Path, batch: str) -> dict[str, Any]:
+    started = time.monotonic()
     intent, config, directory = _assert_intent(repo_root, batch)
     metadata = read_json(directory / "metadata.json")
     validate_metadata_snapshot(metadata["metadata"])
@@ -701,17 +882,24 @@ def collect(repo_root: Path, batch: str) -> dict[str, Any]:
     members = []
     denominators = {}
     for query, item in zip(plan["queries"], result["results"], strict=True):
+        _assert_rss(config["资源上限"]["RSS字节"])
         if item.get("query_id") != query["query_id"]:
             raise ValueError("DATABASE_QUERY_ID_DRIFT")
         encoded_rows = item.get("rows_base64")
         if not isinstance(encoded_rows, list) or len(encoded_rows) > 256:
             raise ValueError("DATABASE_ROW_LIMIT_EXCEEDED")
-        symbol_members = []
+        raw_rows = []
         for encoded in encoded_rows:
+            _assert_rss(config["资源上限"]["RSS字节"])
             raw_line = base64.b64decode(encoded, validate=True).decode("utf-8")
-            normalized = normalize_snapshot(raw_line.split("\t", 4), collected_at_ms=collected_at_ms)
+            raw_rows.append(raw_line.split("\t", 4))
+        validate_raw_member_order(raw_rows)
+        symbol_members = []
+        for member_sequence, raw_row in enumerate(raw_rows):
+            normalized = normalize_snapshot(raw_row, collected_at_ms=collected_at_ms)
             if normalized["symbol"] != query["symbol"]:
                 raise ValueError("DATABASE_SYMBOL_DRIFT")
+            normalized["member_sequence"] = member_sequence
             symbol_members.append(normalized)
         validate_member_order(symbol_members)
         members.extend(symbol_members)
@@ -729,6 +917,10 @@ def collect(repo_root: Path, batch: str) -> dict[str, Any]:
         "denominators": denominators,
         "member_count": len(members),
         "database_response_bytes": response_bytes,
+        "remote_peak_rss_bytes": result["remote_peak_rss_bytes"],
+        "remote_rss_limit_enforced": result["remote_rss_limit_enforced"],
+        "stdout_incrementally_bounded": result["stdout_incrementally_bounded"],
+        "process": _process_facts(started),
         "members": members,
         "safety": {
             "remote_write": False,
@@ -765,16 +957,19 @@ def simulate_member(
         int(member.get("market_event_time_ms") or 0),
     ) + 1
     states = ["created", "sent", "acknowledged", "evaluated"]
-    if scenario == "被动限价撤销":
-        terminal, reason = "canceled", "QUEUE_IDENTITY_UNAVAILABLE"
-    elif member.get("time_semantics_status") != "pass":
+    if member.get("time_semantics_status") != "pass":
         terminal, reason = "unknown", "SOURCE_TIME_SEMANTICS_INCOMPLETE"
+        states = []
+        offsets = []
+    elif scenario == "被动限价撤销":
+        terminal, reason = "canceled", "QUEUE_IDENTITY_UNAVAILABLE"
     else:
         fillable = member[
             "aggressive_buy_fillable" if direction == "做多" else "aggressive_sell_fillable"
         ]
         terminal, reason = ("filled", "TOP_BOOK_CAPACITY_PRESENT") if fillable else ("unknown", "TOP_BOOK_CAPACITY_ABSENT")
-    states.append(terminal)
+    if states:
+        states.append(terminal)
     for current, target in zip(states, states[1:]):
         transition(current, target)
     events = [
@@ -799,16 +994,34 @@ def simulate(frozen: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(members, list):
         raise ValueError("FROZEN_MEMBERS_REQUIRED")
     validate_member_order(members)
-    results = [
-        simulate_member(member, scenario, direction, clock)
-        for member in members
-        for direction, scenario, clock in product(
-            ("做多", "做空"),
-            ("进取型市价", "进取型限价", "被动限价撤销"),
-            ("基准", "压力"),
+    results = []
+    for member in members:
+        _assert_rss(268435456)
+        results.extend(
+            simulate_member(member, scenario, direction, clock)
+            for direction, scenario, clock in product(
+                ("做多", "做空"),
+                ("进取型市价", "进取型限价", "被动限价撤销"),
+                ("基准", "压力"),
+            )
         )
-    ]
     groups = []
+    stage_statuses = (
+        ("created", ("created",)),
+        ("sent", ("sent",)),
+        ("acknowledged", ("acknowledged",)),
+        ("evaluated", ("evaluated",)),
+        ("terminal", ("filled", "canceled", "unknown")),
+    )
+    all_statuses = (
+        "created",
+        "sent",
+        "acknowledged",
+        "evaluated",
+        "filled",
+        "canceled",
+        "unknown",
+    )
     for symbol, direction, scenario, clock, horizon in product(
         ("BTCUSDT", "ETHUSDT"),
         ("做多", "做空"),
@@ -824,26 +1037,47 @@ def simulate(frozen: Mapping[str, Any]) -> dict[str, Any]:
             and row["scenario"] == scenario
             and row["clock"] == clock
         ]
-        counts = Counter(row["terminal_state"] for row in subset)
-        groups.append(
-            {
-                "symbol": symbol,
-                "venue": "Binance",
-                "market": "USDⓈ-M永续合约",
-                "direction": direction,
-                "scenario": scenario,
-                "clock": clock,
-                "horizon": horizon,
-                "candidate": len(subset),
-                "observed": len(subset),
-                "filled": counts["filled"],
-                "canceled": counts["canceled"],
-                "unknown": counts["unknown"],
-                "failed": 0,
-                "immature": 0,
-                "invalid": 0,
-            }
-        )
+        for stage, statuses in stage_statuses:
+            observed_states = [
+                row["terminal_state"]
+                if stage == "terminal"
+                else next(
+                    (event["state"]
+                    for event in row["events"]
+                    if event["state"] == stage),
+                    None,
+                )
+                for row in subset
+            ]
+            counts = Counter(state for state in observed_states if state is not None)
+            for result_status in statuses:
+                state_counts = {
+                    status: counts[status] if status == result_status else 0
+                    for status in all_statuses
+                }
+                groups.append(
+                    {
+                        "symbol": symbol,
+                        "venue": "Binance",
+                        "market": "USDⓈ-M永续合约",
+                        "contract": f"{symbol}永续合约",
+                        "direction": direction,
+                        "stage": stage,
+                        "scenario": scenario,
+                        "clock": clock,
+                        "horizon": horizon,
+                        "result_status": result_status,
+                        "candidate": len(subset),
+                        "observed": counts[result_status],
+                        "state_counts": state_counts,
+                        "filled": state_counts["filled"],
+                        "canceled": state_counts["canceled"],
+                        "unknown": state_counts["unknown"],
+                        "failed": 0,
+                        "immature": 0,
+                        "invalid": 0,
+                    }
+                )
     terminal_counts = Counter(row["terminal_state"] for row in results)
     return {
         "schema_version": "zhishi-simulated-order-lifecycle-result/v1",
@@ -857,10 +1091,20 @@ def simulate(frozen: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def simulate_batch(repo_root: Path, batch: str) -> dict[str, Any]:
+    started = time.monotonic()
     _, _, directory = _assert_intent(repo_root, batch)
     frozen = read_json(directory / "frozen-input.json")
     result = simulate(frozen)
     write_json_exclusive(directory / "lifecycle.json", result)
+    write_json_exclusive(
+        directory / "simulate-process.json",
+        {
+            "schema_version": "zhishi-simulated-order-stage-process/v1",
+            "batch_id": batch,
+            "stage": "simulate",
+            "process": _process_facts(started),
+        },
+    )
     return {
         "batch_id": batch,
         "result_sha256": sha256_bytes(canonical_bytes(result)),
@@ -870,6 +1114,7 @@ def simulate_batch(repo_root: Path, batch: str) -> dict[str, Any]:
 
 
 def replay(repo_root: Path, batch: str, number: int) -> dict[str, Any]:
+    started = time.monotonic()
     if number not in {1, 2}:
         raise ValueError("REPLAY_NUMBER_INVALID")
     _, _, directory = _assert_intent(repo_root, batch)
@@ -888,6 +1133,7 @@ def replay(repo_root: Path, batch: str, number: int) -> dict[str, Any]:
         "result_sha256": result_sha,
         "matches_initial": True,
         "independent_process": True,
+        "process": _process_facts(started),
     }
     write_json_exclusive(directory / f"replay-{number}.json", proof)
     return proof
@@ -897,7 +1143,6 @@ def _resource_facts(intent: Mapping[str, Any], frozen: Mapping[str, Any]) -> dic
     created = dt.datetime.fromisoformat(str(intent["created_at"]).replace("Z", "+00:00"))
     return {
         "elapsed_seconds": round((dt.datetime.now(dt.timezone.utc) - created).total_seconds(), 6),
-        "rss_bytes": _rss_bytes(),
         "estimated_database_rows": None,
         "business_query_count": 2,
         "query_retry_count": 0,
@@ -906,11 +1151,58 @@ def _resource_facts(intent: Mapping[str, Any], frozen: Mapping[str, Any]) -> dic
     }
 
 
+def _stage_resource_facts(
+    directory: Path, *, validate_rss_bytes: int | None = None
+) -> dict[str, Any]:
+    intent = read_json(directory / "intent.json")
+    metadata = read_json(directory / "metadata.json")
+    explain = read_json(directory / "query-explain.json")
+    frozen = read_json(directory / "frozen-input.json")
+    simulate_process = read_json(directory / "simulate-process.json")
+    replay_1 = read_json(directory / "replay-1.json")
+    replay_2 = read_json(directory / "replay-2.json")
+    stages = {
+        "prepare": int(intent["process"]["rss_bytes"]),
+        "probe": int(metadata["process"]["peak_rss_bytes"]),
+        "plan": int(explain["process"]["peak_rss_bytes"]),
+        "collect": int(frozen["process"]["peak_rss_bytes"]),
+        "simulate": int(simulate_process["process"]["peak_rss_bytes"]),
+        "replay-1": int(replay_1["process"]["peak_rss_bytes"]),
+        "replay-2": int(replay_2["process"]["peak_rss_bytes"]),
+        "validate": _rss_bytes() if validate_rss_bytes is None else validate_rss_bytes,
+    }
+    remote = {
+        "plan": int(explain["remote_peak_rss_bytes"]),
+        "collect": int(frozen["remote_peak_rss_bytes"]),
+    }
+    if not all(
+        value.get("remote_rss_limit_enforced") is True
+        and value.get("stdout_incrementally_bounded") is True
+        for value in (explain, frozen)
+    ):
+        raise ValueError("REMOTE_RESOURCE_ENFORCEMENT_MISSING")
+    return {
+        "stage_peak_rss_bytes": stages,
+        "remote_peak_rss_bytes": remote,
+        "local_peak_rss_bytes": max(stages.values()),
+        "combined_process_peak_rss_bytes": max((*stages.values(), *remote.values())),
+    }
+
+
 def _validate_resource_facts(facts: Mapping[str, Any], limits: Mapping[str, Any]) -> None:
     if facts["elapsed_seconds"] > limits["总时限秒"]:
         raise ValueError("BATCH_ELAPSED_LIMIT_EXCEEDED")
-    if facts["rss_bytes"] > limits["RSS字节"]:
+    if facts["combined_process_peak_rss_bytes"] > limits["RSS字节"]:
         raise ValueError("BATCH_RSS_LIMIT_EXCEEDED")
+    if any(
+        value > limits["RSS字节"]
+        for values in (
+            facts["stage_peak_rss_bytes"],
+            facts["remote_peak_rss_bytes"],
+        )
+        for value in values.values()
+    ):
+        raise ValueError("STAGE_RSS_LIMIT_EXCEEDED")
     if facts["database_response_bytes"] > limits["业务响应字节"]:
         raise ValueError("BATCH_RESPONSE_LIMIT_EXCEEDED")
     if facts["snapshot_count"] > limits["总快照"]:
@@ -952,10 +1244,52 @@ def validate_batch(repo_root: Path, batch: str) -> dict[str, Any]:
     intent, config, directory = _assert_intent(repo_root, batch)
     if directory == _batch_directory(repo_root, batch):
         manifest = read_json(directory / "manifest.json")
+        if set(manifest.get("files", {})) != PUBLISHED_FILES:
+            raise ValueError("BATCH_FILE_SET_INVALID")
+        expected_total = sum(
+            int(facts["bytes"]) for facts in manifest["files"].values()
+        )
+        if (
+            manifest.get("file_count") != len(PUBLISHED_FILES)
+            or manifest.get("total_bytes") != expected_total
+            or manifest.get("manifest_payload_sha256")
+            != sha256_bytes(canonical_bytes(manifest["files"]))
+        ):
+            raise ValueError("BATCH_MANIFEST_INCONSISTENT")
         for name, facts in manifest["files"].items():
             path = directory / name
             if sha256_path(path) != facts["sha256"] or path.stat().st_size != facts["bytes"]:
                 raise ValueError("BATCH_FILE_DRIFT")
+        evidence = _validate_evidence(directory, config)
+        summary = read_json(directory / "summary.json")
+        time_counts = Counter(
+            row["time_semantics_status"] for row in evidence["frozen"]["members"]
+        )
+        declared_resources = summary.get("resource_facts", {})
+        declared_validate_rss = declared_resources.get(
+            "stage_peak_rss_bytes", {}
+        ).get("validate")
+        if not isinstance(declared_validate_rss, int):
+            raise ValueError("BATCH_STAGE_RESOURCE_DRIFT")
+        stage_resources = _stage_resource_facts(
+            directory, validate_rss_bytes=declared_validate_rss
+        )
+        for key, value in stage_resources.items():
+            if declared_resources.get(key) != value:
+                raise ValueError("BATCH_STAGE_RESOURCE_DRIFT")
+        if (
+            summary.get("member_count") != len(evidence["frozen"]["members"])
+            or summary.get("denominators") != evidence["frozen"]["denominators"]
+            or summary.get("time_semantics_counts") != dict(sorted(time_counts.items()))
+            or summary.get("lifecycle_result_sha256") != evidence["result_sha256"]
+            or summary.get("terminal_counts") != evidence["lifecycle"]["terminal_counts"]
+            or summary.get("replay_1_sha256")
+            != read_json(directory / "replay-1.json")["result_sha256"]
+            or summary.get("replay_2_sha256")
+            != read_json(directory / "replay-2.json")["result_sha256"]
+        ):
+            raise ValueError("BATCH_SUMMARY_SEMANTIC_DRIFT")
+        _validate_resource_facts(declared_resources, config["资源上限"])
         return {
             "status": "ok",
             "batch_id": batch,
@@ -965,6 +1299,7 @@ def validate_batch(repo_root: Path, batch: str) -> dict[str, Any]:
     evidence = _validate_evidence(directory, config)
     explain = read_json(directory / "query-explain.json")
     resource_facts = _resource_facts(intent, evidence["frozen"])
+    resource_facts.update(_stage_resource_facts(directory))
     resource_facts["estimated_database_rows"] = explain["estimated_rows"]
     _validate_resource_facts(resource_facts, config["资源上限"])
     members = evidence["frozen"]["members"]

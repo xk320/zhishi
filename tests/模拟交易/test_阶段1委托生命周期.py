@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -10,7 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "模拟交易" / "验证阶段1委托生命周期.py"
 CONFIG = ROOT / "config" / "模拟交易" / "任务-000103阶段1委托生命周期.json"
-FORMAL_BATCH = "stage1-simulated-lifecycle-20260812T175300Z-0638c3587854"
+FORMAL_BATCH = "stage1-simulated-lifecycle-20260812T181724Z-6e2d4fbdd7e3"
 
 
 @pytest.fixture(scope="module")
@@ -77,6 +79,20 @@ def payload():
     }
 
 
+@pytest.fixture()
+def proven_wrapper(payload):
+    return {
+        "snapshot_schema_version": 1,
+        "source": "canonical_book",
+        "payload": {
+            "bids": payload["bids"],
+            "asks": payload["asks"],
+            "last_event_time_ms": 900,
+            "last_local_recv_ts_ms": 950,
+        },
+    }
+
+
 def test_config_fixes_bounded_scope(module, config):
     module.validate_config(config)
     assert config["资源上限"]["每标的快照"] == 256
@@ -106,9 +122,127 @@ def test_query_is_totally_ordered(module, metadata, config):
 
 
 def test_duplicate_member_identity_fails_closed(module):
-    rows = [{"capture_ts_ms": 1, "snapshot_id": "x"}] * 2
+    rows = [
+        {
+            "symbol": "BTCUSDT",
+            "capture_ts_ms": 1,
+            "snapshot_identity_sha256": "a" * 64,
+            "member_sequence": 0,
+        }
+    ] * 2
     with pytest.raises(ValueError, match="MEMBER_IDENTITY_DUPLICATE"):
         module.validate_member_order(rows)
+
+
+def test_same_timestamp_uses_raw_snapshot_id_before_redaction(module):
+    rows = [
+        ["z", "BTCUSDT", "1000", "1001", "{}"],
+        ["y", "BTCUSDT", "1000", "1001", "{}"],
+    ]
+    module.validate_raw_member_order(rows)
+    with pytest.raises(ValueError, match="MEMBER_ORDER_INVALID"):
+        module.validate_raw_member_order(list(reversed(rows)))
+
+
+def test_redacted_order_uses_sequence_not_snapshot_hash(module):
+    rows = [
+        {
+            "symbol": "BTCUSDT",
+            "capture_ts_ms": 1000,
+            "snapshot_identity_sha256": "f" * 64,
+            "snapshot_id_sha256": "0" * 64,
+            "member_sequence": 0,
+        },
+        {
+            "symbol": "BTCUSDT",
+            "capture_ts_ms": 1000,
+            "snapshot_identity_sha256": "0" * 64,
+            "snapshot_id_sha256": "f" * 64,
+            "member_sequence": 1,
+        },
+    ]
+    module.validate_member_order(rows)
+
+
+def test_bounded_process_stops_before_stdout_limit_is_exceeded(module):
+    with pytest.raises(RuntimeError, match="PROCESS_STDOUT_LIMIT_EXCEEDED"):
+        module._run_bounded_process(
+            [sys.executable, "-c", "import sys; sys.stdout.write('x' * 4096)"],
+            input_bytes=b"",
+            timeout=5,
+            max_stdout=1024,
+            max_stderr=1024,
+        )
+
+
+def test_remote_query_program_enforces_memory_and_stream_limits(module):
+    program = module._remote_query_program(
+        [{"query_id": "q", "SQL": "SELECT 1 LIMIT 256"}],
+        explain_only=False,
+    )
+    assert "setrlimit" in program
+    assert "selectors.DefaultSelector" in program
+    assert "capture_output=True" not in program
+    assert "remote_peak_rss_bytes" in program
+
+
+def test_task_fingerprint_excludes_delivery_execution_record(module, tmp_path):
+    task = tmp_path / "task.md"
+    task.write_text(
+        "# task\n\n- 状态：待执行\n- 实现提交SHA：`" + "a" * 40 + "`\n\n"
+        "## 合同\n\n固定正文。\n\n## 执行记录\n\n- 交付物：甲\n",
+        encoding="utf-8",
+    )
+    first = module._normalized_task_fingerprint(task)
+    task.write_text(
+        "# task\n\n- 状态：待评审\n- 实现提交SHA：`" + "b" * 40 + "`\n\n"
+        "## 合同\n\n固定正文。\n\n## 执行记录\n\n- 交付物：乙\n",
+        encoding="utf-8",
+    )
+    assert module._normalized_task_fingerprint(task) == first
+
+
+def test_published_validation_recomputes_semantics(module, config, tmp_path, monkeypatch):
+    source = (
+        ROOT
+        / "artifacts"
+        / "模拟交易"
+        / "阶段1委托生命周期"
+        / FORMAL_BATCH
+    )
+    copied = tmp_path / FORMAL_BATCH
+    shutil.copytree(source, copied)
+    lifecycle_path = copied / "lifecycle.json"
+    lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8"))
+    lifecycle["terminal_counts"] = {"unknown": lifecycle["scenario_count"]}
+    lifecycle_path.write_text(
+        json.dumps(lifecycle, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    manifest_path = copied / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload = lifecycle_path.read_bytes()
+    manifest["files"]["lifecycle.json"] = {
+        "sha256": module.sha256_bytes(payload),
+        "bytes": len(payload),
+    }
+    manifest["total_bytes"] = sum(item["bytes"] for item in manifest["files"].values())
+    manifest["manifest_payload_sha256"] = module.sha256_bytes(
+        module.canonical_bytes(manifest["files"])
+    )
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    intent = json.loads((copied / "intent.json").read_text(encoding="utf-8"))
+    monkeypatch.setattr(module, "_batch_directory", lambda _root, _batch: copied)
+    monkeypatch.setattr(
+        module,
+        "_assert_intent",
+        lambda _root, _batch: (intent, config, copied),
+    )
+    with pytest.raises(ValueError, match="LIFECYCLE_RESULT_DRIFT"):
+        module.validate_batch(tmp_path, FORMAL_BATCH)
 
 
 def test_capture_time_never_becomes_market_event_time(module, payload):
@@ -142,18 +276,9 @@ def test_binance_compact_depth_fields_are_supported(module, payload):
     assert row["book_valid"] is True
 
 
-def test_orderbook_wrapper_binds_exact_event_and_arrival_fields(module, payload):
-    wrapper = {
-        "symbol": "BTCUSDT",
-        "payload": {
-            "bids": payload["bids"],
-            "asks": payload["asks"],
-            "last_event_time_ms": 900,
-            "last_local_recv_ts_ms": 950,
-        },
-    }
+def test_orderbook_wrapper_binds_exact_event_and_arrival_fields(module, proven_wrapper):
     row = module.normalize_snapshot(
-        ["id", "BTCUSDT", "1000", "1001", json.dumps(wrapper)],
+        ["id", "BTCUSDT", "1000", "1001", json.dumps(proven_wrapper)],
         collected_at_ms=1100,
     )
     assert row["market_event_time_ms"] == 900
@@ -164,6 +289,8 @@ def test_orderbook_wrapper_binds_exact_event_and_arrival_fields(module, payload)
 
 def test_orderbook_object_levels_are_supported(module):
     wrapper = {
+        "snapshot_schema_version": 1,
+        "source": "canonical_book",
         "payload": {
             "bids": [{"price": "100.0", "quantity": "2.0", "notional": "200.0"}],
             "asks": [{"price": "101.0", "quantity": "3.0", "notional": "303.0"}],
@@ -193,9 +320,9 @@ def test_invalid_transition_fails_closed(module):
         module.transition("created", "filled")
 
 
-def test_passive_order_never_fakes_queue_fill(module, payload):
+def test_passive_order_never_fakes_queue_fill(module, proven_wrapper):
     member = module.normalize_snapshot(
-        ["id", "BTCUSDT", "1000", "1001", json.dumps(payload)],
+        ["id", "BTCUSDT", "1000", "1001", json.dumps(proven_wrapper)],
         collected_at_ms=1100,
     )
     result = module.simulate_member(member, "被动限价撤销", "做多", "基准")
@@ -203,9 +330,20 @@ def test_passive_order_never_fakes_queue_fill(module, payload):
     assert result["reason_code"] == "QUEUE_IDENTITY_UNAVAILABLE"
 
 
-def test_symmetric_simulation_is_deterministic(module, payload):
+def test_unknown_time_prevents_all_lifecycle_actions(module, payload):
     member = module.normalize_snapshot(
         ["id", "BTCUSDT", "1000", "1001", json.dumps(payload)],
+        collected_at_ms=1100,
+    )
+    result = module.simulate_member(member, "被动限价撤销", "做多", "基准")
+    assert result["terminal_state"] == "unknown"
+    assert result["events"] == []
+    assert result["reason_code"] == "SOURCE_TIME_SEMANTICS_INCOMPLETE"
+
+
+def test_symmetric_simulation_is_deterministic(module, proven_wrapper):
+    member = module.normalize_snapshot(
+        ["id", "BTCUSDT", "1000", "1001", json.dumps(proven_wrapper)],
         collected_at_ms=1100,
     )
     frozen = {"schema_version": "zhishi-simulated-order-frozen-input/v1", "members": [member]}
@@ -214,6 +352,29 @@ def test_symmetric_simulation_is_deterministic(module, payload):
     assert first == second
     assert first["scenario_count"] == 12
     assert {row["direction"] for row in first["results"]} == {"做多", "做空"}
+    assert len(first["groups"]) == 672
+    assert {row["stage"] for row in first["groups"]} == {
+        "created",
+        "sent",
+        "acknowledged",
+        "evaluated",
+        "terminal",
+    }
+    assert {row["contract"] for row in first["groups"]} == {"BTCUSDT永续合约", "ETHUSDT永续合约"}
+    assert {row["result_status"] for row in first["groups"]} == {
+        "created",
+        "sent",
+        "acknowledged",
+        "evaluated",
+        "filled",
+        "canceled",
+        "unknown",
+    }
+    assert all(
+        set(row["state_counts"])
+        == {"created", "sent", "acknowledged", "evaluated", "filled", "canceled", "unknown"}
+        for row in first["groups"]
+    )
 
 
 def test_validate_explain_rejects_full_scan(module):
@@ -240,8 +401,8 @@ def test_formal_batch_manifest_and_replays_are_reproducible(module):
     assert result == {
         "status": "ok",
         "batch_id": FORMAL_BATCH,
-        "manifest_sha256": "7b22affe9e64f339e2c4e4dfa77608b26d9539db6a2852d60916d252e5f8c88a",
-        "summary_sha256": "21ac790a66d717a322387c3ac69d788c83193a28a8d2a11748b55b4e05cf76a2",
+        "manifest_sha256": "5a33fefc7df36d71ba82dd7a8af10f4d54fa54b2545ef4fb5cef07f2e73d5339",
+        "summary_sha256": "fab695309dda98012b970187cf79208c5ae8fbb8b7775b00a89d07984cfcad7f",
     }
     intent = json.loads(
         (
