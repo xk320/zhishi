@@ -55,6 +55,51 @@ CHANGE_TYPE_PATTERN = re.compile(
 CONTRACT_CONFLICT_REPAIR_TYPE = "任务合同冲突修复"
 CONTRACT_CONFLICT_REPAIR_EXECUTOR = "000068"
 CONTRACT_CONFLICT_REPAIR_TARGET = "000066"
+TASK094_CONTRACT_REPAIR_EXECUTOR = "000095"
+TASK094_CONTRACT_REPAIR_TARGET = "000094"
+TASK094_CONTRACT_REPLACEMENTS = (
+    (
+        "3. 对5180个正式成员执行单进程逐ZIP逐行扫描，保存成员级状态、原因码、计数、时间边界、连续段和指纹，不保存原始业务值。",
+        "3. 对5180个正式成员执行固定三进程串行流水线（一个Python主控、一个固定`/usr/bin/unzip`解压子进程、一个固定扫描子进程；成员不并行）逐ZIP逐行扫描，保存成员级状态、原因码、计数、时间边界、连续段和指纹，不保存原始业务值。",
+    ),
+    (
+        "- 使用Python标准库和已有任务-000093列式JSON工具；单进程、逐文件、逐行、常量内存，不新增依赖、数据库或常驻服务。",
+        "- 使用Python标准库、已有任务-000093列式JSON工具和精确源码`scripts/审计/阶段1时间质量扫描器.c`；固定`/usr/bin/clang`只把内容寻址源码编译到临时目录，运行拓扑最多为一个Python主控、一个固定`/usr/bin/unzip`解压子进程和一个固定扫描子进程，成员严格串行，不新增第三方依赖、数据库或常驻服务。",
+    ),
+    (
+        "- 全量单进程扫描触发28800秒、512MiB、磁盘或25MiB输出硬门，且无法在不改变合同语义的情况下继续。",
+        "- 全量固定三进程串行流水线触发28800秒、主进程与全部子进程峰值RSS保守求和超过512MiB、磁盘或25MiB输出硬门，且无法在不改变合同语义的情况下继续。",
+    ),
+    (
+        "- `scripts/审计/审计阶段1新正式输入时间质量.py`及专项测试：确定性解码、逐行验证、成员裁决、连续段和原子发布。",
+        "- `scripts/审计/审计阶段1新正式输入时间质量.py`、精确源码`scripts/审计/阶段1时间质量扫描器.c`及专项测试：确定性解码、有界内存逐行验证、成员裁决、连续段和原子发布。",
+    ),
+    (
+        "- 单进程、流式、常量内存；不保存或输出价格、数量、成交编号、逐行业务正文或敏感信息。",
+        "- 固定三进程串行流水线、流式、常量内存且成员不并行；主进程与全部子进程峰值RSS保守求和执行512MiB失败关闭；不保存或输出价格、数量、成交编号、逐行业务正文或敏感信息。",
+    ),
+    (
+        "6. 真实单进程运行完成，保存扫描行数、解压字节、耗时、RSS、磁盘和源目录前后指纹；资源硬门均满足。",
+        "6. 真实固定三进程串行流水线运行完成，保存扫描行数、解压字节、耗时、进程拓扑、主进程峰值RSS、全部子进程峰值RSS、二者保守求和、测量平台、磁盘和源目录前后指纹；资源硬门均满足。",
+    ),
+    (
+        "python3 -m py_compile scripts/审计/审计阶段1新正式输入时间质量.py tests/审计/test_审计阶段1新正式输入时间质量.py",
+        "python3 -m py_compile scripts/审计/审计阶段1新正式输入时间质量.py tests/审计/test_审计阶段1新正式输入时间质量.py\n/usr/bin/clang -O2 -std=c11 -Wall -Wextra -Werror -fsyntax-only scripts/审计/阶段1时间质量扫描器.c",
+    ),
+    (
+        "- 当前阻塞原因：无。5180个正式成员、任务-000092官方对象`LastModified`和固定本地只读归档均可用；本任务不依赖Ubuntu、数据库、凭据或生产权限。",
+        "- 当前阻塞原因：无。5180个正式成员、任务-000092官方对象`LastModified`和固定本地只读归档均可用；本任务不依赖Ubuntu、数据库、凭据或生产权限。\n- 解除条件：任务-000095治理修复已进入`main`；精确C源码路径、固定三进程串行拓扑与整个进程组资源计量合同已可由可信规则复验。",
+    ),
+)
+
+
+def _apply_task094_contract_repair(text: str) -> str | None:
+    repaired = text
+    for old, new in TASK094_CONTRACT_REPLACEMENTS:
+        if repaired.count(old) != 1 or new in repaired:
+            return None
+        repaired = repaired.replace(old, new, 1)
+    return repaired
 BLOCKED_CONTRACT_REPAIR_EXECUTOR = "000056"
 BLOCKED_CONTRACT_REPAIR_TARGET = "000055"
 ROOT_READONLY_CONTRACT_REPAIR_EXECUTOR = "000086"
@@ -996,6 +1041,7 @@ def _check_task_contract_drift(
     blocked_contract_repair_target: str | None = None,
     root_readonly_contract_repair_target: str | None = None,
     contract_conflict_repair_target: str | None = None,
+    task094_contract_repair_target: str | None = None,
 ) -> None:
     """阻止交付或状态PR静默改写目标、范围、输入输出和安全边界。"""
 
@@ -1016,6 +1062,12 @@ def _check_task_contract_drift(
         base_text = _read_at_ref(repo_root, base_ref, path)
         head_text = _read_at_ref(repo_root, head_ref, path)
         if base_text is None or head_text is None:
+            continue
+        if (
+            task094_contract_repair_target is not None
+            and path == f"{TASK_DIR}/任务-{task094_contract_repair_target}.md"
+            and _apply_task094_contract_repair(base_text) == head_text
+        ):
             continue
         if _immutable_task_contract(
             base_text,
@@ -1510,6 +1562,12 @@ def check_refs(
                 and task_id == CONTRACT_CONFLICT_REPAIR_EXECUTOR
                 else None
             ),
+            task094_contract_repair_target=(
+                TASK094_CONTRACT_REPAIR_TARGET
+                if change_type == CONTRACT_CONFLICT_REPAIR_TYPE
+                and task_id == TASK094_CONTRACT_REPAIR_EXECUTOR
+                else None
+            ),
         )
         _check_historical_immutability(repo_root, base_sha, head_sha, conflicts)
     _check_metadata(
@@ -1666,6 +1724,10 @@ def _compute_rule_fingerprint() -> str:
         ROOT_READONLY_COMPAT_SECTION,
         ROOT_READONLY_CONTRACT_REPAIR_EXECUTOR,
         ROOT_READONLY_CONTRACT_REPAIR_TARGET,
+        TASK094_CONTRACT_REPAIR_EXECUTOR,
+        TASK094_CONTRACT_REPAIR_TARGET,
+        repr(TASK094_CONTRACT_REPLACEMENTS),
+        "_apply_task094_contract_repair",
     ]
     for name in names:
         try:

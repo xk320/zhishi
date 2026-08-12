@@ -222,6 +222,111 @@ CONTRACT_CONFLICT_REPAIR_ALLOWED_PATHS = frozenset(
         "docs/研发中心/看板.md",
     }
 )
+TASK094_CONTRACT_REPAIR_EXECUTOR = "000095"
+TASK094_CONTRACT_REPAIR_TARGET = "000094"
+TASK094_NATIVE_SCANNER_PATH = "scripts/审计/阶段1时间质量扫描器.c"
+TASK094_RESOURCE_LIMIT_BYTES = 512 * 1024 * 1024
+TASK094_CONTRACT_REPLACEMENTS = (
+    (
+        "3. 对5180个正式成员执行单进程逐ZIP逐行扫描，保存成员级状态、原因码、计数、时间边界、连续段和指纹，不保存原始业务值。",
+        "3. 对5180个正式成员执行固定三进程串行流水线（一个Python主控、一个固定`/usr/bin/unzip`解压子进程、一个固定扫描子进程；成员不并行）逐ZIP逐行扫描，保存成员级状态、原因码、计数、时间边界、连续段和指纹，不保存原始业务值。",
+    ),
+    (
+        "- 使用Python标准库和已有任务-000093列式JSON工具；单进程、逐文件、逐行、常量内存，不新增依赖、数据库或常驻服务。",
+        "- 使用Python标准库、已有任务-000093列式JSON工具和精确源码`scripts/审计/阶段1时间质量扫描器.c`；固定`/usr/bin/clang`只把内容寻址源码编译到临时目录，运行拓扑最多为一个Python主控、一个固定`/usr/bin/unzip`解压子进程和一个固定扫描子进程，成员严格串行，不新增第三方依赖、数据库或常驻服务。",
+    ),
+    (
+        "- 全量单进程扫描触发28800秒、512MiB、磁盘或25MiB输出硬门，且无法在不改变合同语义的情况下继续。",
+        "- 全量固定三进程串行流水线触发28800秒、主进程与全部子进程峰值RSS保守求和超过512MiB、磁盘或25MiB输出硬门，且无法在不改变合同语义的情况下继续。",
+    ),
+    (
+        "- `scripts/审计/审计阶段1新正式输入时间质量.py`及专项测试：确定性解码、逐行验证、成员裁决、连续段和原子发布。",
+        "- `scripts/审计/审计阶段1新正式输入时间质量.py`、精确源码`scripts/审计/阶段1时间质量扫描器.c`及专项测试：确定性解码、有界内存逐行验证、成员裁决、连续段和原子发布。",
+    ),
+    (
+        "- 单进程、流式、常量内存；不保存或输出价格、数量、成交编号、逐行业务正文或敏感信息。",
+        "- 固定三进程串行流水线、流式、常量内存且成员不并行；主进程与全部子进程峰值RSS保守求和执行512MiB失败关闭；不保存或输出价格、数量、成交编号、逐行业务正文或敏感信息。",
+    ),
+    (
+        "6. 真实单进程运行完成，保存扫描行数、解压字节、耗时、RSS、磁盘和源目录前后指纹；资源硬门均满足。",
+        "6. 真实固定三进程串行流水线运行完成，保存扫描行数、解压字节、耗时、进程拓扑、主进程峰值RSS、全部子进程峰值RSS、二者保守求和、测量平台、磁盘和源目录前后指纹；资源硬门均满足。",
+    ),
+    (
+        "python3 -m py_compile scripts/审计/审计阶段1新正式输入时间质量.py tests/审计/test_审计阶段1新正式输入时间质量.py",
+        "python3 -m py_compile scripts/审计/审计阶段1新正式输入时间质量.py tests/审计/test_审计阶段1新正式输入时间质量.py\n/usr/bin/clang -O2 -std=c11 -Wall -Wextra -Werror -fsyntax-only scripts/审计/阶段1时间质量扫描器.c",
+    ),
+    (
+        "- 当前阻塞原因：无。5180个正式成员、任务-000092官方对象`LastModified`和固定本地只读归档均可用；本任务不依赖Ubuntu、数据库、凭据或生产权限。",
+        "- 当前阻塞原因：无。5180个正式成员、任务-000092官方对象`LastModified`和固定本地只读归档均可用；本任务不依赖Ubuntu、数据库、凭据或生产权限。\n- 解除条件：任务-000095治理修复已进入`main`；精确C源码路径、固定三进程串行拓扑与整个进程组资源计量合同已可由可信规则复验。",
+    ),
+)
+
+
+def _task094_native_scanner_allowed(
+    *, task_ids: Sequence[str], change_type: str | None, path: str
+) -> bool:
+    """只为任务-000094的唯一C扫描器开放受控交付。"""
+
+    return (
+        tuple(task_ids) == (TASK094_CONTRACT_REPAIR_TARGET,)
+        and change_type == "任务交付"
+        and path == TASK094_NATIVE_SCANNER_PATH
+    )
+
+
+def _apply_task094_contract_repair(text: str) -> str | None:
+    """逐字应用任务-000094一次性完整合同替换。"""
+
+    repaired = text
+    for old, new in TASK094_CONTRACT_REPLACEMENTS:
+        if repaired.count(old) != 1 or new in repaired:
+            return None
+        repaired = repaired.replace(old, new, 1)
+    return repaired
+
+
+def _task094_resource_fact_reasons(resource_facts: object) -> tuple[str, ...]:
+    """验证任务-000094整个串行进程组的保守资源事实。"""
+
+    if not isinstance(resource_facts, Mapping):
+        return ("任务-000094缺少进程组资源事实",)
+    required = {
+        "process_topology",
+        "members_parallelism",
+        "controller_max_rss_bytes",
+        "children_max_rss_bytes",
+        "conservative_process_group_max_rss_bytes",
+        "measurement_platform",
+    }
+    reasons: list[str] = []
+    if set(resource_facts) != required:
+        reasons.append("任务-000094进程组资源字段不完整")
+        return tuple(reasons)
+    if resource_facts.get("process_topology") != [
+        "python_controller",
+        "fixed_unzip",
+        "fixed_scanner",
+    ]:
+        reasons.append("任务-000094进程拓扑不匹配")
+    if resource_facts.get("members_parallelism") != 1:
+        reasons.append("任务-000094成员扫描不是串行")
+    values = [
+        resource_facts.get("controller_max_rss_bytes"),
+        resource_facts.get("children_max_rss_bytes"),
+        resource_facts.get("conservative_process_group_max_rss_bytes"),
+    ]
+    if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in values):
+        reasons.append("任务-000094进程组RSS事实无效")
+    else:
+        controller, children, total = values
+        if controller + children != total:
+            reasons.append("任务-000094进程组RSS保守和不守恒")
+        if total > TASK094_RESOURCE_LIMIT_BYTES:
+            reasons.append("任务-000094进程组RSS超过512MiB")
+    platform = resource_facts.get("measurement_platform")
+    if not isinstance(platform, str) or not platform.strip():
+        reasons.append("任务-000094资源测量平台无效")
+    return tuple(reasons)
 IMPLEMENTATION_SHA_PATTERN = re.compile(
     r"^- 实现提交SHA：`([0-9a-f]{40})`$", re.MULTILINE
 )
@@ -1060,6 +1165,36 @@ def _validate_path_facts(
     if total_size > MAX_TOTAL_SIZE:
         _append_reason(reasons, "变更总量超过25MiB")
     return tuple(reasons)
+
+
+def _validate_task094_batch_resource_evidence(
+    path_facts: Sequence[PathFact] | None, reasons: list[str]
+) -> None:
+    """从新增最终批次摘要复验固定进程组资源硬门。"""
+
+    if path_facts is None:
+        _append_reason(reasons, "任务-000094缺少可验证批次路径事实")
+        return
+    summaries = [
+        fact
+        for fact in path_facts
+        if fact.status == "A"
+        and fact.path.startswith("artifacts/审计/阶段1逐行时间质量/")
+        and fact.path.endswith("/summary.json")
+    ]
+    if len(summaries) != 1 or not isinstance(summaries[0].text, str):
+        _append_reason(reasons, "任务-000094必须新增唯一最终批次摘要")
+        return
+    try:
+        document = json.loads(summaries[0].text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        _append_reason(reasons, "任务-000094最终批次摘要无效")
+        return
+    if not isinstance(document, Mapping):
+        _append_reason(reasons, "任务-000094最终批次摘要无效")
+        return
+    for reason in _task094_resource_fact_reasons(document.get("process_group_resource_facts")):
+        _append_reason(reasons, reason)
 
 
 def _without_mutable_metadata_lines(
@@ -2122,6 +2257,53 @@ def _validate_contract_conflict_repair(
     return allowed_unreferenced
 
 
+def _validate_task094_contract_repair(
+    *,
+    task_ids: Sequence[str],
+    changed_paths: Sequence[str],
+    base_tasks: Mapping[str, str],
+    head_tasks: Mapping[str, str],
+    base_board: str | None,
+    head_board: str | None,
+    reasons: list[str],
+) -> set[str]:
+    """验证任务-000095→任务-000094的一次性完整合同修复。"""
+
+    executor_id = TASK094_CONTRACT_REPAIR_EXECUTOR
+    target_id = TASK094_CONTRACT_REPAIR_TARGET
+    allowed = {executor_id, target_id}
+    if tuple(task_ids) != (executor_id,):
+        _append_reason(reasons, "任务-000094合同修复必须且只能关联任务-000095")
+        return allowed
+    target_path = f"docs/研发中心/任务/任务-{target_id}.md"
+    if set(changed_paths) != {target_path}:
+        _append_reason(reasons, "任务-000094合同修复只能修改目标任务文件")
+    executor_base = base_tasks.get(executor_id)
+    executor_head = head_tasks.get(executor_id)
+    target_base = base_tasks.get(target_id)
+    target_head = head_tasks.get(target_id)
+    if None in (executor_base, executor_head, target_base, target_head):
+        _append_reason(reasons, "任务-000094合同修复缺少执行任务或目标任务正文")
+        return allowed
+    assert executor_base is not None and executor_head is not None
+    assert target_base is not None and target_head is not None
+    if executor_base != executor_head:
+        _append_reason(reasons, "任务-000095在目标合同修复中必须逐字不变")
+    if _task_field(TASK_STATUS_PATTERN, executor_base) != "已完成":
+        _append_reason(reasons, "任务-000095必须先完成状态闭环")
+    if (
+        _task_field(TASK_STATUS_PATTERN, target_base) != "待执行"
+        or _task_field(TASK_STATUS_PATTERN, target_head) != "待执行"
+    ):
+        _append_reason(reasons, "任务-000094基线和头部必须保持待执行")
+    expected = _apply_task094_contract_repair(target_base)
+    if expected is None or target_head != expected:
+        _append_reason(reasons, "任务-000094未按固定完整合同修复")
+    if base_board is not None and head_board is not None and base_board != head_board:
+        _append_reason(reasons, "任务-000094合同修复不得改写看板")
+    return allowed
+
+
 def _registration_field_value(text: str, field: str) -> str | None:
     """读取任务头部严格唯一且非空的合同字段。"""
 
@@ -2783,6 +2965,8 @@ def evaluate_eligibility(
                 head_board=head_board,
                 reasons=reasons,
             )
+        if tuple(task_ids) == (TASK094_CONTRACT_REPAIR_TARGET,):
+            _validate_task094_batch_resource_evidence(path_facts, reasons)
     elif change_type == "合并后状态闭环":
         _validate_state_closure(
             task_ids=task_ids,
@@ -2807,6 +2991,16 @@ def evaluate_eligibility(
     elif change_type == CONTRACT_CONFLICT_REPAIR_TYPE:
         if repo_root is None or not base_ref:
             _append_reason(reasons, "任务合同冲突修复缺少可信Git基线")
+        elif tuple(task_ids) == (TASK094_CONTRACT_REPAIR_EXECUTOR,):
+            allowed_unreferenced_task_ids = _validate_task094_contract_repair(
+                task_ids=task_ids,
+                changed_paths=changed_paths,
+                base_tasks=base_tasks,
+                head_tasks=head_tasks,
+                base_board=base_board,
+                head_board=head_board,
+                reasons=reasons,
+            )
         else:
             allowed_unreferenced_task_ids = _validate_contract_conflict_repair(
                 repo_root=repo_root,
@@ -2849,7 +3043,11 @@ def evaluate_eligibility(
                         else _is_low_risk_path(path)
                     )
                 )
-            if not allowed:
+            if not allowed and not _task094_native_scanner_allowed(
+                task_ids=task_ids,
+                change_type=change_type,
+                path=path,
+            ):
                 _append_reason(reasons, f"变更路径“{path}”不允许自动合并")
         elif change_type == BLOCKED_CONTRACT_REPAIR_TYPE:
             if path not in BLOCKED_CONTRACT_REPAIR_ALLOWED_PATHS:
@@ -2873,10 +3071,14 @@ def evaluate_eligibility(
                     )
         elif change_type == CONTRACT_CONFLICT_REPAIR_TYPE:
             task_match = TASK_FILE_PATTERN.fullmatch(path)
-            is_allowed_task = task_match is not None and task_match.group(1) in {
-                CONTRACT_CONFLICT_REPAIR_EXECUTOR,
-                CONTRACT_CONFLICT_REPAIR_TARGET,
-            }
+            contract_task_ids = (
+                {TASK094_CONTRACT_REPAIR_EXECUTOR, TASK094_CONTRACT_REPAIR_TARGET}
+                if tuple(task_ids) == (TASK094_CONTRACT_REPAIR_EXECUTOR,)
+                else {CONTRACT_CONFLICT_REPAIR_EXECUTOR, CONTRACT_CONFLICT_REPAIR_TARGET}
+            )
+            is_allowed_task = (
+                task_match is not None and task_match.group(1) in contract_task_ids
+            )
             is_allowed_test = (
                 len(PurePosixPath(path).parts) == 3
                 and PurePosixPath(path).parts[:2] == ("tests", "研发中心")
@@ -3084,6 +3286,7 @@ def main() -> int:
     pr_body = str(metadata.get("body", ""))
     change_type = parse_change_type(pr_body)
     task_ids = set(parse_task_references(pr_body))
+    body_task_ids = set(task_ids)
     for path in changed_paths:
         match = TASK_FILE_PATTERN.fullmatch(path)
         if match is not None:
@@ -3092,6 +3295,12 @@ def main() -> int:
             if (
                 change_type == BLOCKED_CONTRACT_REPAIR_TYPE
                 and match.group(1) in BLOCKED_CONTRACT_REPAIR_TARGETS
+            ):
+                continue
+            if (
+                change_type == CONTRACT_CONFLICT_REPAIR_TYPE
+                and body_task_ids == {TASK094_CONTRACT_REPAIR_EXECUTOR}
+                and match.group(1) == TASK094_CONTRACT_REPAIR_TARGET
             ):
                 continue
             task_ids.add(match.group(1))
@@ -3118,6 +3327,11 @@ def main() -> int:
         }.get(ordered_ids[0])
         if target_id is not None:
             load_ids.add(target_id)
+    if (
+        change_type == CONTRACT_CONFLICT_REPAIR_TYPE
+        and ordered_ids == (TASK094_CONTRACT_REPAIR_EXECUTOR,)
+    ):
+        load_ids.add(TASK094_CONTRACT_REPAIR_TARGET)
     loaded_ids = tuple(sorted(load_ids))
     base_tasks = _load_ref_tasks(repo_root, arguments.base_ref, loaded_ids)
     head_tasks = _load_ref_tasks(repo_root, arguments.head_ref, loaded_ids)

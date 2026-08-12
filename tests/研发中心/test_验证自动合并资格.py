@@ -510,6 +510,98 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         values.update(overrides)
         return self.policy.PathFact(path=path, **values)
 
+    def test_任务094精确C扫描器白名单不扩散(self):
+        path = "scripts/审计/阶段1时间质量扫描器.c"
+        self.assertTrue(
+            self.policy._task094_native_scanner_allowed(
+                task_ids=("000094",), change_type="任务交付", path=path
+            )
+        )
+        for task_ids, change_type, candidate in (
+            (("000095",), "任务交付", path),
+            (("000094",), "任务登记", path),
+            (("000094",), "任务交付", "scripts/审计/其他扫描器.c"),
+            (("000094",), "任务交付", "src/阶段1时间质量扫描器.c"),
+            (("000094",), "任务交付", "scripts/审计/阶段1时间质量扫描器.o"),
+        ):
+            with self.subTest(task_ids=task_ids, change_type=change_type, path=candidate):
+                self.assertFalse(
+                    self.policy._task094_native_scanner_allowed(
+                        task_ids=task_ids,
+                        change_type=change_type,
+                        path=candidate,
+                    )
+                )
+
+    def test_任务094合同修复必须完整且逐字(self):
+        base = (REPO_ROOT / "docs/研发中心/任务/任务-000094.md").read_text(
+            encoding="utf-8"
+        )
+        repaired = self.policy._apply_task094_contract_repair(base)
+        self.assertIsNotNone(repaired)
+        assert repaired is not None
+        self.assertIn("固定三进程串行流水线", repaired)
+        self.assertIn("阶段1时间质量扫描器.c", repaired)
+        self.assertIn("主进程与全部子进程峰值RSS保守求和", repaired)
+        self.assertIn("- 解除条件：任务-000095", repaired)
+        self.assertEqual(1, repaired.count("- 解除条件："))
+        self.assertIsNone(
+            self.policy._apply_task094_contract_repair(
+                base.replace("单进程逐ZIP逐行扫描", "抽样扫描", 1)
+            )
+        )
+
+    def test_任务094进程组资源事实严格守恒(self):
+        valid = {
+            "process_topology": ["python_controller", "fixed_unzip", "fixed_scanner"],
+            "members_parallelism": 1,
+            "controller_max_rss_bytes": 120000000,
+            "children_max_rss_bytes": 80000000,
+            "conservative_process_group_max_rss_bytes": 200000000,
+            "measurement_platform": "darwin-rusage-maxrss",
+        }
+        self.assertEqual((), self.policy._task094_resource_fact_reasons(valid))
+        for mutation in (
+            {**valid, "members_parallelism": 2},
+            {**valid, "conservative_process_group_max_rss_bytes": 199999999},
+            {**valid, "conservative_process_group_max_rss_bytes": 536870913},
+            {key: value for key, value in valid.items() if key != "children_max_rss_bytes"},
+        ):
+            with self.subTest(mutation=mutation):
+                self.assertTrue(self.policy._task094_resource_fact_reasons(mutation))
+
+    def test_任务095到094一次性合同修复不允许夹带(self):
+        target_base = (
+            REPO_ROOT / "docs/研发中心/任务/任务-000094.md"
+        ).read_text(encoding="utf-8")
+        target_head = self.policy._apply_task094_contract_repair(target_base)
+        assert target_head is not None
+        executor = task_text(status="已完成", task_type="治理")
+        reasons = []
+        allowed = self.policy._validate_task094_contract_repair(
+            task_ids=("000095",),
+            changed_paths=("docs/研发中心/任务/任务-000094.md",),
+            base_tasks={"000095": executor, "000094": target_base},
+            head_tasks={"000095": executor, "000094": target_head},
+            base_board="same",
+            head_board="same",
+            reasons=reasons,
+        )
+        self.assertEqual({"000094", "000095"}, allowed)
+        self.assertEqual([], reasons)
+        tampered = target_head.replace("512MiB", "513MiB", 1)
+        tampered_reasons = []
+        self.policy._validate_task094_contract_repair(
+            task_ids=("000095",),
+            changed_paths=("docs/研发中心/任务/任务-000094.md",),
+            base_tasks={"000095": executor, "000094": target_base},
+            head_tasks={"000095": executor, "000094": tampered},
+            base_board="same",
+            head_board="same",
+            reasons=tampered_reasons,
+        )
+        self.assertIn("任务-000094未按固定完整合同修复", tampered_reasons)
+
     def registration_inputs(
         self,
         *,
