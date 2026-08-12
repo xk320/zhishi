@@ -158,10 +158,30 @@ class 阶段1当前最终门禁测试(unittest.TestCase):
             重放2 = json.loads((目标 / "replay-2.json").read_text(encoding="utf-8"))
             self.assertNotEqual(重放1["process_id"], 重放2["process_id"])
             self.assertNotEqual(重放1["process_id"], 模块.os.getpid())
+            self.assertGreater(重放1["rss_bytes"], 0)
+            self.assertLessEqual(重放1["rss_bytes"], 268435456)
+            self.assertGreater(重放2["rss_bytes"], 0)
+            self.assertLessEqual(重放2["rss_bytes"], 268435456)
+            self.assertEqual(
+                json.loads((目标 / "summary.json").read_text(encoding="utf-8"))["resource_facts"]["replay_rss_bytes"],
+                [重放1["rss_bytes"], 重放2["rss_bytes"]],
+            )
             原摘要 = (目标 / "summary.json").read_bytes()
             with self.assertRaises((FileExistsError, 模块.合同错误)):
                 模块.执行正式批次(根, 配置路径, 输出根, 批次, 测试模式=True)
             self.assertEqual((目标 / "summary.json").read_bytes(), 原摘要)
+
+    @unittest.skipIf(模块 is None, "等待执行器实现")
+    def test_清理失败发生在发布前且不得留下正式批次(self):
+        配置路径 = 根 / "config/审计/任务-000105阶段1最终审计.json"
+        with tempfile.TemporaryDirectory(prefix="zhishi-task105-cleanup-") as 临时:
+            输出根 = Path(临时) / "输出"
+            输出根.mkdir()
+            批次 = "stage1-current-final-gate-20260812T220000Z-ffeeddccbbaa"
+            with mock.patch.object(模块, "_安全清理", side_effect=模块.合同错误("CLEANUP_FAILED")):
+                with self.assertRaisesRegex(模块.合同错误, "CLEANUP_FAILED"):
+                    模块.执行正式批次(根, 配置路径, 输出根, 批次, 测试模式=True)
+            self.assertFalse((输出根 / 批次).exists())
 
 
 if __name__ == "__main__":

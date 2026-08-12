@@ -340,7 +340,7 @@ def _原子不覆盖发布(来源: Path, 目标: Path) -> None:
 def _新建受控临时根(父目录: Path, 前缀: str) -> tuple[Path, str]:
     根 = Path(tempfile.mkdtemp(prefix=前缀, dir=父目录))
     令牌 = hashlib.sha256(os.urandom(32)).hexdigest()
-    (根 / ".zhishi-task105-sentinel").write_text(令牌, encoding="ascii")
+    根.with_name(根.name + ".sentinel").write_text(令牌, encoding="ascii")
     return 根, 令牌
 
 
@@ -349,15 +349,16 @@ def _安全清理(目标: Path, 允许父目录: Path, 令牌: str) -> None:
         目标.resolve(strict=True).relative_to(允许父目录.resolve(strict=True))
     except (OSError, ValueError) as 错误:
         raise 合同错误("CLEANUP_PATH_INVALID") from 错误
-    哨兵 = 目标 / ".zhishi-task105-sentinel"
+    哨兵 = 目标.with_name(目标.name + ".sentinel")
     if 目标.is_symlink() or not 目标.name.startswith(".task105-") or not 哨兵.is_file() or 哨兵.is_symlink():
         raise 合同错误("CLEANUP_IDENTITY_INVALID")
     if 哨兵.read_text(encoding="ascii") != 令牌:
         raise 合同错误("CLEANUP_IDENTITY_INVALID")
     shutil.rmtree(目标)
+    哨兵.unlink()
 
 
-def _独立重算(仓库: Path, 配置路径: Path, 批次: str, 槽位: int, 超时: float) -> dict[str, Any]:
+def _独立重算(仓库: Path, 配置路径: Path, 批次: str, 槽位: int, 超时: float, RSS上限: int) -> dict[str, Any]:
     命令 = [
         sys.executable, str(Path(__file__).resolve()), "replay-worker",
         "--repo-root", str(仓库), "--config", str(配置路径), "--batch", 批次,
@@ -374,8 +375,15 @@ def _独立重算(仓库: Path, 配置路径: Path, 批次: str, 槽位: int, �
         结果 = json.loads(完成.stdout)
     except json.JSONDecodeError as 错误:
         raise 合同错误(f"REPLAY_PROCESS_INVALID:{槽位}") from 错误
-    if 结果.get("slot") != 槽位 or not isinstance(结果.get("process_id"), int):
+    if (
+        结果.get("slot") != 槽位
+        or not isinstance(结果.get("process_id"), int)
+        or not isinstance(结果.get("rss_bytes"), int)
+        or 结果["rss_bytes"] <= 0
+    ):
         raise 合同错误(f"REPLAY_PROCESS_INVALID:{槽位}")
+    if 结果["rss_bytes"] > RSS上限:
+        raise 合同错误(f"REPLAY_RSS_LIMIT_EXCEEDED:{槽位}")
     return 结果
 
 
@@ -453,10 +461,10 @@ def 执行正式批次(仓库: Path, 配置路径: Path, 输出根: Path, 批次
         裁决 = 生成裁决(事实)
         结果指纹 = hashlib.sha256(规范JSON(裁决).encode()).hexdigest()
         剩余 = float(限制["总时限秒"]) - (time.monotonic() - 开始)
-        重放1 = _独立重算(仓库, 配置路径, 批次, 1, 剩余)
+        重放1 = _独立重算(仓库, 配置路径, 批次, 1, 剩余, int(限制["RSS字节"]))
         _验证资源(_资源快照(输出根), 限制, 开始)
         剩余 = float(限制["总时限秒"]) - (time.monotonic() - 开始)
-        重放2 = _独立重算(仓库, 配置路径, 批次, 2, 剩余)
+        重放2 = _独立重算(仓库, 配置路径, 批次, 2, 剩余, int(限制["RSS字节"]))
         if (
             重放1["process_id"] == 重放2["process_id"]
             or 重放1["process_id"] == os.getpid()
@@ -482,6 +490,7 @@ def 执行正式批次(仓库: Path, 配置路径: Path, 输出根: Path, 批次
             "input_bytes": _固定输入总字节(仓库, 配置),
             "memory_available_percent": 结束资源["memory_available_percent"],
             "disk_available_bytes": 结束资源["disk_available_bytes"],
+            "replay_rss_bytes": [重放1["rss_bytes"], 重放2["rss_bytes"]],
         },
         "input_validators": {任务: 事实[任务]["验证器状态"] for 任务 in 必需任务},
         "cleanup_completed_before_publish": True,
@@ -498,19 +507,24 @@ def 执行正式批次(仓库: Path, 配置路径: Path, 输出根: Path, 批次
     finally:
         if 工作根.exists():
             _安全清理(工作根, 输出根, 工作令牌)
-    发布根, 发布令牌 = _新建受控临时根(输出根, ".task105-publish-")
-    发布暂存 = 发布根 / "batch"
-    发布暂存.mkdir()
+    发布暂存, 发布令牌 = _新建受控临时根(输出根, ".task105-publish-")
     try:
         for 名称, 内容 in 发布字节.items():
             (发布暂存 / 名称).write_bytes(内容)
         验证已发布批次(仓库, 配置路径, 发布暂存)
         _验证资源(_资源快照(输出根), 限制, 开始)
+        发布哨兵 = 发布暂存.with_name(发布暂存.name + ".sentinel")
+        发布哨兵.unlink()
         目标 = 输出根 / 批次
         _原子不覆盖发布(发布暂存, 目标)
-    finally:
-        if 发布根.exists():
-            _安全清理(发布根, 输出根, 发布令牌)
+    except Exception:
+        if 发布暂存.exists():
+            # 若哨兵已移除但发布尚未成功，恢复哨兵后按固定边界清理。
+            哨兵 = 发布暂存.with_name(发布暂存.name + ".sentinel")
+            if not 哨兵.exists():
+                哨兵.write_text(发布令牌, encoding="ascii")
+            _安全清理(发布暂存, 输出根, 发布令牌)
+        raise
     验证已发布批次(仓库, 配置路径, 目标)
     return 目标
 
@@ -538,6 +552,7 @@ def 验证已发布批次(仓库: Path, 配置路径: Path, 目录: Path) -> dic
     if (
         [项.get("slot") for 项 in 重放们] != [1, 2]
         or any(not isinstance(项.get("process_id"), int) or 项["process_id"] <= 0 for 项 in 重放们)
+        or any(not isinstance(项.get("rss_bytes"), int) or 项["rss_bytes"] <= 0 or 项["rss_bytes"] > int(配置["资源上限"]["RSS字节"]) for 项 in 重放们)
         or 重放们[0]["process_id"] == 重放们[1]["process_id"]
     ):
         raise 合同错误("REPLAY_PROCESS_DRIFT")
@@ -561,6 +576,7 @@ def 验证已发布批次(仓库: Path, 配置路径: Path, 目录: Path) -> dic
         or 意图.get("task_contract_sha256") != _任务合同指纹(仓库 / "docs/研发中心/任务/任务-000105.md")
         or 摘要.get("cleanup_completed_before_publish") is not True
         or set(摘要.get("input_validators", {}).values()) != {"通过"}
+        or 摘要.get("resource_facts", {}).get("replay_rss_bytes") != [项["rss_bytes"] for 项 in 重放们]
     ):
         raise 合同错误("DELIVERY_BINDING_DRIFT")
     return 摘要
@@ -589,6 +605,7 @@ def main() -> int:
         结果 = {
             "slot": 参数.slot, "process_id": os.getpid(),
             "process_started_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "rss_bytes": _当前RSS字节(),
             "result": 裁决,
             "result_sha256": hashlib.sha256(规范JSON(裁决).encode()).hexdigest(),
         }
