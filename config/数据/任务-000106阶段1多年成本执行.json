@@ -1,0 +1,79 @@
+{
+  "任务编号": "任务-000106",
+  "S3服务域": "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision",
+  "归档组": [
+    {
+      "组编号": "BTCUSDT-fundingRate",
+      "标的": "BTCUSDT",
+      "对象类型": "fundingRate",
+      "前缀": "data/futures/um/monthly/fundingRate/BTCUSDT/",
+      "探针对象": "BTCUSDT-fundingRate-2020-01.zip",
+      "Schema": ["calc_time", "funding_interval_hours", "last_funding_rate"]
+    },
+    {
+      "组编号": "BTCUSDT-bookTicker",
+      "标的": "BTCUSDT",
+      "对象类型": "bookTicker",
+      "前缀": "data/futures/um/daily/bookTicker/BTCUSDT/",
+      "探针对象": "BTCUSDT-bookTicker-2023-05-16.zip",
+      "Schema": ["update_id", "best_bid_price", "best_bid_qty", "best_ask_price", "best_ask_qty", "transaction_time", "event_time"]
+    },
+    {
+      "组编号": "BTCUSDT-bookDepth",
+      "标的": "BTCUSDT",
+      "对象类型": "bookDepth",
+      "前缀": "data/futures/um/daily/bookDepth/BTCUSDT/",
+      "探针对象": "BTCUSDT-bookDepth-2023-01-01.zip",
+      "Schema": ["timestamp", "percentage", "depth", "notional"]
+    },
+    {
+      "组编号": "ETHUSDT-fundingRate",
+      "标的": "ETHUSDT",
+      "对象类型": "fundingRate",
+      "前缀": "data/futures/um/monthly/fundingRate/ETHUSDT/",
+      "探针对象": "ETHUSDT-fundingRate-2020-01.zip",
+      "Schema": ["calc_time", "funding_interval_hours", "last_funding_rate"]
+    },
+    {
+      "组编号": "ETHUSDT-bookTicker",
+      "标的": "ETHUSDT",
+      "对象类型": "bookTicker",
+      "前缀": "data/futures/um/daily/bookTicker/ETHUSDT/",
+      "探针对象": "ETHUSDT-bookTicker-2023-05-16.zip",
+      "Schema": ["update_id", "best_bid_price", "best_bid_qty", "best_ask_price", "best_ask_qty", "transaction_time", "event_time"]
+    },
+    {
+      "组编号": "ETHUSDT-bookDepth",
+      "标的": "ETHUSDT",
+      "对象类型": "bookDepth",
+      "前缀": "data/futures/um/daily/bookDepth/ETHUSDT/",
+      "探针对象": "ETHUSDT-bookDepth-2023-01-01.zip",
+      "Schema": ["timestamp", "percentage", "depth", "notional"]
+    }
+  ],
+  "资源上限": {
+    "网络总字节": 21474836480,
+    "RSS字节": 536870912,
+    "单对象字节": 21474836480,
+    "清单对象数": 200000,
+    "清单响应字节": 67108864,
+    "ZIP成员数": 4,
+    "ZIP解压字节": 2147483648
+  },
+  "正式窗口": {
+    "BTCUSDT": {"起点": "2019-09-08", "终点": "2026-07-30"},
+    "ETHUSDT": {"起点": "2019-11-27", "终点": "2026-08-03"}
+  },
+  "上游绑定": {
+    "任务-000105": {
+      "批次": "stage1-current-final-gate-20260812T213100Z-6c0e4bf5d923",
+      "结果SHA-256": "43814e0f70143eb798b7dea71a36dfa4383b95bd9fff865c808f767ac8f1c4b0"
+    },
+    "任务-000094批次": "stage1-time-quality-20260812T091000Z-6968246516ef",
+    "任务-000099批次": "stage1-prior-frozen-replay-20260812T130000Z-ca8ae0a8ecd7"
+  },
+  "运行时": {
+    "Demo主机": "demo-fapi.binance.com",
+    "主网证据事前截止": "2026-08-13T00:00:00+08:00"
+  }
+}
