@@ -935,7 +935,7 @@ for item in requests:
  try:
   curl=shutil.which("curl")
   if not curl: raise RuntimeError("CURL_MISSING")
-  response=subprocess.run([curl,"--ipv4","--silent","--show-error","--fail","--connect-timeout","5","--max-time","10","--max-filesize","2000000","--user-agent","zhishi-cost-evidence/1.0",item["request_uri"]],capture_output=True,timeout=15,check=False)
+  response=subprocess.run([curl,"-q","--ipv4","--silent","--show-error","--fail","--connect-timeout","5","--max-time","10","--max-filesize","2000000","--user-agent","zhishi-cost-evidence/1.0",item["request_uri"]],capture_output=True,timeout=15,check=False,env={{"PATH":"/usr/bin:/bin","LC_ALL":"C"}})
   if response.returncode: raise RuntimeError("HTTPS_REQUEST_FAILED_"+str(response.returncode))
   raw=response.stdout
   if len(raw)>2000000: raise ValueError("BINANCE_RESPONSE_LIMIT_EXCEEDED")

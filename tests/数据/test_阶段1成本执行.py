@@ -12,7 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "scripts" / "数据" / "验证阶段1成本执行.py"
 CONFIG_PATH = ROOT / "config" / "数据" / "任务-000100阶段1成本执行.json"
-FORMAL_BATCH = "stage1-cost-execution-20260812T170000Z-81f61b9fae06"
+FORMAL_BATCH = "stage1-cost-execution-20260812T171000Z-81f61b9fae06"
 FORMAL_ROOT = ROOT / "artifacts" / "数据" / "阶段1成本执行" / FORMAL_BATCH
 
 
@@ -257,6 +257,8 @@ def test_Binance远端探针不禁用证书验证(module, config):
     assert "/fapi/v2/account" not in program
     assert "fapi.binance.com" in program
     assert "str(response.returncode)" in program
+    assert '[curl,"-q","--ipv4"' in program
+    assert 'env={"PATH":"/usr/bin:/bin","LC_ALL":"C"}' in program
     assert "--no-defaults" in module.REMOTE_METADATA_PROGRAM
     assert "--no-defaults" in module._remote_query_program([], explain_only=False)
 
@@ -359,8 +361,8 @@ def test_敏感文本失败关闭(module):
 
 def test_正式批次清单与分母可复算(module):
     result = module.validate_batch(ROOT, FORMAL_BATCH)
-    assert result["manifest_sha256"] == "a06f20359d7c198c5ecc615671a5a096c855a1ad4afd344bf61eb80127e831b9"
-    assert result["summary_sha256"] == "1f8c6e0fc9f93fc8e043c097f3e7c97be84a385d0d47ba69e8b1e2aa0942c15e"
+    assert result["manifest_sha256"] == "4ba3842c1f52255a9cc7dee0c2872917962b15bf9957bf9b016f61c1f6f28b47"
+    assert result["summary_sha256"] == "f8743203c7499398087919735df27b060a919785d5627d6e9f5e4714b02bfdfb"
     assert result["candidate_group_count"] == 32
     assert result["cost_execution_gate"] == "无法判定"
 
