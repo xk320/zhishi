@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "scripts" / "数据" / "验证阶段1成本执行.py"
 CONFIG_PATH = ROOT / "config" / "数据" / "任务-000100阶段1成本执行.json"
-FORMAL_BATCH = "stage1-cost-execution-20260812T160700Z-81f61b9fae06"
+FORMAL_BATCH = "stage1-cost-execution-20260812T165500Z-7cd1992a98c0"
 FORMAL_ROOT = ROOT / "artifacts" / "数据" / "阶段1成本执行" / FORMAL_BATCH
 
 
@@ -212,12 +213,26 @@ def test_查询规划识别明确秒与毫秒时间列(module, config):
         }
     }
     plan = module.build_query_plan(metadata, intent, config)
-    assert plan["query_count"] == 8
+    assert plan["query_count"] == 2
     millisecond_sql = next(query["SQL"] for query in plan["queries"] if query["表"] == "order_book_raw_snapshots")
     second_sql = next(query["SQL"] for query in plan["queries"] if query["表"] == "order_book_feature_buckets")
     millisecond_upper = int(millisecond_sql.split("capture_ts_ms`<", 1)[1].split(" ", 1)[0])
     second_upper = int(second_sql.split("bucket_ts_sec`<", 1)[1].split(" ", 1)[0])
     assert millisecond_upper == second_upper * 1000
+    assert millisecond_sql.count("SELECT") == 1
+    assert "MIN(" in millisecond_sql and "MAX(" in millisecond_sql
+    assert "BTCUSDT" in millisecond_sql and "ETHUSDT" in millisecond_sql
+
+
+def test_元数据探针只使用四个批准视图并隔离登录配置(module):
+    program = module.REMOTE_METADATA_PROGRAM
+    assert "information_schema.TABLES" in program
+    assert "information_schema.COLUMNS" in program
+    assert "information_schema.TABLE_PRIVILEGES" in program
+    assert "information_schema.STATISTICS" in program
+    assert "CURRENT_USER" not in program and "SHOW GRANTS" not in program
+    assert '"MYSQL_TEST_LOGIN_FILE":"/dev/null"' in program
+    assert "metadata_query_count\":4" in program
 
 
 def test_Binance只允许公开端点(module, config):
@@ -279,11 +294,28 @@ def test_当前快照不得回填历史(module):
 
 
 def test_精确生成32个分组且BTC_ETH不互补(module):
-    rows = module.build_group_rows(batch="batch-1", evidence={})
+    rows = module.build_group_rows(
+        batch="batch-1",
+        evidence={"资金费率历史窗口已观察": {"BTCUSDT": False, "ETHUSDT": False}},
+    )
     assert len(rows) == 32
     assert {row["标的"] for row in rows} == {"BTCUSDT", "ETHUSDT"}
     assert all(row["成本与执行总门"] == "无法判定" for row in rows)
     assert all(row["执行延迟状态"] == "无法判定" for row in rows)
+    assert all(row["手续费原因代码"] == "PUBLIC_FEE_VERSION_UNPROVEN" for row in rows)
+
+
+def test_资金费率按标的独立裁决(module):
+    rows = module.build_group_rows(
+        batch="batch-1",
+        evidence={"资金费率历史窗口已观察": {"BTCUSDT": True, "ETHUSDT": False}},
+    )
+    btc = [row for row in rows if row["标的"] == "BTCUSDT"]
+    eth = [row for row in rows if row["标的"] == "ETHUSDT"]
+    assert {row["资金费率状态"] for row in btc} == {"已观察（覆盖不足）"}
+    assert {row["资金费率状态"] for row in eth} == {"无法判定"}
+    assert {row["资金费率原因代码"] for row in btc} == {"FUNDING_HISTORY_COVERAGE_INSUFFICIENT"}
+    assert {row["资金费率原因代码"] for row in eth} == {"BINANCE_FUNDING_EVIDENCE_UNAVAILABLE"}
 
 
 def test_原子追加拒绝覆盖(module, tmp_path):
@@ -293,6 +325,33 @@ def test_原子追加拒绝覆盖(module, tmp_path):
         module.write_json_exclusive(target, {"a": 2})
 
 
+def test_目录发布使用原子禁止覆盖(module, tmp_path):
+    source = tmp_path / "pending"
+    source.mkdir()
+    (source / "evidence").write_text("new", encoding="utf-8")
+    target = tmp_path / "published"
+    target.mkdir()
+    (target / "evidence").write_text("existing", encoding="utf-8")
+    with pytest.raises(FileExistsError):
+        module.publish_directory_no_replace(source, target)
+    assert source.is_dir()
+    assert (target / "evidence").read_text(encoding="utf-8") == "existing"
+
+
+def test_远端查询超时失败关闭且不重试(module, monkeypatch):
+    calls = 0
+
+    def timeout(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise subprocess.TimeoutExpired("ssh", 1)
+
+    monkeypatch.setattr(module.subprocess, "run", timeout)
+    with pytest.raises(RuntimeError, match="REMOTE_PROBE_TIMEOUT"):
+        module._run_ssh_python("print('{}')", timeout=1, max_log=1024)
+    assert calls == 1
+
+
 def test_敏感文本失败关闭(module):
     with pytest.raises(ValueError):
         module.assert_safe_text("pass" + "word=forbidden")
@@ -300,8 +359,8 @@ def test_敏感文本失败关闭(module):
 
 def test_正式批次清单与分母可复算(module):
     result = module.validate_batch(ROOT, FORMAL_BATCH)
-    assert result["manifest_sha256"] == "c6bc4bd7dabeed4f1e2f8097b8953ecfc138c6019d7dd7b525c172522acef51b"
-    assert result["summary_sha256"] == "ece8617c05f15d47cfe51d8e2f89d52eedf76bf809c93fb1519f4e8751c6067b"
+    assert result["manifest_sha256"] == "7ed2fc957f37981e11d40bdccf68ec6d39a0a8225aa5a984d875efb321a8610b"
+    assert result["summary_sha256"] == "7ed4906c02c311455c9c022503ed60bb9a4993171d4c9a95c9494f839e180f65"
     assert result["candidate_group_count"] == 32
     assert result["cost_execution_gate"] == "无法判定"
 
@@ -340,11 +399,30 @@ def test_正式批次语义篡改即使重签清单也失败(module, tmp_path, m
 
 def test_正式批次数据库查询是索引有界且不重试():
     evidence = json.loads((FORMAL_ROOT / "database-evidence.json").read_text(encoding="utf-8"))
-    assert evidence["executed_query_count"] == 16
-    assert evidence["estimated_rows"] == 16
-    assert evidence["response_bytes"] == 340
+    assert evidence["executed_query_count"] == 4
+    assert evidence["estimated_rows"] == 410
+    assert evidence["response_bytes"] == 276
     assert evidence["query_retry_count"] == 0
     assert all(item["状态"] == "通过" for item in evidence["query_decisions"])
+
+
+def test_正式批次凭据隔离SQL预算与逐项原因可复算():
+    metadata = json.loads((FORMAL_ROOT / "metadata.json").read_text(encoding="utf-8"))["metadata"]
+    assert metadata["option_files_disabled"] is True
+    assert metadata["login_path_redirected"] is True
+    assert metadata["credential_environment_cleared"] is True
+    assert metadata["metadata_query_count"] == 4
+    assert {row[0] for row in metadata["table_privileges"] if row[1] == "SELECT"} == {
+        row[0] for row in metadata["tables"]
+    }
+    summary = json.loads((FORMAL_ROOT / "summary.json").read_text(encoding="utf-8"))
+    assert summary["resource_facts"]["non_explain_sql_count"] == 12
+    assert summary["resource_facts"]["business_query_count"] == 4
+    assert summary["funding_window_observed_by_symbol"] == {"BTCUSDT": False, "ETHUSDT": False}
+    rows = list(__import__("csv").DictReader((FORMAL_ROOT / "group-results.csv").open(encoding="utf-8")))
+    reason_fields = [name for name in rows[0] if name.endswith("原因代码")]
+    assert len(reason_fields) == 9
+    assert all(all(row[name] for name in reason_fields) for row in rows)
 
 
 def test_正式批次如实保留Binance公开端点超时():

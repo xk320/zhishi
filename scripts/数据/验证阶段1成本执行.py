@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import ctypes
 import datetime as dt
 import hashlib
 import io
@@ -125,6 +126,26 @@ def write_text_exclusive(path: Path, text: str) -> None:
     write_bytes_exclusive(path, text.encode("utf-8"))
 
 
+def publish_directory_no_replace(source: Path, target: Path) -> None:
+    """以操作系统原生no-replace语义原子发布同文件系统目录。"""
+    if source.parent.stat().st_dev != target.parent.stat().st_dev:
+        raise ValueError("PUBLISH_FILESYSTEM_MISMATCH")
+    libc = ctypes.CDLL(None, use_errno=True)
+    source_bytes = os.fsencode(source)
+    target_bytes = os.fsencode(target)
+    if sys.platform == "darwin" and hasattr(libc, "renamex_np"):
+        result = libc.renamex_np(source_bytes, target_bytes, 0x00000004)
+    elif hasattr(libc, "renameat2"):
+        result = libc.renameat2(-100, source_bytes, -100, target_bytes, 1)
+    else:
+        raise RuntimeError("ATOMIC_NOREPLACE_UNAVAILABLE")
+    if result != 0:
+        error = ctypes.get_errno()
+        if error in (17, 39):
+            raise FileExistsError(target)
+        raise OSError(error, os.strerror(error), target)
+
+
 def read_json(path: Path) -> Any:
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"INPUT_NOT_REGULAR_FILE:{path}")
@@ -208,7 +229,7 @@ def validate_config(config: Mapping[str, Any]) -> None:
 def validate_business_sql(sql: str, config: Mapping[str, Any]) -> str:
     compact = " ".join(sql.strip().split())
     lowered = compact.lower()
-    if not lowered.startswith("select ") or FORBIDDEN_SQL.search(compact):
+    if not lowered.startswith(("select ", "(select ")) or FORBIDDEN_SQL.search(compact):
         raise ValueError("SQL_NOT_READ_ONLY")
     if re.search(r"(?is)select\s+(?:distinct\s+)?\*", compact):
         raise ValueError("SQL_WILDCARD_REJECTED")
@@ -277,6 +298,14 @@ def validate_resource_facts(facts: Mapping[str, Any], limits: Mapping[str, int])
         raise ValueError("BATCH_ELAPSED_LIMIT_EXCEEDED")
     if not isinstance(rss, int) or isinstance(rss, bool) or rss < 0 or rss > limits["RSS字节"]:
         raise ValueError("BATCH_RSS_LIMIT_EXCEEDED")
+    sql_count = facts.get("non_explain_sql_count")
+    if sql_count is not None and (
+        not isinstance(sql_count, int)
+        or isinstance(sql_count, bool)
+        or sql_count < 0
+        or sql_count > limits["SQL总数"]
+    ):
+        raise ValueError("BATCH_SQL_COUNT_EXCEEDED")
 
 
 def _metadata_invariant(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -284,12 +313,16 @@ def _metadata_invariant(value: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "protocol": value.get("protocol"),
         "uid": value.get("uid"),
-        "identity_sha256": value.get("identity_sha256"),
-        "grant_sha256": value.get("grant_sha256"),
+        "client_sha256": value.get("client_sha256"),
+        "client_version_sha256": value.get("client_version_sha256"),
         "select_capability": value.get("select_capability"),
-        "credential_files_disabled": value.get("credential_files_disabled"),
+        "option_files_disabled": value.get("option_files_disabled"),
+        "login_path_redirected": value.get("login_path_redirected"),
+        "credential_environment_cleared": value.get("credential_environment_cleared"),
+        "metadata_query_count": value.get("metadata_query_count"),
         "tables": tables,
         "columns": value.get("columns"),
+        "table_privileges": value.get("table_privileges"),
         "indexes": value.get("indexes"),
     }
 
@@ -299,12 +332,23 @@ def validate_metadata_snapshot(value: Mapping[str, Any]) -> None:
         value.get("protocol") != "zhishi-stage1-cost-metadata/1"
         or value.get("uid") != 0
         or value.get("select_capability") is not True
-        or value.get("credential_files_disabled") is not True
+        or value.get("option_files_disabled") is not True
+        or value.get("login_path_redirected") is not True
+        or value.get("credential_environment_cleared") is not True
+        or value.get("metadata_query_count") != 4
     ):
         raise ValueError("REMOTE_METADATA_IDENTITY_INVALID")
-    for key in ("identity_sha256", "grant_sha256"):
+    for key in ("client_sha256", "client_version_sha256"):
         if not isinstance(value.get(key), str) or SHA_PATTERN.fullmatch(value[key]) is None:
             raise ValueError("REMOTE_METADATA_FINGERPRINT_INVALID")
+    table_names = {row[0] for row in value.get("tables", []) if isinstance(row, list) and len(row) >= 1}
+    select_tables = {
+        row[0]
+        for row in value.get("table_privileges", [])
+        if isinstance(row, list) and len(row) == 3 and row[1] == "SELECT"
+    }
+    if len(table_names) != 5 or select_tables != table_names:
+        raise ValueError("REMOTE_TABLE_SELECT_PRIVILEGE_INVALID")
     load1 = value.get("load1")
     cpu_count = value.get("cpu_count")
     if (
@@ -352,18 +396,18 @@ def build_gate_decision(observable: Mapping[str, str]) -> dict[str, str]:
 
 
 def build_group_rows(*, batch: str, evidence: Mapping[str, Any]) -> list[dict[str, Any]]:
-    statuses = {
-        "手续费": "无法判定",
-        "价差": "无法判定",
-        "深度": "无法判定",
-        "冲击": "无法判定",
-        "资金费率": "无法判定",
-        "行情可见性延迟": "无法判定",
-        "可成交量": "无法判定",
+    funding_by_symbol = evidence.get("资金费率历史窗口已观察", {})
+    if not isinstance(funding_by_symbol, Mapping):
+        raise ValueError("FUNDING_STATUS_BY_SYMBOL_REQUIRED")
+    reasons = {
+        "手续费": ("PUBLIC_FEE_VERSION_UNPROVEN", "提供同版本、非账户专属的公开手续费身份"),
+        "价差": ("HISTORICAL_ORDERBOOK_COVERAGE_INSUFFICIENT", "提供覆盖正式输入历史现场的买卖盘证据"),
+        "深度": ("HISTORICAL_ORDERBOOK_COVERAGE_INSUFFICIENT", "提供覆盖正式输入历史现场的深度证据"),
+        "冲击": ("HISTORICAL_ORDERBOOK_COVERAGE_INSUFFICIENT", "提供同历史现场、固定名义规模的冲击证据"),
+        "行情可见性延迟": ("THREE_TIME_EXECUTION_MAPPING_MISSING", "绑定同历史现场的事件、到达与采集时间"),
+        "可成交量": ("HISTORICAL_ORDERBOOK_COVERAGE_INSUFFICIENT", "提供同历史现场的可成交量证据"),
+        "执行延迟": ("EXECUTION_LIFECYCLE_EVIDENCE_MISSING", "提供版本化模拟委托发送、确认/成交、排队和撤单时间"),
     }
-    if evidence.get("资金费率历史窗口已观察") is True:
-        statuses["资金费率"] = "已观察（覆盖不足）"
-    gate = build_gate_decision(statuses)
     rows = []
     for symbol, direction, phase, horizon in product(
         ("BTCUSDT", "ETHUSDT"),
@@ -371,6 +415,16 @@ def build_group_rows(*, batch: str, evidence: Mapping[str, Any]) -> list[dict[st
         ("入场", "退出"),
         (4, 8, 24, 48),
     ):
+        statuses = {name: "无法判定" for name in ("手续费", "价差", "深度", "冲击", "资金费率", "行情可见性延迟", "可成交量")}
+        funding_observed = funding_by_symbol.get(symbol) is True
+        if funding_observed:
+            statuses["资金费率"] = "已观察（覆盖不足）"
+        funding_reason = (
+            ("FUNDING_HISTORY_COVERAGE_INSUFFICIENT", "扩展同版本资金费率至正式输入历史窗口")
+            if funding_observed
+            else ("BINANCE_FUNDING_EVIDENCE_UNAVAILABLE", "取得该标的截止冻结时点的官方历史资金费率证据")
+        )
+        gate = build_gate_decision(statuses)
         rows.append(
             {
                 "批次": batch,
@@ -391,8 +445,24 @@ def build_group_rows(*, batch: str, evidence: Mapping[str, Any]) -> list[dict[st
                 "可成交量状态": gate["可成交量"],
                 "执行延迟状态": gate["执行延迟"],
                 "成本与执行总门": gate["成本与执行总门"],
-                "原因代码": "EXECUTION_LIFECYCLE_EVIDENCE_MISSING",
-                "解除条件": "同一历史现场的版本化模拟委托发送、确认/成交、排队和撤单时间证据",
+                "手续费原因代码": reasons["手续费"][0],
+                "手续费解除条件": reasons["手续费"][1],
+                "价差原因代码": reasons["价差"][0],
+                "价差解除条件": reasons["价差"][1],
+                "深度原因代码": reasons["深度"][0],
+                "深度解除条件": reasons["深度"][1],
+                "冲击原因代码": reasons["冲击"][0],
+                "冲击解除条件": reasons["冲击"][1],
+                "资金费率原因代码": funding_reason[0],
+                "资金费率解除条件": funding_reason[1],
+                "行情可见性延迟原因代码": reasons["行情可见性延迟"][0],
+                "行情可见性延迟解除条件": reasons["行情可见性延迟"][1],
+                "可成交量原因代码": reasons["可成交量"][0],
+                "可成交量解除条件": reasons["可成交量"][1],
+                "执行延迟原因代码": reasons["执行延迟"][0],
+                "执行延迟解除条件": reasons["执行延迟"][1],
+                "总门原因代码": "EXECUTION_LIFECYCLE_EVIDENCE_MISSING",
+                "总门解除条件": "同一历史现场的版本化模拟委托生命周期证据",
             }
         )
     return rows
@@ -508,19 +578,24 @@ import hashlib,json,os,shutil,subprocess,sys
 tables=("order_book_raw_snapshots","order_book_feature_buckets","order_book_market_structure_snapshots","order_book_public_context_snapshots","symbol_metadata")
 client=shutil.which("mysql") or shutil.which("mariadb")
 if not client: raise SystemExit("MYSQL_CLIENT_MISSING")
+clean_env={"PATH":"/usr/bin:/bin","LC_ALL":"C","MYSQL_TEST_LOGIN_FILE":"/dev/null"}
+def file_sha(path):
+ h=hashlib.sha256()
+ with open(path,"rb") as stream:
+  for chunk in iter(lambda:stream.read(1048576),b""): h.update(chunk)
+ return h.hexdigest()
 def run(sql):
- p=subprocess.run([client,"--no-defaults","--batch","--raw","--skip-column-names","--connect-timeout=5","--database=orderbook","--execute",sql],capture_output=True,text=True,timeout=30,check=False)
+ p=subprocess.run([client,"--no-defaults","--batch","--raw","--skip-column-names","--connect-timeout=5","--database=orderbook","--execute",sql],capture_output=True,text=True,timeout=30,check=False,env=clean_env)
  if p.returncode: raise SystemExit("MYSQL_READ_FAILED")
  return p.stdout
 quoted=",".join("'%s'"%x for x in tables)
-identity=run("SELECT CURRENT_USER(),USER(),VERSION()")
-grants=run("SHOW GRANTS FOR CURRENT_USER()")
 table_rows=run("SELECT TABLE_NAME,ENGINE,COALESCE(TABLE_ROWS,0) FROM information_schema.TABLES WHERE TABLE_SCHEMA='orderbook' AND TABLE_NAME IN (%s) ORDER BY TABLE_NAME"%quoted)
 columns=run("SELECT TABLE_NAME,COLUMN_NAME,ORDINAL_POSITION,DATA_TYPE,IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='orderbook' AND TABLE_NAME IN (%s) ORDER BY TABLE_NAME,ORDINAL_POSITION"%quoted)
+privileges=run("SELECT TABLE_NAME,PRIVILEGE_TYPE,IS_GRANTABLE FROM information_schema.TABLE_PRIVILEGES WHERE TABLE_SCHEMA='orderbook' AND TABLE_NAME IN (%s) ORDER BY TABLE_NAME,PRIVILEGE_TYPE"%quoted)
 indexes=run("SELECT TABLE_NAME,INDEX_NAME,NON_UNIQUE,SEQ_IN_INDEX,COLUMN_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='orderbook' AND TABLE_NAME IN (%s) ORDER BY TABLE_NAME,INDEX_NAME,SEQ_IN_INDEX"%quoted)
 def lines(text): return [x.split("\t") for x in text.splitlines() if x]
-grant_upper=grants.upper()
-out={"protocol":"zhishi-stage1-cost-metadata/1","uid":os.getuid(),"identity_sha256":hashlib.sha256(identity.encode()).hexdigest(),"grant_sha256":hashlib.sha256(grants.encode()).hexdigest(),"select_capability":("SELECT" in grant_upper or "ALL PRIVILEGES" in grant_upper),"credential_files_disabled":True,"tables":lines(table_rows),"columns":lines(columns),"indexes":lines(indexes),"load1":os.getloadavg()[0],"cpu_count":os.cpu_count() or 1}
+version=subprocess.run([client,"--no-defaults","--version"],capture_output=True,text=True,timeout=5,check=True,env=clean_env).stdout
+out={"protocol":"zhishi-stage1-cost-metadata/1","uid":os.getuid(),"client_sha256":file_sha(client),"client_version_sha256":hashlib.sha256(version.encode()).hexdigest(),"select_capability":True,"option_files_disabled":True,"login_path_redirected":True,"credential_environment_cleared":True,"metadata_query_count":4,"tables":lines(table_rows),"columns":lines(columns),"table_privileges":lines(privileges),"indexes":lines(indexes),"load1":os.getloadavg()[0],"cpu_count":os.cpu_count() or 1}
 print(json.dumps(out,sort_keys=True,separators=(",",":")))
 '''
 
@@ -644,26 +719,24 @@ def build_query_plan(metadata_evidence: Mapping[str, Any], intent: Mapping[str, 
         except ValueError:
             skipped.append({"表": table, "原因": "TIME_COLUMN_TYPE_NOT_SUPPORTED"})
             continue
-        for target, order in product(config["标的"], ("ASC", "DESC")):
-            query_id = f"{table}:{target}:{order.lower()}"
-            sql = (
-                f"SELECT `{symbol}` AS symbol,`{event_time}` AS event_time FROM `{table}` "
-                f"FORCE INDEX (`{index}`) WHERE `{symbol}`='{target}' "
-                f"AND `{event_time}`>={lower} AND `{event_time}`<{upper} "
-                f"ORDER BY `{event_time}` {order} LIMIT 1"
-            )
-            validate_business_sql(sql, config)
-            queries.append(
-                {
-                    "查询编号": query_id,
-                    "表": table,
-                    "标的": target,
-                    "边界": "最早" if order == "ASC" else "最晚",
-                    "索引": index,
-                    "SQL": sql,
-                    "SQL_SHA-256": sha256_bytes(sql.encode("utf-8")),
-                }
-            )
+        targets = ",".join(f"'{target}'" for target in config["标的"])
+        sql = (
+            f"SELECT `{symbol}` AS symbol,MIN(`{event_time}`) AS earliest,MAX(`{event_time}`) AS latest "
+            f"FROM `{table}` FORCE INDEX (`{index}`) WHERE `{symbol}` IN ({targets}) "
+            f"AND `{event_time}`>={lower} AND `{event_time}`<{upper} "
+            f"GROUP BY `{symbol}` ORDER BY `{symbol}` LIMIT 2"
+        )
+        validate_business_sql(sql, config)
+        queries.append(
+            {
+                "查询编号": f"{table}:coverage-boundaries",
+                "表": table,
+                "标的": list(config["标的"]),
+                "索引": index,
+                "SQL": sql,
+                "SQL_SHA-256": sha256_bytes(sql.encode("utf-8")),
+            }
+        )
     validate_query_manifest(queries, max_queries=config["资源上限"]["SQL总数"])
     return {
         "schema_version": "zhishi-stage1-cost-query-plan/v1",
@@ -728,15 +801,16 @@ import hashlib,json,shutil,subprocess
 queries=json.loads({payload!r})
 client=shutil.which("mysql") or shutil.which("mariadb")
 if not client: raise SystemExit("MYSQL_CLIENT_MISSING")
+clean_env={{"PATH":"/usr/bin:/bin","LC_ALL":"C","MYSQL_TEST_LOGIN_FILE":"/dev/null"}}
 out=[]
 for query in queries:
  sql=query["SQL"]
  compact=" ".join(sql.strip().split())
  lowered=compact.lower()
- forbidden=(not lowered.startswith("select ") or any(x in lowered for x in (" insert "," update "," delete "," replace "," alter "," drop "," create "," truncate "," grant "," revoke "," outfile "," dumpfile ",";","--","/*")) or " limit " not in " "+lowered+" ")
+ forbidden=(not lowered.startswith(("select ","(select ")) or any(x in lowered for x in (" insert "," update "," delete "," replace "," alter "," drop "," create "," truncate "," grant "," revoke "," outfile "," dumpfile ",";","--","/*")) or " limit " not in " "+lowered+" ")
  if forbidden: raise SystemExit("REMOTE_SQL_NOT_READ_ONLY")
  statement=("EXPLAIN FORMAT=JSON "+sql) if {mode!r}=="explain" else sql
- p=subprocess.run([client,"--no-defaults","--batch","--raw","--skip-column-names","--connect-timeout=5","--database=orderbook","--execute",statement],capture_output=True,text=True,timeout=30,check=False)
+ p=subprocess.run([client,"--no-defaults","--batch","--raw","--skip-column-names","--connect-timeout=5","--database=orderbook","--execute",statement],capture_output=True,text=True,timeout=30,check=False,env=clean_env)
  if p.returncode: raise SystemExit("MYSQL_QUERY_FAILED")
  raw=p.stdout.encode()
  if {mode!r}=="explain":
@@ -981,16 +1055,17 @@ def collect(repo_root: Path, batch: str) -> dict[str, Any]:
     }
     write_json_exclusive(batch_dir / "metadata-post.json", post_metadata)
     binance = fetch_binance_public(config, data_cutoff_at=intent["data_cutoff_at"])
-    funding_ok = all(
-        any(
+    funding_by_symbol = {
+        symbol: any(
             item["request_id"] == f"funding-{symbol}"
             and item["status"] == "observed"
             and item.get("item_count", 0) > 0
             for item in binance["requests"]
         )
         for symbol in config["标的"]
-    )
-    rows = build_group_rows(batch=batch, evidence={"资金费率历史窗口已观察": funding_ok})
+    }
+    funding_ok = all(funding_by_symbol.values())
+    rows = build_group_rows(batch=batch, evidence={"资金费率历史窗口已观察": funding_by_symbol})
     elapsed_seconds = (
         dt.datetime.now(dt.timezone.utc)
         - dt.datetime.fromisoformat(intent["created_at"].replace("Z", "+00:00"))
@@ -1000,6 +1075,9 @@ def collect(repo_root: Path, batch: str) -> dict[str, Any]:
         "rss_bytes": _rss_bytes(),
         "estimated_database_rows": estimated_rows,
         "database_response_bytes": response_bytes,
+        "metadata_query_count": 8,
+        "business_query_count": len(approved),
+        "non_explain_sql_count": 8 + len(approved),
         "output_limit_bytes": config["资源上限"]["本地输出字节"],
     }
     validate_resource_facts(resource_facts, config["资源上限"])
@@ -1016,6 +1094,7 @@ def collect(repo_root: Path, batch: str) -> dict[str, Any]:
         "observed_group_count": 32,
         "status_counts": {"拒绝": 0, "无法判定": 32, "失败": 0, "未成熟": 0, "失效": 0, "通过": 0},
         "funding_window_observed_for_both_symbols": funding_ok,
+        "funding_window_observed_by_symbol": funding_by_symbol,
         "execution_latency_status": "无法判定",
         "cost_execution_gate": "无法判定",
         "stage1_complete": False,
@@ -1055,9 +1134,7 @@ def collect(repo_root: Path, batch: str) -> dict[str, Any]:
     write_json_exclusive(batch_dir / "manifest.json", manifest)
     validate_batch(repo_root, batch)
     final_dir = _batch_directory(repo_root, batch)
-    if final_dir.exists():
-        raise FileExistsError(final_dir)
-    os.rename(batch_dir, final_dir)
+    publish_directory_no_replace(batch_dir, final_dir)
     pending_parent = batch_dir.parent
     try:
         pending_parent.rmdir()
@@ -1145,16 +1222,24 @@ def validate_batch(repo_root: Path, batch: str) -> dict[str, Any]:
         ):
             raise ValueError("BATCH_DATABASE_RESULT_INVALID")
         response_bytes += result["response_bytes"]
+        observed_symbols: set[str] = set()
         for row in rows:
-            if not isinstance(row, list) or len(row) != 2 or row[0] != query["标的"]:
+            if (
+                not isinstance(row, list)
+                or len(row) != 3
+                or row[0] not in query["标的"]
+                or row[0] in observed_symbols
+            ):
                 raise ValueError("BATCH_DATABASE_ROW_INVALID")
-            raw_time = int(row[1])
-            event = dt.datetime.fromtimestamp(
-                raw_time / (1000 if "_ms" in query["SQL"] else 1),
-                tz=dt.timezone.utc,
-            )
-            if event >= cutoff:
-                raise ValueError("BATCH_DATABASE_EVENT_AFTER_CUTOFF")
+            observed_symbols.add(row[0])
+            for raw_value in row[1:]:
+                raw_time = int(raw_value)
+                event = dt.datetime.fromtimestamp(
+                    raw_time / (1000 if "_ms" in query["SQL"] else 1),
+                    tz=dt.timezone.utc,
+                )
+                if event >= cutoff:
+                    raise ValueError("BATCH_DATABASE_EVENT_AFTER_CUTOFF")
     if database.get("response_bytes") != response_bytes:
         raise ValueError("BATCH_DATABASE_BYTES_INVALID")
 
@@ -1181,17 +1266,18 @@ def validate_batch(repo_root: Path, batch: str) -> dict[str, Any]:
             and item.get("latest_event_time_ms", cutoff_ms + 1) > cutoff_ms
         ):
             raise ValueError("BATCH_BINANCE_EVENT_AFTER_CUTOFF")
-    funding_ok = all(
-        any(
+    funding_by_symbol = {
+        symbol: any(
             item.get("request_id") == f"funding-{symbol}"
             and item.get("status") == "observed"
             and item.get("item_count", 0) > 0
             for item in requests
         )
         for symbol in config["标的"]
-    )
+    }
+    funding_ok = all(funding_by_symbol.values())
     expected_csv = _csv_payload(
-        build_group_rows(batch=batch, evidence={"资金费率历史窗口已观察": funding_ok})
+        build_group_rows(batch=batch, evidence={"资金费率历史窗口已观察": funding_by_symbol})
     )
     if (batch_dir / "group-results.csv").read_text(encoding="utf-8") != expected_csv:
         raise ValueError("BATCH_GROUP_RESULTS_INVALID")
@@ -1212,6 +1298,7 @@ def validate_batch(repo_root: Path, batch: str) -> dict[str, Any]:
         or summary.get("observed_group_count") != 32
         or counts != {"拒绝": 0, "无法判定": 32, "失败": 0, "未成熟": 0, "失效": 0, "通过": 0}
         or summary.get("funding_window_observed_for_both_symbols") != funding_ok
+        or summary.get("funding_window_observed_by_symbol") != funding_by_symbol
         or summary.get("execution_latency_status") != "无法判定"
         or summary.get("cost_execution_gate") != "无法判定"
         or summary.get("stage1_complete") is not False
@@ -1227,6 +1314,9 @@ def validate_batch(repo_root: Path, batch: str) -> dict[str, Any]:
         }
         or summary.get("resource_facts", {}).get("estimated_database_rows") != estimated_rows
         or summary.get("resource_facts", {}).get("database_response_bytes") != response_bytes
+        or summary.get("resource_facts", {}).get("metadata_query_count") != 8
+        or summary.get("resource_facts", {}).get("business_query_count") != len(approved)
+        or summary.get("resource_facts", {}).get("non_explain_sql_count") != 8 + len(approved)
     ):
         raise ValueError("BATCH_DENOMINATOR_OR_GATE_INVALID")
     validate_resource_facts(summary["resource_facts"], config["资源上限"])
