@@ -404,8 +404,63 @@ def _assert_intent(repo_root: Path, batch: str) -> tuple[dict[str, Any], dict[st
     for key, value in expected.items():
         if intent.get(key) != value:
             raise ValueError(f"INTENT_{key.upper()}_DRIFT")
-    _assert_upstream(repo_root, config)
-    if intent.get("producer_evidence") != _assert_producer_evidence(repo_root, config):
+    upstream = _assert_upstream(repo_root, config)
+    producer_evidence = _assert_producer_evidence(repo_root, config)
+    expected_semantics = {
+        "schema_version": "zhishi-simulated-order-lifecycle-intent/v1",
+        "task_id": "000103",
+        "batch_id": batch,
+        "config_sha256": sha256_path(config_path),
+        "script_sha256": sha256_path(Path(__file__).resolve()),
+        "base_script_sha256": sha256_path(Path(BASE.__file__).resolve()),
+        "task_contract_normalized_sha256": _normalized_task_fingerprint(
+            repo_root / TASK_RELATIVE_PATH
+        ),
+        "upstream": upstream,
+        "source_scope": {
+            "ssh_alias": "ubuntu",
+            "database": "orderbook",
+            "table": "order_book_raw_snapshots",
+            "symbols": config["标的"],
+        },
+        "scenario_scope": {
+            "directions": config["方向"],
+            "order_scenarios": config["委托场景"],
+            "clock_scenarios": config["时钟场景"],
+            "horizons": config["主研究尺度"],
+        },
+        "producer_contract": config["生产者来源合同"],
+        "producer_contract_sha256": sha256_bytes(
+            canonical_bytes(config["生产者来源合同"])
+        ),
+        "producer_evidence": producer_evidence,
+        "resource_limits": config["资源上限"],
+    }
+    runtime_fields = {"created_at", "data_cutoff_ms", "process"}
+    if set(intent) != set(expected_semantics) | runtime_fields or any(
+        intent.get(key) != value for key, value in expected_semantics.items()
+    ):
+        raise ValueError("INTENT_SEMANTIC_DRIFT")
+    try:
+        created = dt.datetime.fromisoformat(
+            str(intent["created_at"]).replace("Z", "+00:00")
+        )
+    except ValueError as exc:
+        raise ValueError("INTENT_SEMANTIC_DRIFT") from exc
+    process = intent.get("process")
+    if (
+        created.tzinfo is None
+        or intent.get("data_cutoff_ms") != int(created.timestamp() * 1000)
+        or not isinstance(process, Mapping)
+        or set(process) != {"elapsed_seconds", "rss_bytes"}
+        or not isinstance(process.get("elapsed_seconds"), (int, float))
+        or process["elapsed_seconds"] < 0
+        or not isinstance(process.get("rss_bytes"), int)
+        or process["rss_bytes"] <= 0
+        or process["rss_bytes"] > config["资源上限"]["RSS字节"]
+    ):
+        raise ValueError("INTENT_SEMANTIC_DRIFT")
+    if intent.get("producer_evidence") != producer_evidence:
         raise ValueError("INTENT_PRODUCER_EVIDENCE_DRIFT")
     return intent, config, directory
 
@@ -1357,6 +1412,45 @@ def _validate_evidence(directory: Path, config: Mapping[str, Any]) -> dict[str, 
     return {"frozen": frozen, "lifecycle": lifecycle, "result_sha256": expected_sha}
 
 
+def _expected_summary_semantics(
+    *, batch: str, evidence: Mapping[str, Any]
+) -> dict[str, Any]:
+    frozen = evidence["frozen"]
+    lifecycle = evidence["lifecycle"]
+    members = frozen["members"]
+    time_counts = Counter(row["time_semantics_status"] for row in members)
+    return {
+        "schema_version": "zhishi-simulated-order-lifecycle-summary/v1",
+        "task_id": "000103",
+        "batch_id": batch,
+        "member_count": len(members),
+        "denominators": frozen["denominators"],
+        "time_semantics_counts": dict(sorted(time_counts.items())),
+        "lifecycle_result_sha256": evidence["result_sha256"],
+        "terminal_counts": lifecycle["terminal_counts"],
+        "replay_1_sha256": evidence["result_sha256"],
+        "replay_2_sha256": evidence["result_sha256"],
+        "simulation_lifecycle_runnable": len(members) > 0,
+        "future_data_gate": "unknown" if time_counts.get("unknown", 0) else "pass",
+        "real_exchange_latency_status": "unknown",
+        "multi_year_cost_status": "unknown",
+        "stage1_complete": False,
+        "stage2_released": False,
+        "safety": {
+            "remote_write": False,
+            "database_write": False,
+            "account_endpoint": False,
+            "credential_read": False,
+            "raw_price_or_quantity_persisted": False,
+            "network_order": False,
+            "real_order": False,
+            "model_or_backtest": False,
+            "trade_decision": False,
+        },
+        "remaining_condition": "版本化容量压力与隔离恢复证据；多年历史成本覆盖仍保持未知",
+    }
+
+
 def validate_batch(repo_root: Path, batch: str) -> dict[str, Any]:
     intent, config, directory = _assert_intent(repo_root, batch)
     if directory == _batch_directory(repo_root, batch):
@@ -1399,16 +1493,9 @@ def validate_batch(repo_root: Path, batch: str) -> dict[str, Any]:
         for key, value in stage_resources.items():
             if declared_resources.get(key) != value:
                 raise ValueError("BATCH_STAGE_RESOURCE_DRIFT")
-        if (
-            summary.get("member_count") != len(evidence["frozen"]["members"])
-            or summary.get("denominators") != evidence["frozen"]["denominators"]
-            or summary.get("time_semantics_counts") != dict(sorted(time_counts.items()))
-            or summary.get("lifecycle_result_sha256") != evidence["result_sha256"]
-            or summary.get("terminal_counts") != evidence["lifecycle"]["terminal_counts"]
-            or summary.get("replay_1_sha256")
-            != read_json(directory / "replay-1.json")["result_sha256"]
-            or summary.get("replay_2_sha256")
-            != read_json(directory / "replay-2.json")["result_sha256"]
+        expected_summary = _expected_summary_semantics(batch=batch, evidence=evidence)
+        if set(summary) != set(expected_summary) | {"resource_facts"} or any(
+            summary.get(key) != value for key, value in expected_summary.items()
         ):
             raise ValueError("BATCH_SUMMARY_SEMANTIC_DRIFT")
         _validate_resource_facts(declared_resources, config["资源上限"])
@@ -1425,38 +1512,8 @@ def validate_batch(repo_root: Path, batch: str) -> dict[str, Any]:
     resource_facts["estimated_database_rows"] = explain["estimated_rows"]
     _validate_resource_facts(resource_facts, config["资源上限"])
     members = evidence["frozen"]["members"]
-    time_counts = Counter(row["time_semantics_status"] for row in members)
-    summary = {
-        "schema_version": "zhishi-simulated-order-lifecycle-summary/v1",
-        "task_id": "000103",
-        "batch_id": batch,
-        "member_count": len(members),
-        "denominators": evidence["frozen"]["denominators"],
-        "time_semantics_counts": dict(sorted(time_counts.items())),
-        "lifecycle_result_sha256": evidence["result_sha256"],
-        "terminal_counts": evidence["lifecycle"]["terminal_counts"],
-        "replay_1_sha256": read_json(directory / "replay-1.json")["result_sha256"],
-        "replay_2_sha256": read_json(directory / "replay-2.json")["result_sha256"],
-        "simulation_lifecycle_runnable": len(members) > 0,
-        "future_data_gate": "unknown" if time_counts.get("unknown", 0) else "pass",
-        "real_exchange_latency_status": "unknown",
-        "multi_year_cost_status": "unknown",
-        "stage1_complete": False,
-        "stage2_released": False,
-        "resource_facts": resource_facts,
-        "safety": {
-            "remote_write": False,
-            "database_write": False,
-            "account_endpoint": False,
-            "credential_read": False,
-            "raw_price_or_quantity_persisted": False,
-            "network_order": False,
-            "real_order": False,
-            "model_or_backtest": False,
-            "trade_decision": False,
-        },
-        "remaining_condition": "版本化容量压力与隔离恢复证据；多年历史成本覆盖仍保持未知",
-    }
+    summary = _expected_summary_semantics(batch=batch, evidence=evidence)
+    summary["resource_facts"] = resource_facts
     write_json_exclusive(directory / "summary.json", summary)
     files = {}
     for path in sorted(directory.iterdir(), key=lambda item: item.name):

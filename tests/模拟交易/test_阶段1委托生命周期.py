@@ -12,7 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "模拟交易" / "验证阶段1委托生命周期.py"
 CONFIG = ROOT / "config" / "模拟交易" / "任务-000103阶段1委托生命周期.json"
-FORMAL_BATCH = "stage1-simulated-lifecycle-20260812T183616Z-d34b4533bc1d"
+FORMAL_BATCH = "stage1-simulated-lifecycle-20260812T185838Z-8d1a58bd8a0a"
 
 
 @pytest.fixture(scope="module")
@@ -268,6 +268,71 @@ def test_published_validation_rejects_unmanifested_file(module, config, tmp_path
         module.validate_batch(tmp_path, FORMAL_BATCH)
 
 
+def _rewrite_manifest_entry(module, copied, name):
+    manifest_path = copied / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload = (copied / name).read_bytes()
+    manifest["files"][name] = {
+        "sha256": module.sha256_bytes(payload),
+        "bytes": len(payload),
+    }
+    manifest["total_bytes"] = sum(item["bytes"] for item in manifest["files"].values())
+    manifest["manifest_payload_sha256"] = module.sha256_bytes(
+        module.canonical_bytes(manifest["files"])
+    )
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_published_validation_rejects_rehashed_intent_semantic_drift(
+    module, config, tmp_path, monkeypatch
+):
+    source = ROOT / "artifacts" / "模拟交易" / "阶段1委托生命周期" / FORMAL_BATCH
+    copied = tmp_path / FORMAL_BATCH
+    shutil.copytree(source, copied)
+    intent_path = copied / "intent.json"
+    intent = json.loads(intent_path.read_text(encoding="utf-8"))
+    intent["task_id"] = "999999"
+    intent["source_scope"]["symbols"] = ["SOLUSDT"]
+    intent["scenario_scope"]["horizons"] = ["主研究尺度：1小时"]
+    intent["resource_limits"]["RSS字节"] = 2**40
+    intent_path.write_text(
+        json.dumps(intent, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    _rewrite_manifest_entry(module, copied, "intent.json")
+    monkeypatch.setattr(module, "_batch_directory", lambda _root, _batch: copied)
+    monkeypatch.setattr(module, "_active_directory", lambda _root, _batch: copied)
+    with pytest.raises(ValueError, match="INTENT_.*DRIFT"):
+        module.validate_batch(ROOT, FORMAL_BATCH)
+
+
+def test_published_validation_rejects_rehashed_summary_safety_drift(
+    module, config, tmp_path, monkeypatch
+):
+    source = ROOT / "artifacts" / "模拟交易" / "阶段1委托生命周期" / FORMAL_BATCH
+    copied = tmp_path / FORMAL_BATCH
+    shutil.copytree(source, copied)
+    summary_path = copied / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["stage1_complete"] = True
+    summary["stage2_released"] = True
+    summary["safety"]["real_order"] = True
+    summary["safety"]["network_order"] = True
+    summary_path.write_text(
+        json.dumps(summary, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    _rewrite_manifest_entry(module, copied, "summary.json")
+    intent = json.loads((copied / "intent.json").read_text(encoding="utf-8"))
+    monkeypatch.setattr(module, "_batch_directory", lambda _root, _batch: copied)
+    monkeypatch.setattr(module, "_assert_intent", lambda _root, _batch: (intent, config, copied))
+    with pytest.raises(ValueError, match="BATCH_SUMMARY_SEMANTIC_DRIFT"):
+        module.validate_batch(tmp_path, FORMAL_BATCH)
+
+
 @pytest.mark.parametrize("entry_kind", ["directory", "symlink"])
 def test_published_validation_rejects_non_regular_entry(
     module, config, tmp_path, monkeypatch, entry_kind
@@ -490,8 +555,8 @@ def test_formal_batch_manifest_and_replays_are_reproducible(module):
     assert result == {
         "status": "ok",
         "batch_id": FORMAL_BATCH,
-        "manifest_sha256": "37fbbef689678c5a5f5760d3f9adf079a67c8bfce6770734ae8b4712cb234c26",
-        "summary_sha256": "de962495b9a3184cdecc0777cc9708a6757492897942b6f67c7546dacaba0979",
+        "manifest_sha256": "fd30092ed3148e2e2306c079a791be7ad86ab179016ecd8704fa8cf3a0f4747e",
+        "summary_sha256": "3f2b2c82a142e498a2f5e6f9889b258e6ee836bb8a0729616321e88bb3aaa072",
     }
     intent = json.loads(
         (
