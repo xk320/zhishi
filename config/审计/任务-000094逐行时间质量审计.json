@@ -1,0 +1,95 @@
+{
+  "schema_version": "zhishi-stage1-time-quality-audit/v1",
+  "task_id": "000094",
+  "task_contract_sha256": "193f119fc8e7000241eb00dd4cc986ed2307b9a39dc1d50334941d81e9112461",
+  "source_task_id": "000092",
+  "source_batch_id": "binance-archive-provenance-20260811T063739Z-7a6da0087493",
+  "source_batch_dir": "artifacts/数据/Binance历史归档来源身份/binance-archive-provenance-20260811T063739Z-7a6da0087493",
+  "formal_task_id": "000093",
+  "formal_batch_id": "stage1-candidate-recompute-20260811T145500Z-22191bf6b82a",
+  "formal_batch_dir": "artifacts/审计/阶段1新候选集重算/stage1-candidate-recompute-20260811T145500Z-22191bf6b82a",
+  "formal_input_fingerprint": "a1c69d6e2446c364578edb08e6b6fa30912f2e5577d7e51377ef8ab4c648952d",
+  "formal_batch_files_fingerprint": "518f7ef50fbfebade3273c2334acff040cc283eecc8c7da7e4d388871f741f49",
+  "formal_summary_sha256": "389b1e3eaed89c2e89d5e2944c2ab5746ab78e559621559b261fdf10f7d135c9",
+  "source_batch_files_fingerprint": "c44bca0ba5bc4a642dca214d0ce4e4bb346f687c4852ac8a320489f27752c032",
+  "source_inventory_fingerprint": "03897f148c771096f4567575c0fb270a30cb0e60d696865dab079bd19583dfe5",
+  "local_root": "/Volumes/data/data/binance/futures/um",
+  "tools": {
+    "unzip": "/usr/bin/unzip",
+    "awk": "/usr/bin/awk",
+    "compiler": "/usr/bin/clang",
+    "scanner_source": "scripts/审计/阶段1时间质量扫描器.c",
+    "scanner_source_sha256": "4c93d47ff30ee09e319a1808bd0ac9aa4dd937987026751a76afaffdb0b75dc5"
+  },
+  "groups": [
+    {
+      "id": "BTCUSDT-trades",
+      "underlying": "BTC",
+      "contract": "BTCUSDT",
+      "dataset": "trades",
+      "relative_dir": "trades/BTCUSDT",
+      "column_count": 6,
+      "header": ["id", "price", "qty", "quote_qty", "time", "is_buyer_maker"],
+      "business_key_index": 1,
+      "event_time_index": 5
+    },
+    {
+      "id": "ETHUSDT-trades",
+      "underlying": "ETH",
+      "contract": "ETHUSDT",
+      "dataset": "trades",
+      "relative_dir": "trades/ETHUSDT",
+      "column_count": 6,
+      "header": ["id", "price", "qty", "quote_qty", "time", "is_buyer_maker"],
+      "business_key_index": 1,
+      "event_time_index": 5
+    },
+    {
+      "id": "BTCUSDT-aggTrades",
+      "underlying": "BTC",
+      "contract": "BTCUSDT",
+      "dataset": "aggTrades",
+      "relative_dir": "aggTrades/BTCUSDT",
+      "column_count": 7,
+      "header": ["agg_trade_id", "price", "quantity", "first_trade_id", "last_trade_id", "transact_time", "is_buyer_maker"],
+      "business_key_index": 1,
+      "event_time_index": 6
+    }
+  ],
+  "expected_counts": {
+    "candidate_total": 5387,
+    "formal_members": 5180,
+    "source_rejected": 207,
+    "observation_items": 2
+  },
+  "main_horizons_hours": [4, 8, 24, 48],
+  "post_event_observation_minutes": [15, 60],
+  "inventory_relative_paths": [
+    "trades/BTCUSDT",
+    "trades/ETHUSDT",
+    "aggTrades/BTCUSDT",
+    "klines_1d/BTCUSDT.csv",
+    "klines_1d/ETHUSDT.csv",
+    "klines_1d_manifest.json",
+    "full_history_download_summary.json"
+  ],
+  "gates": ["来源身份", "三类时间", "质量", "历史重放", "成本与执行", "血缘", "容量", "恢复"],
+  "limits": {
+    "member_count": 5180,
+    "source_member_count": 8192,
+    "batch_file_count": 64,
+    "batch_file_bytes": 5242880,
+    "single_source_file_bytes": 17179869184,
+    "scanner_stdout_bytes": 4096,
+    "scanner_stderr_bytes": 65536,
+    "member_seconds": 1800,
+    "total_seconds": 28800,
+    "memory_bytes": 536870912,
+    "min_available_memory_percent": 20,
+    "min_output_disk_bytes": 5368709120,
+    "min_source_disk_bytes": 21474836480,
+    "output_file_bytes": 5242880,
+    "output_total_bytes": 26214400,
+    "inventory_entry_count": 50000
+  }
+}

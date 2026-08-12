@@ -1,0 +1,88 @@
+{
+  "allowed_research_leaf_count": 0,
+  "audited_member_count": 5180,
+  "batch_id": "stage1-time-quality-20260812T021000Z-d1bc5118ee09",
+  "candidate_total": 5387,
+  "completed_at": "2026-08-12T02:58:17Z",
+  "config_sha256": "d332800354feab086e209588d3abcd56b2e7599840bd517b562aa6ea958d2d63",
+  "executor_sha256": "0317aef79931c6b4139eab74654a4bc88c3cdd9d66d8350e7ce1893fd525f0bd",
+  "formal_batch_files_fingerprint": "518f7ef50fbfebade3273c2334acff040cc283eecc8c7da7e4d388871f741f49",
+  "formal_batch_id": "stage1-candidate-recompute-20260811T145500Z-22191bf6b82a",
+  "formal_input_fingerprint": "a1c69d6e2446c364578edb08e6b6fa30912f2e5577d7e51377ef8ab4c648952d",
+  "formal_member_count": 5180,
+  "leaf_count": 8,
+  "legacy_task_000084_current_gate": false,
+  "observation_item_count": 2,
+  "output_payload_files": {
+    "formal-batch-files.json": "ea4acd6a3eb158d1533da0b181f8042332cc68ad35635bf44d5d1e765b7a091d",
+    "leaves.json": "63128f5abf48d64a0be0b28abade39aadd2b95dfb8d3cdd139814d3a3dcfae38",
+    "members-001.json": "5ba33d724bd44891f4f15caa263b19d6280641aeacbe4c2155c6965c00588931",
+    "segments.json": "42a5f33a3884c6fe470d7bda6c8d19b1bab20dc69e70b960ad0d2926b4555b98",
+    "source-batch-files.json": "3763381337a5931413a8e333d1d87ebfe0ce3497f0143a82499fe3ac63d605b9",
+    "source-rejected.json": "6a2619579406b0620ef250cba426cea4ccf8c1a7b9985e70e9fca1f401feb6aa"
+  },
+  "output_payload_fingerprint": "e0c12385e7cc40bf49a868a8a10c95e25105a5ae3ac5f4304cf6d4338f81f6ec",
+  "remaining_blockers": [
+    "同版本历史重放证据缺失",
+    "成本与执行证据缺失",
+    "研究流水线容量证据缺失",
+    "隔离恢复证据缺失"
+  ],
+  "resource_facts": {
+    "completed": {
+      "measured_at": "2026-08-12T02:58:17Z",
+      "memory_available_percent": 52.0,
+      "output_disk_free_bytes": 125776482304,
+      "process_max_rss_bytes": 137232384,
+      "source_disk_free_bytes": 519998382080
+    },
+    "elapsed_seconds": 3939.896,
+    "prepublish": {
+      "measured_at": "2026-08-12T02:58:17Z",
+      "memory_available_percent": 52.0,
+      "output_disk_free_bytes": 125776482304,
+      "process_max_rss_bytes": 137232384,
+      "source_disk_free_bytes": 519998382080
+    },
+    "processes": 1,
+    "start": {
+      "measured_at": "2026-08-12T01:52:38Z",
+      "memory_available_percent": 55.0,
+      "output_disk_free_bytes": 127067152384,
+      "process_max_rss_bytes": 132415488,
+      "source_disk_free_bytes": 520058290176
+    }
+  },
+  "route_decision": "任务-000092/000093新候选集替代任务-000084旧路线",
+  "scan_scope": "5180个正式成员逐文件SHA复验并逐行验证全部CSV业务行；未抽样、未外推、未落盘解压",
+  "scanned_row_count": 16121999478,
+  "scanner": {
+    "binary_sha256": "e093dcb209b0c2fff9ac053ac9dec155d708fe502009c90ccec58dcc52ba9016",
+    "compiler": "/usr/bin/clang",
+    "source_sha256": "4c93d47ff30ee09e319a1808bd0ac9aa4dd937987026751a76afaffdb0b75dc5"
+  },
+  "schema_version": "zhishi-stage1-time-quality-audit-batch/v1",
+  "segment_count": 175,
+  "source_batch_files_fingerprint": "c44bca0ba5bc4a642dca214d0ce4e4bb346f687c4852ac8a320489f27752c032",
+  "source_batch_id": "binance-archive-provenance-20260811T063739Z-7a6da0087493",
+  "source_data_modified": false,
+  "source_inventory_after_sha256": "03897f148c771096f4567575c0fb270a30cb0e60d696865dab079bd19583dfe5",
+  "source_inventory_before_sha256": "03897f148c771096f4567575c0fb270a30cb0e60d696865dab079bd19583dfe5",
+  "source_inventory_entry_count": 11972,
+  "source_rejected_count": 207,
+  "stage1_complete": false,
+  "stage2_released": false,
+  "started_at": "2026-08-12T01:52:37Z",
+  "status_counts": {
+    "失效": 0,
+    "失败": 0,
+    "已证明": 4789,
+    "拒绝": 391,
+    "无法判定": 0,
+    "未成熟": 0
+  },
+  "task_contract_sha256": "193f119fc8e7000241eb00dd4cc986ed2307b9a39dc1d50334941d81e9112461",
+  "task_file_sha256_at_run": "1bfcf6c916370d20cac8e7984b246a8e1ce8dbbed4b98cbb5f39dcb770ce14e1",
+  "task_id": "000094",
+  "uncompressed_bytes": 854743871570
+}
