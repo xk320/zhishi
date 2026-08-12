@@ -3014,6 +3014,154 @@ class AutoMergeEligibilityTests(unittest.TestCase):
 
         self.assertTrue(result.eligible, result.reasons)
 
+    def test_合并后状态闭环允许首次补齐同章节唯一解除条件(self):
+        body = (
+            "## 关联任务\n\n- 任务-000013\n\n"
+            "## 变更类型\n\n- 合并后状态闭环\n"
+        )
+        base_task = task_text(
+            status="待执行", task_type="数据审计", dependency=None
+        ).replace("- 执行分支：`branch`\n", "") + (
+            "\n## 依赖与阻塞条件\n\n"
+            "- 唯一前序依赖：任务-000012；\n"
+            "- 当前阻塞原因：无；公开补证可执行。\n"
+        )
+        head_task = (
+            base_task.replace("- 状态：待执行", "- 状态：阻塞", 1)
+            .replace(
+                "- 优先级：P1\n",
+                "- 优先级：P1\n"
+                "- 执行分支：`branch`\n"
+                "- 开始时间：`2026-08-04T10:00:00+08:00`\n",
+                1,
+            )
+            .replace(
+                "- 当前阻塞原因：无；公开补证可执行。\n",
+                "- 当前阻塞原因：任务-000012尚未完成。\n"
+                "- 解除条件：任务-000012完成后重新执行。\n",
+                1,
+            )
+            + (
+                "\n## 执行记录\n\n"
+                "- 执行分支：`branch`\n"
+                "- 开始时间：`2026-08-04T10:00:00+08:00`\n"
+                "- 尝试命令：`ssh ubuntu printf ready`\n"
+                "- 结果：目标不可达，未生成批次。\n"
+                "- 外部证据：只读探针失败。\n"
+                "- 阻塞原因：任务-000012尚未完成。\n"
+                "- 解除条件：任务-000012完成后重新执行。\n"
+                "- 数据与安全：未读取或修改远端数据。\n"
+            )
+        )
+        result = self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/看板.md",
+            ],
+            pr_body=body,
+            base_tasks={"000013": base_task},
+            head_tasks={"000013": head_task},
+            base_board=blocked_transition_board(blocked=False),
+            head_board=blocked_transition_board(blocked=True),
+        )
+
+        self.assertTrue(result.eligible, result.reasons)
+
+    def test_合并后状态闭环拒绝首次补齐多个解除条件(self):
+        base_task, head_task = self._首次补齐解除条件任务对()
+        head_task = head_task.replace(
+            "- 解除条件：任务-000012完成后重新执行。\n",
+            "- 解除条件：条件一。\n- 解除条件：条件二。\n",
+            1,
+        )
+        result = self._评估首次补齐解除条件(base_task, head_task)
+
+        self.assertFalse(result.eligible)
+        self.assertIn("阻塞状态闭环字段位置无效", result.reasons)
+
+    def test_合并后状态闭环拒绝首次补齐空解除条件(self):
+        base_task, head_task = self._首次补齐解除条件任务对()
+        head_task = head_task.replace(
+            "- 解除条件：任务-000012完成后重新执行。\n",
+            "- 解除条件：\n",
+            1,
+        )
+        result = self._评估首次补齐解除条件(base_task, head_task)
+
+        self.assertFalse(result.eligible)
+        self.assertIn("阻塞状态闭环字段位置无效", result.reasons)
+
+    def test_合并后状态闭环拒绝已有执行分支被覆盖(self):
+        base_task, head_task = self._首次补齐解除条件任务对()
+        base_task = base_task.replace(
+            "- 优先级：P1\n", "- 优先级：P1\n- 执行分支：`old-branch`\n", 1
+        )
+        result = self._评估首次补齐解除条件(base_task, head_task)
+
+        self.assertFalse(result.eligible)
+        self.assertIn("阻塞状态闭环字段位置无效", result.reasons)
+
+    def test_合并后状态闭环拒绝首次补齐解除条件时改写合同(self):
+        base_task, head_task = self._首次补齐解除条件任务对()
+        head_task = head_task.replace("- 优先级：P1", "- 优先级：P0", 1)
+        result = self._评估首次补齐解除条件(base_task, head_task)
+
+        self.assertFalse(result.eligible)
+        self.assertIn("阻塞状态闭环夹带合同改写", result.reasons)
+
+    def _首次补齐解除条件任务对(self):
+        base_task = task_text(
+            status="待执行", task_type="数据审计", dependency=None
+        ).replace("- 执行分支：`branch`\n", "") + (
+            "\n## 依赖与阻塞条件\n\n"
+            "- 唯一前序依赖：任务-000012；\n"
+            "- 当前阻塞原因：无；公开补证可执行。\n"
+        )
+        head_task = (
+            base_task.replace("- 状态：待执行", "- 状态：阻塞", 1)
+            .replace(
+                "- 优先级：P1\n",
+                "- 优先级：P1\n"
+                "- 执行分支：`branch`\n"
+                "- 开始时间：`2026-08-04T10:00:00+08:00`\n",
+                1,
+            )
+            .replace(
+                "- 当前阻塞原因：无；公开补证可执行。\n",
+                "- 当前阻塞原因：任务-000012尚未完成。\n"
+                "- 解除条件：任务-000012完成后重新执行。\n",
+                1,
+            )
+            + (
+                "\n## 执行记录\n\n"
+                "- 执行分支：`branch`\n"
+                "- 开始时间：`2026-08-04T10:00:00+08:00`\n"
+                "- 尝试命令：`ssh ubuntu printf ready`\n"
+                "- 结果：失败关闭。\n"
+                "- 外部证据：只读探针失败。\n"
+                "- 阻塞原因：任务-000012尚未完成。\n"
+                "- 解除条件：任务-000012完成后重新执行。\n"
+                "- 数据与安全：未读取或修改远端数据。\n"
+            )
+        )
+        return base_task, head_task
+
+    def _评估首次补齐解除条件(self, base_task, head_task):
+        return self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000013.md",
+                "docs/研发中心/看板.md",
+            ],
+            pr_body=(
+                "## 关联任务\n\n- 任务-000013\n\n"
+                "## 变更类型\n\n- 合并后状态闭环\n"
+            ),
+            base_tasks={"000013": base_task},
+            head_tasks={"000013": head_task},
+            base_board=blocked_transition_board(blocked=False),
+            head_board=blocked_transition_board(blocked=True),
+        )
+
     def test_合并后状态闭环拒绝已完成任务进入阻塞(self):
         body = (
             "## 关联任务\n\n- 任务-000013\n\n"
