@@ -125,9 +125,12 @@ def _normalized_task_fingerprint(path: Path) -> str:
         ),
         len(source_lines),
     )
+    contract_lines = source_lines[:record_start]
+    while contract_lines and not contract_lines[-1].strip():
+        contract_lines.pop()
     lines = [
         line
-        for line in source_lines[:record_start]
+        for line in contract_lines
         if not line.startswith(volatile)
     ]
     return sha256_bytes(("\n".join(lines) + "\n").encode("utf-8"))

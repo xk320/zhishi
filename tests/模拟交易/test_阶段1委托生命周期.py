@@ -12,7 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "模拟交易" / "验证阶段1委托生命周期.py"
 CONFIG = ROOT / "config" / "模拟交易" / "任务-000103阶段1委托生命周期.json"
-FORMAL_BATCH = "stage1-simulated-lifecycle-20260812T181724Z-6e2d4fbdd7e3"
+FORMAL_BATCH = "stage1-simulated-lifecycle-20260812T182049Z-9365dbddbc60"
 
 
 @pytest.fixture(scope="module")
@@ -189,8 +189,7 @@ def test_remote_query_program_enforces_memory_and_stream_limits(module):
 def test_task_fingerprint_excludes_delivery_execution_record(module, tmp_path):
     task = tmp_path / "task.md"
     task.write_text(
-        "# task\n\n- 状态：待执行\n- 实现提交SHA：`" + "a" * 40 + "`\n\n"
-        "## 合同\n\n固定正文。\n\n## 执行记录\n\n- 交付物：甲\n",
+        "# task\n\n- 状态：待执行\n\n## 合同\n\n固定正文。\n",
         encoding="utf-8",
     )
     first = module._normalized_task_fingerprint(task)
@@ -401,8 +400,8 @@ def test_formal_batch_manifest_and_replays_are_reproducible(module):
     assert result == {
         "status": "ok",
         "batch_id": FORMAL_BATCH,
-        "manifest_sha256": "5a33fefc7df36d71ba82dd7a8af10f4d54fa54b2545ef4fb5cef07f2e73d5339",
-        "summary_sha256": "fab695309dda98012b970187cf79208c5ae8fbb8b7775b00a89d07984cfcad7f",
+        "manifest_sha256": "aa04c49295095794cf74cf92ad0dd56daee1deb0c7a022cff75296e423c5f4d0",
+        "summary_sha256": "e19ddc7cabcf69584a7023aaac5a4eb2d16f10b5b2547cce89ab0f644c7c8972",
     }
     intent = json.loads(
         (
