@@ -23,6 +23,19 @@ class CrossCarrierConflictTests(unittest.TestCase):
         self.assertEqual([], payload["conflicts"])
         self.assertEqual(64, len(payload["rule_fingerprint"]))
 
+    def test合同修复器实现变化使规则指纹失效(self):
+        original = CONFLICT._compute_rule_fingerprint()
+        for name in (
+            "_apply_task094_contract_repair",
+            "_apply_task100_contract_repair",
+        ):
+            with self.subTest(name=name), mock.patch.object(
+                CONFLICT,
+                name,
+                new=lambda text: text + "UNSAFE",
+            ):
+                self.assertNotEqual(original, CONFLICT._compute_rule_fingerprint())
+
     def test无效提交身份失败关闭(self):
         report = CONFLICT.check_refs(ROOT, "not-a-ref", "main")
         self.assertFalse(report.ok)

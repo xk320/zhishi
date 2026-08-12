@@ -1766,6 +1766,8 @@ def _compute_rule_fingerprint() -> str:
         "_check_dependencies",
         "_check_scope",
         "_check_historical_immutability",
+        "_apply_task094_contract_repair",
+        "_apply_task100_contract_repair",
         "_root_readonly_section_bounds",
         "_immutable_task_contract",
         "_check_task_contract_drift",
@@ -1813,12 +1815,10 @@ def _compute_rule_fingerprint() -> str:
         TASK094_CONTRACT_REPAIR_EXECUTOR,
         TASK094_CONTRACT_REPAIR_TARGET,
         repr(TASK094_CONTRACT_REPLACEMENTS),
-        "_apply_task094_contract_repair",
         TASK100_CONTRACT_REPAIR_EXECUTOR,
         TASK100_CONTRACT_REPAIR_TARGET,
         TASK100_OUTPUT_CONTRACT_OLD,
         TASK100_OUTPUT_CONTRACT_NEW,
-        "_apply_task100_contract_repair",
     ]
     for name in names:
         try:
