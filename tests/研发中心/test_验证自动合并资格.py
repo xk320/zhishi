@@ -910,11 +910,19 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         target = (
             REPO_ROOT / "docs/研发中心/任务/任务-000100.md"
         ).read_text(encoding="utf-8")
-        repaired = self.policy._apply_task100_contract_repair(target)
+        self.assertNotIn(self.policy.TASK100_OUTPUT_CONTRACT_OLD, target)
+        self.assertEqual(1, target.count(self.policy.TASK100_OUTPUT_CONTRACT_NEW))
+        legacy = target.replace(
+            self.policy.TASK100_OUTPUT_CONTRACT_NEW,
+            self.policy.TASK100_OUTPUT_CONTRACT_OLD,
+        )
+        repaired = self.policy._apply_task100_contract_repair(legacy)
         self.assertIsNotNone(repaired)
         assert repaired is not None
         self.assertNotIn(self.policy.TASK100_OUTPUT_CONTRACT_OLD, repaired)
         self.assertEqual(1, repaired.count(self.policy.TASK100_OUTPUT_CONTRACT_NEW))
+        self.assertEqual(target, repaired)
+        self.assertIsNone(self.policy._apply_task100_contract_repair(target))
 
     def test_任务102登记必须等待并依赖已完成任务101(self):
         task = registration_task(task_id="000102").replace(
