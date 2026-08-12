@@ -781,20 +781,28 @@ def build_segments(member_results: Sequence[Mapping[str, Any]]) -> list[dict[str
 
 def update_gate_leaves(
     old_leaves: Sequence[Mapping[str, Any]],
-    expected_counts: Mapping[str, int],
-    audited_counts: Mapping[str, int],
-    max_segment_days: Mapping[str, int],
+    expected_counts: Mapping[tuple[str, str, str], int],
+    audited_counts: Mapping[tuple[str, str, str], int],
+    max_segment_days: Mapping[tuple[str, str, str], int],
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
     updated: list[dict[str, Any]] = []
     for old in old_leaves:
         leaf = copy.deepcopy(dict(old))
         underlying = str(leaf.get("underlying") or "")
         horizon = int(leaf.get("horizon_hours") or 0)
-        expected = int(expected_counts.get(underlying, 0))
-        audited = int(audited_counts.get(underlying, 0))
-        segment_days = int(max_segment_days.get(underlying, 0))
-        complete = expected > 0 and audited == expected
-        coverage = segment_days * 24 >= horizon
+        groups = tuple(
+            group
+            for group, expected in sorted(expected_counts.items())
+            if group[0] == underlying and int(expected) > 0
+        )
+        complete = bool(groups) and all(
+            int(audited_counts.get(group, 0)) == int(expected_counts[group])
+            for group in groups
+        )
+        coverage = bool(groups) and all(
+            int(max_segment_days.get(group, 0)) * 24 >= horizon
+            for group in groups
+        )
         leaf["gates"]["三类时间"] = {
             "status": "通过" if complete and coverage else "无法判定",
             "reason_code": "ARCHIVE_VISIBILITY_AND_CAPTURE_BOUND" if complete and coverage else "TIME_AUDIT_INCOMPLETE",
@@ -1030,14 +1038,29 @@ def run(config_path: Path, repo_root: Path, output_root: Path, batch_id: str) ->
     if len(results) != sum(status_counts[status] for status in STATUSES):
         raise ValueError("STATUS_CONSERVATION_FAILED")
     segments = build_segments(results)
-    expected_underlying = Counter(str(item["underlying"]) for item in formal)
-    audited_underlying = Counter(str(item["underlying"]) for item in results if item.get("status") not in {"失败", "无法判定", "未成熟", "失效"})
-    max_segment_days: dict[str, int] = {}
+    def object_key(item: Mapping[str, Any]) -> tuple[str, str, str]:
+        return (
+            str(item["underlying"]),
+            str(item["contract"]),
+            str(item["dataset"]),
+        )
+
+    expected_objects = Counter(object_key(item) for item in formal)
+    audited_objects = Counter(
+        object_key(item)
+        for item in results
+        if item.get("status") not in {"失败", "无法判定", "未成熟", "失效"}
+    )
+    max_segment_days: dict[tuple[str, str, str], int] = {}
     for segment in segments:
-        underlying = str(segment["underlying"])
-        max_segment_days[underlying] = max(max_segment_days.get(underlying, 0), int(segment["day_count"]))
+        group = object_key(segment)
+        max_segment_days[group] = max(
+            max_segment_days.get(group, 0), int(segment["day_count"])
+        )
     old_leaves = load_json(formal_batch / "leaves.json")
-    leaves = update_gate_leaves(old_leaves, expected_underlying, audited_underlying, max_segment_days)
+    leaves = update_gate_leaves(
+        old_leaves, expected_objects, audited_objects, max_segment_days
+    )
     completed_snapshot = resource_snapshot(output_root, source_root)
     assert_resource_limits(completed_snapshot, limits)
     controller_rss = _process_max_rss_bytes()
