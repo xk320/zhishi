@@ -92,6 +92,10 @@ def task094_contract_versions(policy, current: str | None = None) -> tuple[str, 
         current = (
             REPO_ROOT / "docs/研发中心/任务/任务-000094.md"
         ).read_text(encoding="utf-8")
+    # 该夹具复算的是历史合同修复PR，其目标在当时必须保持“待执行”。
+    # 后续真实执行会把仓库中的现行状态推进为“执行中/待评审/已完成”，
+    # 不应反向使已经合并的历史治理场景自失效。
+    current = re.sub(r"(?m)^- 状态：[^\n]+$", "- 状态：待执行", current, count=1)
     replacements = policy.TASK094_CONTRACT_REPLACEMENTS
     lines = current.splitlines()
 
