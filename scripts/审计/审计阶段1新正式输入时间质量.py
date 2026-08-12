@@ -28,6 +28,26 @@ DATE_PATTERN = re.compile(r"(\d{4}-\d{2}-\d{2})\.zip$")
 DECIMAL_PATTERN = re.compile(r"^[0-9]+(?:\.[0-9]+)?$")
 SHA_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 STATUSES = ("已证明", "拒绝", "无法判定", "失败", "未成熟", "失效")
+BATCH_ABORT_REASON_CODES = frozenset({
+    "SOURCE_PATH_SYMLINK_REJECTED",
+    "SOURCE_PATH_BOUNDARY_INVALID",
+    "PATH_REJECTED",
+    "SOURCE_FILE_INVALID",
+    "SOURCE_FILE_SIZE_LIMIT_EXCEEDED",
+    "SOURCE_FILE_READ_FAILED",
+    "FILE_SIZE_DRIFT",
+    "CONTENT_SHA_DRIFT",
+    "ZIP_MEMBER_INVALID",
+    "ZIP_INVALID",
+    "SOURCE_VISIBILITY_INVALID",
+    "SOURCE_VISIBILITY_BEFORE_EVENT_DAY_END",
+    "SCANNER_TOOL_INVALID",
+    "SCANNER_EXECUTION_FAILED",
+    "SCANNER_OUTPUT_INVALID",
+    "INPUT_READ_FAILED",
+    "HEADER_INVALID",
+    "MEMBER_NAME_INVALID",
+})
 EXPECTED_CONFIG_RELATIVE_PATH = Path("config/审计/任务-000094逐行时间质量审计.json")
 EXPECTED_OUTPUT_RELATIVE_PATH = Path("artifacts/审计/阶段1逐行时间质量")
 TASK_CONTRACT_HEADER_PREFIXES = (
@@ -571,6 +591,15 @@ def _scanner_failure(member: Mapping[str, Any], group: Mapping[str, Any], code: 
     }
 
 
+def assert_no_batch_abort_result(result: Mapping[str, Any]) -> None:
+    """身份、内容、路径、ZIP或官方时间漂移不得降级为成员级失败。"""
+
+    reasons = {str(value) for value in result.get("reason_codes", [])}
+    blocked = sorted(reasons & BATCH_ABORT_REASON_CODES)
+    if blocked:
+        raise ValueError(f"BATCH_ABORT:{','.join(blocked)}")
+
+
 def scan_member(
     path: Path,
     member: Mapping[str, Any],
@@ -591,7 +620,15 @@ def scan_member(
                 return _scanner_failure(member, group, "ZIP_MEMBER_INVALID")
             item = items[0]
             pure = PurePosixPath(item.filename)
-            if item.is_dir() or item.filename != expected_csv or pure.is_absolute() or ".." in pure.parts or len(pure.parts) != 1:
+            item_mode = (item.external_attr >> 16) & 0xFFFF
+            if (
+                item.is_dir()
+                or not stat.S_ISREG(item_mode)
+                or item.filename != expected_csv
+                or pure.is_absolute()
+                or ".." in pure.parts
+                or len(pure.parts) != 1
+            ):
                 return _scanner_failure(member, group, "ZIP_MEMBER_INVALID")
     except (OSError, zipfile.BadZipFile):
         return _scanner_failure(member, group, "ZIP_INVALID")
@@ -892,6 +929,12 @@ def atomic_publish(output_root: Path, batch_id: str, files: Mapping[str, str], m
             path = temporary / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
+            if (
+                path.is_symlink()
+                or not path.is_file()
+                or sha256_file(path) != sha256_bytes(content.encode("utf-8"))
+            ):
+                raise ValueError("OUTPUT_WRITE_VERIFICATION_FAILED")
         temporary.rename(target)
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
@@ -958,13 +1001,13 @@ def scan_all_members(
             try:
                 path = verify_member_file(source_root, group, member, int(limits["single_source_file_bytes"]))
                 result = scan_member(path, member, group, tools, limits, process_resources)
-            except (OSError, ValueError) as error:
+            except OSError as error:
+                result = _scanner_failure(member, group, "SOURCE_FILE_READ_FAILED")
+            except ValueError as error:
                 result = _scanner_failure(member, group, str(error))
+            assert_no_batch_abort_result(result)
             result["collected_at"] = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
-            try:
-                result.setdefault("source_visible_at", source_visible_at(member))
-            except ValueError:
-                result.setdefault("source_visible_at", None)
+            result.setdefault("source_visible_at", source_visible_at(member))
             results.append(result)
             if index % 25 == 0 or index == len(members):
                 statuses = Counter(str(item["status"]) for item in results)
@@ -979,6 +1022,7 @@ def run(config_path: Path, repo_root: Path, output_root: Path, batch_id: str) ->
     started_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     if config_path.resolve() != (repo_root / EXPECTED_CONFIG_RELATIVE_PATH).resolve():
         raise ValueError("CONFIG_PATH_INVALID")
+    assert_no_symlink_components(output_root, stop=repo_root)
     if output_root.resolve() != (repo_root / EXPECTED_OUTPUT_RELATIVE_PATH).resolve():
         raise ValueError("OUTPUT_PATH_INVALID")
     config = load_config(config_path)
@@ -1155,6 +1199,25 @@ def run(config_path: Path, repo_root: Path, output_root: Path, batch_id: str) ->
     prepublish_snapshot = resource_snapshot(output_root, source_root)
     assert_resource_limits(prepublish_snapshot, limits)
     assert_time_limit(started, limits)
+    final_inventory, final_inventory_count = inventory_fingerprint(
+        inventory_paths, source_root, int(limits["inventory_entry_count"])
+    )
+    if final_inventory != before_inventory or final_inventory_count != before_count:
+        raise ValueError("SOURCE_INVENTORY_PREPUBLISH_DRIFT")
+    verify_json_batch_files(
+        source_batch,
+        expected_fingerprint=str(config["source_batch_files_fingerprint"]),
+        max_files=int(limits["batch_file_count"]),
+        max_file_bytes=int(limits["batch_file_bytes"]),
+    )
+    verify_json_batch_files(
+        formal_batch,
+        expected_fingerprint=str(config["formal_batch_files_fingerprint"]),
+        max_files=int(limits["batch_file_count"]),
+        max_file_bytes=int(limits["batch_file_bytes"]),
+    )
+    if sha256_file(formal_batch / "summary.json") != config["formal_summary_sha256"]:
+        raise ValueError("FORMAL_SUMMARY_PREPUBLISH_DRIFT")
     summary["resource_facts"]["prepublish"] = prepublish_snapshot
     files["summary.json"] = json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
     target = atomic_publish(output_root, batch_id, files, int(limits["output_total_bytes"]))

@@ -62,7 +62,7 @@
       "路径": "artifacts/审计/数据源清单.csv"
     },
     {
-      "SHA-256": "c03b59ee16a1b17caa74f3cfd1bb79a6593ea00f66a190aaaabd7ffda111d84a",
+      "SHA-256": "8cef63e18f9ed53eabd74497ec9e52bfc4d7c7f0569e4455d995108e6cb9177d",
       "用途": "历史来源身份合同",
       "路径": "config/数据/数据来源与资产身份.json"
     },
@@ -72,12 +72,12 @@
       "路径": "docs/数据/数据来源与资产身份合同.md"
     },
     {
-      "SHA-256": "28c2a6183d79962be258f53b5a666f65cf874de491033df1c764c64a5fd68efa",
+      "SHA-256": "6b6e69cdb32d9627e5cf8f1af26c07d2dd4e0510771b7ef2a7f534fed7e900a2",
       "用途": "阶段1最终审计报告",
       "路径": "docs/审计/阶段1最终审计报告.md"
     },
     {
-      "SHA-256": "2214a6dfe88dd1700ab9151961a97ca69e31ecd14c1b930aa074ea3a158fc212",
+      "SHA-256": "1791c3cc6bb3278eef046a5c12541f7777c1ebd0ca81036b9bd987c5b8be6d87",
       "用途": "既有数据缺口清单",
       "路径": "docs/审计/数据缺口与补采清单.md"
     },

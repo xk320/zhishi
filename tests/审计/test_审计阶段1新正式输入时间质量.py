@@ -4,6 +4,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -11,7 +12,7 @@ SCRIPT = ROOT / "scripts" / "审计" / "审计阶段1新正式输入时间质量
 CONFIG = ROOT / "config" / "审计" / "任务-000094逐行时间质量审计.json"
 FORMAL_BATCH = ROOT / "artifacts" / "审计" / "阶段1新候选集重算" / "stage1-candidate-recompute-20260811T145500Z-22191bf6b82a"
 SCANNER_SOURCE = ROOT / "scripts" / "审计" / "阶段1时间质量扫描器.c"
-FINAL_BATCH = ROOT / "artifacts" / "审计" / "阶段1逐行时间质量" / "stage1-time-quality-20260812T075100Z-6968246516ef"
+FINAL_BATCH = ROOT / "artifacts" / "审计" / "阶段1逐行时间质量" / "stage1-time-quality-20260812T091000Z-6968246516ef"
 
 
 def load_auditor():
@@ -45,7 +46,10 @@ class Stage1TimeQualityAuditTests(unittest.TestCase):
     def make_zip(self, directory: Path, name: str, rows: list[str]) -> Path:
         path = directory / f"{name}.zip"
         with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr(f"{name}.csv", "\n".join(rows) + "\n")
+            item = zipfile.ZipInfo(f"{name}.csv")
+            item.create_system = 3
+            item.external_attr = 0o100644 << 16
+            archive.writestr(item, "\n".join(rows) + "\n")
         return path
 
     def member(self, name: str, header_present: bool = False) -> dict:
@@ -102,6 +106,102 @@ class Stage1TimeQualityAuditTests(unittest.TestCase):
         broken["remote_evidence"]["zip_last_modified"] = "not-time"
         with self.assertRaises(ValueError):
             self.auditor.source_visible_at(broken)
+
+    def test_身份内容路径ZIP与官方时间漂移必须整批失败关闭(self):
+        for reason in (
+            "CONTENT_SHA_DRIFT",
+            "FILE_SIZE_DRIFT",
+            "SOURCE_FILE_INVALID",
+            "SOURCE_FILE_READ_FAILED",
+            "ZIP_MEMBER_INVALID",
+            "ZIP_INVALID",
+            "SOURCE_VISIBILITY_INVALID",
+            "SOURCE_VISIBILITY_BEFORE_EVENT_DAY_END",
+            "SOURCE_PATH_SYMLINK_REJECTED",
+            "SCANNER_EXECUTION_FAILED",
+            "SCANNER_OUTPUT_INVALID",
+            "INPUT_READ_FAILED",
+            "HEADER_INVALID",
+            "MEMBER_NAME_INVALID",
+        ):
+            with self.subTest(reason=reason), self.assertRaisesRegex(
+                ValueError, rf"BATCH_ABORT:{reason}"
+            ):
+                self.auditor.assert_no_batch_abort_result({
+                    "status": "失败", "reason_codes": [reason]
+                })
+
+    def test_内容漂移不会进入成员结果或原子发布(self):
+        member = self.member("BTCUSDT-trades-2025-01-01")
+        member["group"] = "BTCUSDT-trades"
+        config = {
+            "limits": {"single_source_file_bytes": 1024},
+            "tools": {
+                "scanner_source": str(SCANNER_SOURCE.relative_to(ROOT)),
+                "scanner_source_sha256": self.auditor.sha256_file(SCANNER_SOURCE),
+                "compiler": "/usr/bin/clang",
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            self.auditor, "compile_scanner", return_value=Path("/bin/true")
+        ), mock.patch.object(
+            self.auditor, "sha256_file", return_value="a" * 64
+        ), mock.patch.object(
+            self.auditor, "verify_member_file", side_effect=ValueError("CONTENT_SHA_DRIFT")
+        ), mock.patch.object(self.auditor, "atomic_publish") as publish:
+            with self.assertRaisesRegex(ValueError, "BATCH_ABORT:CONTENT_SHA_DRIFT"):
+                self.auditor.scan_all_members(
+                    [member], {"BTCUSDT-trades": self.trades_group()}, config,
+                    ROOT, Path(directory), Path(directory), 0.0,
+                )
+            publish.assert_not_called()
+
+    def test_扫描超时与输出协议错误不会进入成员分母(self):
+        member = self.member("BTCUSDT-trades-2025-01-01")
+        member["group"] = "BTCUSDT-trades"
+        config = {
+            "limits": {"single_source_file_bytes": 1024},
+            "tools": {
+                "scanner_source": str(SCANNER_SOURCE.relative_to(ROOT)),
+                "scanner_source_sha256": self.auditor.sha256_file(SCANNER_SOURCE),
+                "compiler": "/usr/bin/clang",
+            },
+        }
+        for reason in ("SCANNER_EXECUTION_FAILED", "SCANNER_OUTPUT_INVALID"):
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as directory, mock.patch.object(
+                self.auditor, "compile_scanner", return_value=Path("/bin/true")
+            ), mock.patch.object(
+                self.auditor, "sha256_file", return_value="a" * 64
+            ), mock.patch.object(
+                self.auditor, "verify_member_file", return_value=Path("/tmp/member.zip")
+            ), mock.patch.object(
+                self.auditor, "scan_member",
+                return_value=self.auditor._scanner_failure(
+                    member, self.trades_group(), reason
+                ),
+            ):
+                with self.assertRaisesRegex(ValueError, rf"BATCH_ABORT:{reason}"):
+                    self.auditor.scan_all_members(
+                        [member], {"BTCUSDT-trades": self.trades_group()}, config,
+                        ROOT, Path(directory), Path(directory), 0.0,
+                    )
+
+    def test_ZIP内特殊文件成员失败关闭(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            name = "BTCUSDT-trades-2025-01-01"
+            path = root / f"{name}.zip"
+            item = zipfile.ZipInfo(f"{name}.csv")
+            item.create_system = 3
+            item.external_attr = 0o120777 << 16
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr(item, "target")
+            result = self.auditor.scan_member(
+                path, self.member(name), self.trades_group(), self.tools, self.limits
+            )
+            self.assertEqual(["ZIP_MEMBER_INVALID"], result["reason_codes"])
+            with self.assertRaisesRegex(ValueError, "BATCH_ABORT:ZIP_MEMBER_INVALID"):
+                self.auditor.assert_no_batch_abort_result(result)
 
     def test_逐行扫描通过且不公开业务键(self):
         with tempfile.TemporaryDirectory() as directory:
