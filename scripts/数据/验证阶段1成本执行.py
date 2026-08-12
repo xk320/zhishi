@@ -54,6 +54,19 @@ TIME_COLUMNS = (
 )
 ARRIVAL_COLUMNS = ("arrival_time", "received_at", "receive_time", "ingested_at")
 CAPTURE_COLUMNS = ("collected_at", "capture_time", "captured_at", "created_at")
+REQUIRED_BATCH_FILES = frozenset(
+    {
+        "intent.json",
+        "metadata.json",
+        "metadata-post.json",
+        "query-plan.json",
+        "query-explain.json",
+        "database-evidence.json",
+        "binance-evidence.json",
+        "group-results.csv",
+        "summary.json",
+    }
+)
 
 
 def canonical_bytes(value: Any) -> bytes:
@@ -257,6 +270,61 @@ def validate_query_manifest(queries: list[Mapping[str, Any]], *, max_queries: in
         raise ValueError("QUERY_IDENTITY_INVALID")
 
 
+def validate_resource_facts(facts: Mapping[str, Any], limits: Mapping[str, int]) -> None:
+    elapsed = facts.get("elapsed_seconds")
+    rss = facts.get("rss_bytes")
+    if not isinstance(elapsed, (int, float)) or elapsed < 0 or elapsed > limits["总时限秒"]:
+        raise ValueError("BATCH_ELAPSED_LIMIT_EXCEEDED")
+    if not isinstance(rss, int) or isinstance(rss, bool) or rss < 0 or rss > limits["RSS字节"]:
+        raise ValueError("BATCH_RSS_LIMIT_EXCEEDED")
+
+
+def _metadata_invariant(value: Mapping[str, Any]) -> dict[str, Any]:
+    tables = [[row[0], row[1]] for row in value.get("tables", []) if len(row) >= 2]
+    return {
+        "protocol": value.get("protocol"),
+        "uid": value.get("uid"),
+        "identity_sha256": value.get("identity_sha256"),
+        "grant_sha256": value.get("grant_sha256"),
+        "select_capability": value.get("select_capability"),
+        "credential_files_disabled": value.get("credential_files_disabled"),
+        "tables": tables,
+        "columns": value.get("columns"),
+        "indexes": value.get("indexes"),
+    }
+
+
+def validate_metadata_snapshot(value: Mapping[str, Any]) -> None:
+    if (
+        value.get("protocol") != "zhishi-stage1-cost-metadata/1"
+        or value.get("uid") != 0
+        or value.get("select_capability") is not True
+        or value.get("credential_files_disabled") is not True
+    ):
+        raise ValueError("REMOTE_METADATA_IDENTITY_INVALID")
+    for key in ("identity_sha256", "grant_sha256"):
+        if not isinstance(value.get(key), str) or SHA_PATTERN.fullmatch(value[key]) is None:
+            raise ValueError("REMOTE_METADATA_FINGERPRINT_INVALID")
+    load1 = value.get("load1")
+    cpu_count = value.get("cpu_count")
+    if (
+        not isinstance(load1, (int, float))
+        or load1 < 0
+        or not isinstance(cpu_count, int)
+        or isinstance(cpu_count, bool)
+        or cpu_count < 1
+        or load1 > max(4.0, float(cpu_count) * 2.0)
+    ):
+        raise ValueError("REMOTE_LOAD_ALARM")
+
+
+def assert_metadata_invariants_equal(pre: Mapping[str, Any], post: Mapping[str, Any]) -> None:
+    validate_metadata_snapshot(pre)
+    validate_metadata_snapshot(post)
+    if _metadata_invariant(pre) != _metadata_invariant(post):
+        raise ValueError("REMOTE_METADATA_DRIFT")
+
+
 def validate_public_url(request_uri: str, config: Mapping[str, Any]) -> bool:
     parsed = urllib.parse.urlsplit(request_uri)
     if (
@@ -364,6 +432,17 @@ def _batch_directory(repo_root: Path, batch: str) -> Path:
     return repo_root / "artifacts" / "数据" / "阶段1成本执行" / batch
 
 
+def _working_directory(repo_root: Path, batch: str) -> Path:
+    if BATCH_PATTERN.fullmatch(batch) is None:
+        raise ValueError("BATCH_ID_INVALID")
+    return repo_root / "artifacts" / "数据" / "阶段1成本执行" / ".pending" / batch
+
+
+def _active_batch_directory(repo_root: Path, batch: str) -> Path:
+    pending = _working_directory(repo_root, batch)
+    return pending if pending.is_dir() else _batch_directory(repo_root, batch)
+
+
 def _assert_upstream(repo_root: Path, config: Mapping[str, Any]) -> dict[str, Any]:
     upstream = config["上游输入"]
     published = _assert_relative_regular(repo_root, upstream["决策路径"])
@@ -380,7 +459,10 @@ def prepare(repo_root: Path, batch: str) -> dict[str, Any]:
     started = time.monotonic()
     config, config_path = _load_config(repo_root)
     upstream = _assert_upstream(repo_root, config)
-    batch_dir = _batch_directory(repo_root, batch)
+    final_dir = _batch_directory(repo_root, batch)
+    if final_dir.exists():
+        raise FileExistsError(final_dir)
+    batch_dir = _working_directory(repo_root, batch)
     batch_dir.mkdir(parents=True, exist_ok=False)
     intent = {
         "schema_version": "zhishi-stage1-cost-execution-intent/v1",
@@ -407,7 +489,7 @@ def prepare(repo_root: Path, batch: str) -> dict[str, Any]:
 
 def _assert_intent(repo_root: Path, batch: str) -> tuple[dict[str, Any], dict[str, Any], Path]:
     config, config_path = _load_config(repo_root)
-    batch_dir = _batch_directory(repo_root, batch)
+    batch_dir = _active_batch_directory(repo_root, batch)
     intent = read_json(batch_dir / "intent.json")
     expected = {
         "config_sha256": sha256_path(config_path),
@@ -427,7 +509,7 @@ tables=("order_book_raw_snapshots","order_book_feature_buckets","order_book_mark
 client=shutil.which("mysql") or shutil.which("mariadb")
 if not client: raise SystemExit("MYSQL_CLIENT_MISSING")
 def run(sql):
- p=subprocess.run([client,"--batch","--raw","--skip-column-names","--connect-timeout=5","--database=orderbook","--execute",sql],capture_output=True,text=True,timeout=30,check=False)
+ p=subprocess.run([client,"--no-defaults","--batch","--raw","--skip-column-names","--connect-timeout=5","--database=orderbook","--execute",sql],capture_output=True,text=True,timeout=30,check=False)
  if p.returncode: raise SystemExit("MYSQL_READ_FAILED")
  return p.stdout
 quoted=",".join("'%s'"%x for x in tables)
@@ -437,7 +519,8 @@ table_rows=run("SELECT TABLE_NAME,ENGINE,COALESCE(TABLE_ROWS,0) FROM information
 columns=run("SELECT TABLE_NAME,COLUMN_NAME,ORDINAL_POSITION,DATA_TYPE,IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='orderbook' AND TABLE_NAME IN (%s) ORDER BY TABLE_NAME,ORDINAL_POSITION"%quoted)
 indexes=run("SELECT TABLE_NAME,INDEX_NAME,NON_UNIQUE,SEQ_IN_INDEX,COLUMN_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='orderbook' AND TABLE_NAME IN (%s) ORDER BY TABLE_NAME,INDEX_NAME,SEQ_IN_INDEX"%quoted)
 def lines(text): return [x.split("\t") for x in text.splitlines() if x]
-out={"protocol":"zhishi-stage1-cost-metadata/1","uid":os.getuid(),"identity_sha256":hashlib.sha256(identity.encode()).hexdigest(),"grant_sha256":hashlib.sha256(grants.encode()).hexdigest(),"select_capability":bool(grants.strip()),"tables":lines(table_rows),"columns":lines(columns),"indexes":lines(indexes)}
+grant_upper=grants.upper()
+out={"protocol":"zhishi-stage1-cost-metadata/1","uid":os.getuid(),"identity_sha256":hashlib.sha256(identity.encode()).hexdigest(),"grant_sha256":hashlib.sha256(grants.encode()).hexdigest(),"select_capability":("SELECT" in grant_upper or "ALL PRIVILEGES" in grant_upper),"credential_files_disabled":True,"tables":lines(table_rows),"columns":lines(columns),"indexes":lines(indexes),"load1":os.getloadavg()[0],"cpu_count":os.cpu_count() or 1}
 print(json.dumps(out,sort_keys=True,separators=(",",":")))
 '''
 
@@ -478,10 +561,7 @@ def probe_metadata(repo_root: Path, batch: str) -> dict[str, Any]:
         timeout=config["资源上限"]["单SQL秒"] * 5,
         max_log=config["资源上限"]["远端日志字节"],
     )
-    if value.get("protocol") != "zhishi-stage1-cost-metadata/1" or value.get("uid") != 0:
-        raise ValueError("REMOTE_IDENTITY_MISMATCH")
-    if not value.get("select_capability"):
-        raise ValueError("REMOTE_SELECT_CAPABILITY_MISSING")
+    validate_metadata_snapshot(value)
     evidence = {
         "schema_version": "zhishi-stage1-cost-metadata-evidence/v1",
         "batch_id": batch,
@@ -494,6 +574,16 @@ def probe_metadata(repo_root: Path, batch: str) -> dict[str, Any]:
     }
     write_json_exclusive(batch_dir / "metadata.json", evidence)
     return evidence
+
+
+def _read_remote_metadata(config: Mapping[str, Any]) -> dict[str, Any]:
+    value = _run_ssh_python(
+        REMOTE_METADATA_PROGRAM,
+        timeout=config["资源上限"]["单SQL秒"] * 5,
+        max_log=config["资源上限"]["远端日志字节"],
+    )
+    validate_metadata_snapshot(value)
+    return value
 
 
 def _metadata_maps(metadata: Mapping[str, Any]) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, list[str]]]]:
@@ -588,10 +678,44 @@ def build_query_plan(metadata_evidence: Mapping[str, Any], intent: Mapping[str, 
     }
 
 
+def validate_query_plan(
+    plan: Mapping[str, Any],
+    intent: Mapping[str, Any],
+    metadata_evidence: Mapping[str, Any],
+    config: Mapping[str, Any],
+) -> None:
+    if (
+        plan.get("schema_version") != "zhishi-stage1-cost-query-plan/v1"
+        or plan.get("batch_id") != intent.get("batch_id")
+        or plan.get("intent_sha256") != sha256_bytes(canonical_bytes(intent))
+        or plan.get("metadata_sha256") != sha256_bytes(canonical_bytes(metadata_evidence))
+        or plan.get("business_query_retry_count") != 0
+    ):
+        raise ValueError("QUERY_PLAN_IDENTITY_DRIFT")
+    queries = plan.get("queries")
+    if not isinstance(queries, list):
+        raise ValueError("QUERY_PLAN_LIST_REQUIRED")
+    validate_query_manifest(queries, max_queries=config["资源上限"]["SQL总数"])
+    if plan.get("query_count") != len(queries):
+        raise ValueError("QUERY_PLAN_COUNT_DRIFT")
+    expected = build_query_plan(metadata_evidence, intent, config)
+    if queries != expected["queries"] or plan.get("skipped_tables") != expected["skipped_tables"]:
+        raise ValueError("QUERY_PLAN_CONTENT_DRIFT")
+    for query in queries:
+        sql = query.get("SQL")
+        if (
+            not isinstance(sql, str)
+            or query.get("SQL_SHA-256") != sha256_bytes(sql.encode("utf-8"))
+            or validate_business_sql(sql, config) != query.get("表")
+        ):
+            raise ValueError("QUERY_SQL_IDENTITY_DRIFT")
+
+
 def plan_queries(repo_root: Path, batch: str) -> dict[str, Any]:
     intent, config, batch_dir = _assert_intent(repo_root, batch)
     metadata = read_json(batch_dir / "metadata.json")
     plan = build_query_plan(metadata, intent, config)
+    validate_query_plan(plan, intent, metadata, config)
     write_json_exclusive(batch_dir / "query-plan.json", plan)
     return plan
 
@@ -607,8 +731,12 @@ if not client: raise SystemExit("MYSQL_CLIENT_MISSING")
 out=[]
 for query in queries:
  sql=query["SQL"]
+ compact=" ".join(sql.strip().split())
+ lowered=compact.lower()
+ forbidden=(not lowered.startswith("select ") or any(x in lowered for x in (" insert "," update "," delete "," replace "," alter "," drop "," create "," truncate "," grant "," revoke "," outfile "," dumpfile ",";","--","/*")) or " limit " not in " "+lowered+" ")
+ if forbidden: raise SystemExit("REMOTE_SQL_NOT_READ_ONLY")
  statement=("EXPLAIN FORMAT=JSON "+sql) if {mode!r}=="explain" else sql
- p=subprocess.run([client,"--batch","--raw","--skip-column-names","--connect-timeout=5","--database=orderbook","--execute",statement],capture_output=True,text=True,timeout=30,check=False)
+ p=subprocess.run([client,"--no-defaults","--batch","--raw","--skip-column-names","--connect-timeout=5","--database=orderbook","--execute",statement],capture_output=True,text=True,timeout=30,check=False)
  if p.returncode: raise SystemExit("MYSQL_QUERY_FAILED")
  raw=p.stdout.encode()
  if {mode!r}=="explain":
@@ -622,8 +750,10 @@ print(json.dumps({{"protocol":"zhishi-stage1-cost-query/1","mode":{mode!r},"resu
 
 
 def explain_queries(repo_root: Path, batch: str) -> dict[str, Any]:
-    _intent, config, batch_dir = _assert_intent(repo_root, batch)
+    intent, config, batch_dir = _assert_intent(repo_root, batch)
+    metadata = read_json(batch_dir / "metadata.json")
     plan = read_json(batch_dir / "query-plan.json")
+    validate_query_plan(plan, intent, metadata, config)
     queries = plan["queries"]
     validate_query_manifest(queries, max_queries=config["资源上限"]["SQL总数"])
     result = _run_ssh_python(
@@ -644,12 +774,40 @@ def explain_queries(repo_root: Path, batch: str) -> dict[str, Any]:
     return evidence
 
 
+def validate_explain_evidence(
+    explain: Mapping[str, Any],
+    *,
+    plan: Mapping[str, Any],
+    plan_sha256: str,
+    config: Mapping[str, Any],
+) -> tuple[list[Mapping[str, Any]], list[dict[str, Any]], int]:
+    if (
+        explain.get("schema_version") != "zhishi-stage1-cost-query-explain/v1"
+        or explain.get("batch_id") != plan.get("batch_id")
+        or explain.get("query_plan_sha256") != plan_sha256
+    ):
+        raise ValueError("EXPLAIN_PLAN_IDENTITY_DRIFT")
+    results = explain.get("results")
+    if not isinstance(results, list) or len(results) != len(plan.get("queries", [])):
+        raise ValueError("EXPLAIN_RESULT_MISMATCH")
+    return _approved_queries(config, plan, explain)
+
+
 def _approved_queries(config: Mapping[str, Any], plan: Mapping[str, Any], explain: Mapping[str, Any]) -> tuple[list[Mapping[str, Any]], list[dict[str, Any]], int]:
     by_id = {item["query_id"]: item for item in explain["results"]}
+    if len(by_id) != len(explain["results"]):
+        raise ValueError("EXPLAIN_QUERY_ID_DUPLICATE")
     approved = []
     decisions = []
     total_rows = 0
     for query in plan["queries"]:
+        sql = query.get("SQL")
+        if (
+            not isinstance(sql, str)
+            or query.get("SQL_SHA-256") != sha256_bytes(sql.encode("utf-8"))
+            or validate_business_sql(sql, config) != query.get("表")
+        ):
+            raise ValueError("QUERY_SQL_IDENTITY_DRIFT")
         item = by_id.get(query["查询编号"])
         if item is None:
             raise ValueError("EXPLAIN_QUERY_ID_MISSING")
@@ -671,21 +829,22 @@ def _approved_queries(config: Mapping[str, Any], plan: Mapping[str, Any], explai
     return approved, decisions, total_rows
 
 
-def _public_requests(config: Mapping[str, Any]) -> list[dict[str, str]]:
+def _public_requests(config: Mapping[str, Any], *, data_cutoff_at: str) -> list[dict[str, str]]:
     base = "https://fapi.binance.com"
-    requests = [{"id": "exchange-info", "url": base + "/fapi/v1/exchangeInfo", "kind": "current_exchange_info"}]
+    cutoff_ms = int(dt.datetime.fromisoformat(data_cutoff_at.replace("Z", "+00:00")).timestamp() * 1000)
+    requests = [{"id": "exchange-info", "request_uri": base + "/fapi/v1/exchangeInfo", "kind": "current_exchange_info"}]
     for symbol in config["标的"]:
         encoded = urllib.parse.urlencode({"symbol": symbol, "limit": 5})
-        requests.append({"id": f"depth-{symbol}", "url": base + "/fapi/v1/depth?" + encoded, "kind": "current_depth"})
-        requests.append({"id": f"premium-{symbol}", "url": base + "/fapi/v1/premiumIndex?" + urllib.parse.urlencode({"symbol": symbol}), "kind": "current_premium"})
-        requests.append({"id": f"funding-{symbol}", "url": base + "/fapi/v1/fundingRate?" + urllib.parse.urlencode({"symbol": symbol, "limit": 1000}), "kind": "historical_funding"})
+        requests.append({"id": f"depth-{symbol}", "request_uri": base + "/fapi/v1/depth?" + encoded, "kind": "current_depth"})
+        requests.append({"id": f"premium-{symbol}", "request_uri": base + "/fapi/v1/premiumIndex?" + urllib.parse.urlencode({"symbol": symbol}), "kind": "current_premium"})
+        requests.append({"id": f"funding-{symbol}", "request_uri": base + "/fapi/v1/fundingRate?" + urllib.parse.urlencode({"symbol": symbol, "endTime": cutoff_ms, "limit": 1000}), "kind": "historical_funding"})
     return requests
 
 
-def build_binance_remote_program(config: Mapping[str, Any], request_item: Mapping[str, str] | None = None) -> str:
-    requests = [dict(request_item)] if request_item is not None else _public_requests(config)
+def build_binance_remote_program(config: Mapping[str, Any], request_item: Mapping[str, str] | None = None, *, data_cutoff_at: str = "2026-08-12T00:00:00Z") -> str:
+    requests = [dict(request_item)] if request_item is not None else _public_requests(config, data_cutoff_at=data_cutoff_at)
     for item in requests:
-        validate_public_url(item["url"], config)
+        validate_public_url(item["request_uri"], config)
     payload = json.dumps(requests, ensure_ascii=False, separators=(",", ":"))
     return f'''
 import datetime as dt,hashlib,json,shutil,subprocess
@@ -702,12 +861,12 @@ for item in requests:
  try:
   curl=shutil.which("curl")
   if not curl: raise RuntimeError("CURL_MISSING")
-  response=subprocess.run([curl,"--ipv4","--silent","--show-error","--fail","--connect-timeout","5","--max-time","10","--max-filesize","2000000","--user-agent","zhishi-cost-evidence/1.0",item["url"]],capture_output=True,timeout=15,check=False)
+  response=subprocess.run([curl,"--ipv4","--silent","--show-error","--fail","--connect-timeout","5","--max-time","10","--max-filesize","2000000","--user-agent","zhishi-cost-evidence/1.0",item["request_uri"]],capture_output=True,timeout=15,check=False)
   if response.returncode: raise RuntimeError("HTTPS_REQUEST_FAILED_"+str(response.returncode))
   raw=response.stdout
   if len(raw)>2000000: raise ValueError("BINANCE_RESPONSE_LIMIT_EXCEEDED")
   value=json.loads(raw)
-  facts={{"request_id":item["id"],"kind":item["kind"],"status":"observed","collected_at":collected,"url_sha256":hashlib.sha256(item["url"].encode()).hexdigest(),"response_sha256":hashlib.sha256(raw).hexdigest(),"response_bytes":len(raw),"schema_sha256":hashlib.sha256(canonical(shape(value))).hexdigest()}}
+  facts={{"request_id":item["id"],"kind":item["kind"],"status":"observed","collected_at":collected,"url_sha256":hashlib.sha256(item["request_uri"].encode()).hexdigest(),"response_sha256":hashlib.sha256(raw).hexdigest(),"response_bytes":len(raw),"schema_sha256":hashlib.sha256(canonical(shape(value))).hexdigest()}}
   if isinstance(value,list):
    facts["item_count"]=len(value)
    times=[x.get("fundingTime") for x in value if isinstance(x,dict) and isinstance(x.get("fundingTime"),int)]
@@ -716,17 +875,18 @@ for item in requests:
   results.append(facts)
  except Exception as exc:
   reason=str(exc) if str(exc).startswith(("HTTPS_REQUEST_FAILED_","BINANCE_RESPONSE_LIMIT_EXCEEDED","CURL_MISSING")) else type(exc).__name__
-  results.append({{"request_id":item["id"],"kind":item["kind"],"status":"failed","collected_at":collected,"url_sha256":hashlib.sha256(item["url"].encode()).hexdigest(),"reason":reason}})
+  results.append({{"request_id":item["id"],"kind":item["kind"],"status":"failed","collected_at":collected,"url_sha256":hashlib.sha256(item["request_uri"].encode()).hexdigest(),"reason":reason}})
 print(json.dumps({{"protocol":"zhishi-binance-public-evidence/1","requests":results}},sort_keys=True,separators=(",",":")))
 '''
 
 
-def fetch_binance_public(config: Mapping[str, Any]) -> dict[str, Any]:
+def fetch_binance_public(config: Mapping[str, Any], *, data_cutoff_at: str) -> dict[str, Any]:
     evidence = []
-    for item in _public_requests(config):
+    cutoff_ms = int(dt.datetime.fromisoformat(data_cutoff_at.replace("Z", "+00:00")).timestamp() * 1000)
+    for item in _public_requests(config, data_cutoff_at=data_cutoff_at):
         try:
             result = _run_ssh_python(
-                build_binance_remote_program(config, item),
+                build_binance_remote_program(config, item, data_cutoff_at=data_cutoff_at),
                 timeout=20,
                 max_log=config["资源上限"]["远端日志字节"],
             )
@@ -740,11 +900,15 @@ def fetch_binance_public(config: Mapping[str, Any]) -> dict[str, Any]:
                     "kind": item["kind"],
                     "status": "failed",
                     "collected_at": utc_now(),
-                    "url_sha256": sha256_bytes(item["url"].encode("utf-8")),
+                    "url_sha256": sha256_bytes(item["request_uri"].encode("utf-8")),
                     "reason": str(exc),
                 }
             )
-    return {"schema_version": "zhishi-binance-public-evidence/v1", "transport": "ubuntu-curl-ipv4-verified-https", "requests": evidence}
+    for item in evidence:
+        if item.get("kind") == "historical_funding" and item.get("status") == "observed":
+            if item.get("latest_event_time_ms", cutoff_ms + 1) > cutoff_ms:
+                raise ValueError("BINANCE_EVENT_AFTER_CUTOFF")
+    return {"schema_version": "zhishi-binance-public-evidence/v1", "transport": "ubuntu-curl-ipv4-verified-https", "data_cutoff_at": data_cutoff_at, "requests": evidence}
 
 
 def _schema_shape(value: Any) -> Any:
@@ -766,11 +930,17 @@ def _csv_payload(rows: list[Mapping[str, Any]]) -> str:
 
 
 def collect(repo_root: Path, batch: str) -> dict[str, Any]:
-    started = time.monotonic()
     intent, config, batch_dir = _assert_intent(repo_root, batch)
+    metadata = read_json(batch_dir / "metadata.json")
     plan = read_json(batch_dir / "query-plan.json")
     explain = read_json(batch_dir / "query-explain.json")
-    approved, decisions, estimated_rows = _approved_queries(config, plan, explain)
+    validate_query_plan(plan, intent, metadata, config)
+    approved, decisions, estimated_rows = validate_explain_evidence(
+        explain,
+        plan=plan,
+        plan_sha256=sha256_path(batch_dir / "query-plan.json"),
+        config=config,
+    )
     database_result = _run_ssh_python(
         _remote_query_program(approved, explain_only=False),
         timeout=max(30, len(approved) * config["资源上限"]["单SQL秒"]),
@@ -781,6 +951,11 @@ def collect(repo_root: Path, batch: str) -> dict[str, Any]:
     response_bytes = sum(int(item["response_bytes"]) for item in database_result["results"])
     if response_bytes > config["资源上限"]["业务读取字节"]:
         raise ValueError("DATABASE_RESPONSE_BYTES_EXCEEDED")
+    if any(
+        item.get("row_count", 0) > config["资源上限"]["返回聚合行"]
+        for item in database_result["results"]
+    ):
+        raise ValueError("DATABASE_RESULT_ROWS_EXCEEDED")
     database_evidence = {
         "schema_version": "zhishi-stage1-cost-database-evidence/v1",
         "batch_id": batch,
@@ -793,7 +968,19 @@ def collect(repo_root: Path, batch: str) -> dict[str, Any]:
         "results": database_result["results"],
         "remote_write_performed": False,
     }
-    binance = fetch_binance_public(config)
+    post_metadata_value = _read_remote_metadata(config)
+    assert_metadata_invariants_equal(metadata["metadata"], post_metadata_value)
+    post_metadata = {
+        "schema_version": "zhishi-stage1-cost-metadata-post-evidence/v1",
+        "batch_id": batch,
+        "observed_at": utc_now(),
+        "root_compatible_read_only": True,
+        "remote_write_performed": False,
+        "metadata": post_metadata_value,
+        "metadata_sha256": sha256_bytes(canonical_bytes(post_metadata_value)),
+    }
+    write_json_exclusive(batch_dir / "metadata-post.json", post_metadata)
+    binance = fetch_binance_public(config, data_cutoff_at=intent["data_cutoff_at"])
     funding_ok = all(
         any(
             item["request_id"] == f"funding-{symbol}"
@@ -804,12 +991,25 @@ def collect(repo_root: Path, batch: str) -> dict[str, Any]:
         for symbol in config["标的"]
     )
     rows = build_group_rows(batch=batch, evidence={"资金费率历史窗口已观察": funding_ok})
+    elapsed_seconds = (
+        dt.datetime.now(dt.timezone.utc)
+        - dt.datetime.fromisoformat(intent["created_at"].replace("Z", "+00:00"))
+    ).total_seconds()
+    resource_facts = {
+        "elapsed_seconds": round(elapsed_seconds, 6),
+        "rss_bytes": _rss_bytes(),
+        "estimated_database_rows": estimated_rows,
+        "database_response_bytes": response_bytes,
+        "output_limit_bytes": config["资源上限"]["本地输出字节"],
+    }
+    validate_resource_facts(resource_facts, config["资源上限"])
     summary = {
         "schema_version": "zhishi-stage1-cost-execution-summary/v1",
         "task_id": "000100",
         "batch_id": batch,
         "intent_sha256": sha256_path(batch_dir / "intent.json"),
         "metadata_sha256": sha256_path(batch_dir / "metadata.json"),
+        "metadata_post_sha256": sha256_path(batch_dir / "metadata-post.json"),
         "query_plan_sha256": sha256_path(batch_dir / "query-plan.json"),
         "query_explain_sha256": sha256_path(batch_dir / "query-explain.json"),
         "candidate_group_count": 32,
@@ -821,13 +1021,7 @@ def collect(repo_root: Path, batch: str) -> dict[str, Any]:
         "stage1_complete": False,
         "stage2_released": False,
         "remaining_condition": "同一历史现场的版本化模拟委托生命周期证据",
-        "resource_facts": {
-            "elapsed_seconds": round(time.monotonic() - started, 6),
-            "rss_bytes": _rss_bytes(),
-            "estimated_database_rows": estimated_rows,
-            "database_response_bytes": response_bytes,
-            "output_limit_bytes": config["资源上限"]["本地输出字节"],
-        },
+        "resource_facts": resource_facts,
         "safety": {
             "remote_write": False,
             "database_write": False,
@@ -859,23 +1053,183 @@ def collect(repo_root: Path, batch: str) -> dict[str, Any]:
         "manifest_payload_sha256": sha256_bytes(canonical_bytes(manifest_files)),
     }
     write_json_exclusive(batch_dir / "manifest.json", manifest)
+    validate_batch(repo_root, batch)
+    final_dir = _batch_directory(repo_root, batch)
+    if final_dir.exists():
+        raise FileExistsError(final_dir)
+    os.rename(batch_dir, final_dir)
+    pending_parent = batch_dir.parent
+    try:
+        pending_parent.rmdir()
+    except OSError:
+        pass
     return summary
 
 
 def validate_batch(repo_root: Path, batch: str) -> dict[str, Any]:
-    _intent, config, batch_dir = _assert_intent(repo_root, batch)
+    intent, config, batch_dir = _assert_intent(repo_root, batch)
     manifest = read_json(batch_dir / "manifest.json")
+    if (
+        manifest.get("schema_version") != "zhishi-stage1-cost-execution-manifest/v1"
+        or manifest.get("batch_id") != batch
+        or set(manifest.get("files", {})) != REQUIRED_BATCH_FILES
+        or manifest.get("file_count") != len(REQUIRED_BATCH_FILES)
+    ):
+        raise ValueError("BATCH_FILE_SET_INVALID")
+    actual_files = {
+        path.name for path in batch_dir.iterdir()
+        if path.is_file() and path.name != "manifest.json"
+    }
+    if actual_files != REQUIRED_BATCH_FILES:
+        raise ValueError("BATCH_ACTUAL_FILE_SET_INVALID")
     for name, expected in manifest["files"].items():
         path = batch_dir / name
         if sha256_path(path) != expected["sha256"] or path.stat().st_size != expected["bytes"]:
             raise ValueError("BATCH_FILE_DRIFT")
         assert_safe_text(path.read_text(encoding="utf-8"))
-    if manifest["total_bytes"] > config["资源上限"]["本地输出字节"]:
+    total_bytes = sum(item["bytes"] for item in manifest["files"].values())
+    if (
+        manifest.get("total_bytes") != total_bytes
+        or manifest.get("manifest_payload_sha256") != sha256_bytes(canonical_bytes(manifest["files"]))
+        or total_bytes > config["资源上限"]["本地输出字节"]
+    ):
         raise ValueError("BATCH_OUTPUT_LIMIT_EXCEEDED")
+
+    metadata = read_json(batch_dir / "metadata.json")
+    metadata_post = read_json(batch_dir / "metadata-post.json")
+    for value, schema in (
+        (metadata, "zhishi-stage1-cost-metadata-evidence/v1"),
+        (metadata_post, "zhishi-stage1-cost-metadata-post-evidence/v1"),
+    ):
+        if (
+            value.get("schema_version") != schema
+            or value.get("batch_id") != batch
+            or value.get("remote_write_performed") is not False
+            or value.get("metadata_sha256") != sha256_bytes(canonical_bytes(value.get("metadata")))
+        ):
+            raise ValueError("BATCH_METADATA_EVIDENCE_INVALID")
+    assert_metadata_invariants_equal(metadata["metadata"], metadata_post["metadata"])
+
+    plan = read_json(batch_dir / "query-plan.json")
+    validate_query_plan(plan, intent, metadata, config)
+    explain = read_json(batch_dir / "query-explain.json")
+    approved, decisions, estimated_rows = validate_explain_evidence(
+        explain, plan=plan,
+        plan_sha256=sha256_path(batch_dir / "query-plan.json"),
+        config=config,
+    )
+    database = read_json(batch_dir / "database-evidence.json")
+    results = database.get("results")
+    if (
+        database.get("schema_version") != "zhishi-stage1-cost-database-evidence/v1"
+        or database.get("batch_id") != batch
+        or database.get("query_decisions") != decisions
+        or database.get("estimated_rows") != estimated_rows
+        or database.get("executed_query_count") != len(approved)
+        or database.get("query_retry_count") != 0
+        or database.get("remote_write_performed") is not False
+        or not isinstance(results, list)
+        or [item.get("query_id") for item in results]
+        != [item["查询编号"] for item in approved]
+    ):
+        raise ValueError("BATCH_DATABASE_EVIDENCE_INVALID")
+    response_bytes = 0
+    cutoff = dt.datetime.fromisoformat(intent["data_cutoff_at"].replace("Z", "+00:00"))
+    for query, result in zip(approved, results, strict=True):
+        rows = result.get("rows")
+        if (
+            not isinstance(rows, list)
+            or result.get("row_count") != len(rows)
+            or len(rows) > config["资源上限"]["返回聚合行"]
+            or not isinstance(result.get("response_bytes"), int)
+        ):
+            raise ValueError("BATCH_DATABASE_RESULT_INVALID")
+        response_bytes += result["response_bytes"]
+        for row in rows:
+            if not isinstance(row, list) or len(row) != 2 or row[0] != query["标的"]:
+                raise ValueError("BATCH_DATABASE_ROW_INVALID")
+            raw_time = int(row[1])
+            event = dt.datetime.fromtimestamp(
+                raw_time / (1000 if "_ms" in query["SQL"] else 1),
+                tz=dt.timezone.utc,
+            )
+            if event >= cutoff:
+                raise ValueError("BATCH_DATABASE_EVENT_AFTER_CUTOFF")
+    if database.get("response_bytes") != response_bytes:
+        raise ValueError("BATCH_DATABASE_BYTES_INVALID")
+
+    binance = read_json(batch_dir / "binance-evidence.json")
+    expected_request_ids = {
+        item["id"] for item in _public_requests(
+            config, data_cutoff_at=intent["data_cutoff_at"]
+        )
+    }
+    requests = binance.get("requests")
+    if (
+        binance.get("schema_version") != "zhishi-binance-public-evidence/v1"
+        or binance.get("data_cutoff_at") != intent["data_cutoff_at"]
+        or not isinstance(requests, list)
+        or {item.get("request_id") for item in requests} != expected_request_ids
+        or len(requests) != len(expected_request_ids)
+    ):
+        raise ValueError("BATCH_BINANCE_EVIDENCE_INVALID")
+    cutoff_ms = int(cutoff.timestamp() * 1000)
+    for item in requests:
+        if (
+            item.get("kind") == "historical_funding"
+            and item.get("status") == "observed"
+            and item.get("latest_event_time_ms", cutoff_ms + 1) > cutoff_ms
+        ):
+            raise ValueError("BATCH_BINANCE_EVENT_AFTER_CUTOFF")
+    funding_ok = all(
+        any(
+            item.get("request_id") == f"funding-{symbol}"
+            and item.get("status") == "observed"
+            and item.get("item_count", 0) > 0
+            for item in requests
+        )
+        for symbol in config["标的"]
+    )
+    expected_csv = _csv_payload(
+        build_group_rows(batch=batch, evidence={"资金费率历史窗口已观察": funding_ok})
+    )
+    if (batch_dir / "group-results.csv").read_text(encoding="utf-8") != expected_csv:
+        raise ValueError("BATCH_GROUP_RESULTS_INVALID")
+
     summary = read_json(batch_dir / "summary.json")
     counts = summary["status_counts"]
-    if sum(counts.values()) != summary["candidate_group_count"] or summary["cost_execution_gate"] != "无法判定":
+    expected_hashes = {
+        "intent_sha256": sha256_path(batch_dir / "intent.json"),
+        "metadata_sha256": sha256_path(batch_dir / "metadata.json"),
+        "metadata_post_sha256": sha256_path(batch_dir / "metadata-post.json"),
+        "query_plan_sha256": sha256_path(batch_dir / "query-plan.json"),
+        "query_explain_sha256": sha256_path(batch_dir / "query-explain.json"),
+    }
+    if (
+        any(summary.get(key) != value for key, value in expected_hashes.items())
+        or sum(counts.values()) != summary["candidate_group_count"]
+        or summary.get("candidate_group_count") != 32
+        or summary.get("observed_group_count") != 32
+        or counts != {"拒绝": 0, "无法判定": 32, "失败": 0, "未成熟": 0, "失效": 0, "通过": 0}
+        or summary.get("funding_window_observed_for_both_symbols") != funding_ok
+        or summary.get("execution_latency_status") != "无法判定"
+        or summary.get("cost_execution_gate") != "无法判定"
+        or summary.get("stage1_complete") is not False
+        or summary.get("stage2_released") is not False
+        or summary.get("safety") != {
+            "remote_write": False,
+            "database_write": False,
+            "account_endpoint": False,
+            "credential_read": False,
+            "raw_price_or_quantity_persisted": False,
+            "model_or_backtest": False,
+            "trade_decision": False,
+        }
+        or summary.get("resource_facts", {}).get("estimated_database_rows") != estimated_rows
+        or summary.get("resource_facts", {}).get("database_response_bytes") != response_bytes
+    ):
         raise ValueError("BATCH_DENOMINATOR_OR_GATE_INVALID")
+    validate_resource_facts(summary["resource_facts"], config["资源上限"])
     return {
         "status": "ok",
         "batch": batch,

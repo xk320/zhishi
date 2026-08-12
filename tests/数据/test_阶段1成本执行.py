@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "scripts" / "数据" / "验证阶段1成本执行.py"
 CONFIG_PATH = ROOT / "config" / "数据" / "任务-000100阶段1成本执行.json"
-FORMAL_BATCH = "stage1-cost-execution-20260812T142654Z-f405e8a7c9d2"
+FORMAL_BATCH = "stage1-cost-execution-20260812T143746Z-7c30e25b6a19"
 FORMAL_ROOT = ROOT / "artifacts" / "数据" / "阶段1成本执行" / FORMAL_BATCH
 
 
@@ -138,6 +139,60 @@ def test_查询清单拒绝重复和超限(module):
         )
 
 
+def test_查询计划篡改在执行前失败关闭(module, config):
+    intent = {"batch_id": "batch-1", "data_cutoff_at": "2026-08-12T13:00:00Z"}
+    metadata = {
+        "metadata": {
+            "columns": [
+                ["order_book_raw_snapshots", "symbol", "1", "varchar", "NO"],
+                ["order_book_raw_snapshots", "capture_ts_ms", "2", "bigint", "NO"],
+            ],
+            "indexes": [
+                ["order_book_raw_snapshots", "idx_symbol_capture", "1", "1", "symbol"],
+                ["order_book_raw_snapshots", "idx_symbol_capture", "1", "2", "capture_ts_ms"],
+            ],
+        }
+    }
+    plan = module.build_query_plan(metadata, intent, config)
+    plan["queries"][0]["SQL"] = "DELETE FROM order_book_raw_snapshots"
+    with pytest.raises(ValueError):
+        module.validate_query_plan(plan, intent, metadata, config)
+
+
+def test_查询解释必须绑定当前计划SHA(module):
+    with pytest.raises(ValueError):
+        module.validate_explain_evidence(
+            {"batch_id": "b", "query_plan_sha256": "0" * 64, "results": []},
+            plan={"batch_id": "b", "queries": []},
+            plan_sha256="1" * 64,
+            config={"资源上限": {"单SQL估算扫描行": 1, "批次估算扫描行": 1}},
+        )
+
+
+def test_资源和来源漂移失败关闭(module, config):
+    with pytest.raises(ValueError):
+        module.validate_resource_facts(
+            {"elapsed_seconds": 901, "rss_bytes": 1},
+            config["资源上限"],
+        )
+    pre = {
+        "protocol": "zhishi-stage1-cost-metadata/1",
+        "uid": 0,
+        "identity_sha256": "a" * 64,
+        "grant_sha256": "b" * 64,
+        "select_capability": True,
+        "tables": [["t", "InnoDB", "1"]],
+        "columns": [["t", "symbol", "1", "varchar", "NO"]],
+        "indexes": [["t", "i", "1", "1", "symbol"]],
+        "load1": 0.1,
+        "cpu_count": 4,
+    }
+    post = json.loads(json.dumps(pre))
+    post["grant_sha256"] = "c" * 64
+    with pytest.raises(ValueError):
+        module.assert_metadata_invariants_equal(pre, post)
+
+
 def test_查询规划识别明确秒与毫秒时间列(module, config):
     intent = {"batch_id": "batch-1", "data_cutoff_at": "2026-08-12T13:00:00Z"}
     metadata = {
@@ -187,6 +242,17 @@ def test_Binance远端探针不禁用证书验证(module, config):
     assert "/fapi/v2/account" not in program
     assert "fapi.binance.com" in program
     assert "str(response.returncode)" in program
+    assert "--no-defaults" in module.REMOTE_METADATA_PROGRAM
+    assert "--no-defaults" in module._remote_query_program([], explain_only=False)
+
+
+def test_资金费率请求绑定冻结截止(module, config):
+    cutoff = "2026-08-12T13:00:00Z"
+    requests = module._public_requests(config, data_cutoff_at=cutoff)
+    funding = [item for item in requests if item["kind"] == "historical_funding"]
+    assert len(funding) == 2
+    expected = str(int(module.dt.datetime.fromisoformat(cutoff.replace("Z", "+00:00")).timestamp() * 1000))
+    assert all(f"endTime={expected}" in item["request_uri"] for item in funding)
 
 
 def test_行情延迟不得替代执行延迟(module):
@@ -234,10 +300,42 @@ def test_敏感文本失败关闭(module):
 
 def test_正式批次清单与分母可复算(module):
     result = module.validate_batch(ROOT, FORMAL_BATCH)
-    assert result["manifest_sha256"] == "4ae39af9a8c79b65dbe52ec9d2f81b695c8175698f2601cf270c7230cc459c6c"
-    assert result["summary_sha256"] == "acb9dfd7497ceaa7c89316c2d75ed9d9d2eb7856ed38c985cae1d8bde103e211"
+    assert result["manifest_sha256"] == "5c24f719a39b12aa6e4a11ae0f2f6bfd245059ea4b833b46c99165414a4a0b32"
+    assert result["summary_sha256"] == "cfa85eca6e5fb038a69c57a00627d00f71c83dbcbd7d314181d544f9649eee10"
     assert result["candidate_group_count"] == 32
     assert result["cost_execution_gate"] == "无法判定"
+
+
+def test_正式批次语义篡改即使重签清单也失败(module, tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    for relative in (
+        module.CONFIG_RELATIVE_PATH,
+        module.TASK_RELATIVE_PATH,
+    ):
+        target = repo / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / relative, target)
+    target_batch = repo / "artifacts" / "数据" / "阶段1成本执行" / FORMAL_BATCH
+    target_batch.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(FORMAL_ROOT, target_batch)
+    monkeypatch.setattr(module, "_assert_upstream", lambda *_args: {})
+    summary_path = target_batch / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["stage1_complete"] = True
+    summary_path.write_bytes(module.canonical_bytes(summary))
+    manifest_path = target_batch / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"]["summary.json"] = {
+        "sha256": module.sha256_path(summary_path),
+        "bytes": summary_path.stat().st_size,
+    }
+    manifest["total_bytes"] = sum(item["bytes"] for item in manifest["files"].values())
+    manifest["manifest_payload_sha256"] = module.sha256_bytes(
+        module.canonical_bytes(manifest["files"])
+    )
+    manifest_path.write_bytes(module.canonical_bytes(manifest))
+    with pytest.raises(ValueError):
+        module.validate_batch(repo, FORMAL_BATCH)
 
 
 def test_正式批次数据库查询是索引有界且不重试():
