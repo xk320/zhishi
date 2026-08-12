@@ -289,12 +289,12 @@ def _task094_native_scanner_allowed(
     )
 
 
-def _contract_conflict_executor(body_task_ids: set[str]) -> str | None:
+def _contract_conflict_executor(body_task_ids: Sequence[str]) -> str | None:
     """只接受两个已登记的一次性合同修复入口，未知或混合引用失败关闭。"""
 
-    if body_task_ids == {CONTRACT_CONFLICT_REPAIR_EXECUTOR}:
+    if tuple(body_task_ids) == (CONTRACT_CONFLICT_REPAIR_EXECUTOR,):
         return CONTRACT_CONFLICT_REPAIR_EXECUTOR
-    if body_task_ids == {TASK094_CONTRACT_REPAIR_EXECUTOR}:
+    if tuple(body_task_ids) == (TASK094_CONTRACT_REPAIR_EXECUTOR,):
         return TASK094_CONTRACT_REPAIR_EXECUTOR
     return None
 
@@ -709,6 +709,16 @@ def parse_task_references(pr_body: str) -> tuple[str, ...]:
         if match is not None and match.group(1) not in task_ids:
             task_ids.append(match.group(1))
     return tuple(sorted(task_ids))
+
+
+def _raw_task_references(pr_body: str) -> tuple[str, ...]:
+    """保留严格关联任务区段的原始顺序和重复项。"""
+
+    return tuple(
+        match.group(1)
+        for line in _markdown_section(pr_body, "关联任务")
+        if (match := TASK_REFERENCE_LINE.fullmatch(line)) is not None
+    )
 
 
 def parse_change_type(pr_body: str) -> str | None:
@@ -1266,7 +1276,10 @@ def _validate_task094_batch_resource_evidence(
         _append_reason(reasons, "任务-000094必须新增唯一最终批次摘要")
         return
     try:
-        document = json.loads(summaries[0].text)
+        document = json.loads(
+            summaries[0].text,
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
     except (TypeError, ValueError, json.JSONDecodeError):
         _append_reason(reasons, "任务-000094最终批次摘要无效")
         return
@@ -3389,11 +3402,12 @@ def main() -> int:
     changed_paths = tuple(fact.path for fact in path_facts)
     pr_body = str(metadata.get("body", ""))
     change_type = parse_change_type(pr_body)
+    raw_body_task_ids = _raw_task_references(pr_body)
     task_ids = set(parse_task_references(pr_body))
     body_task_ids = set(task_ids)
     contract_conflict_executor = None
     if change_type == CONTRACT_CONFLICT_REPAIR_TYPE:
-        contract_conflict_executor = _contract_conflict_executor(body_task_ids)
+        contract_conflict_executor = _contract_conflict_executor(raw_body_task_ids)
         if contract_conflict_executor is None:
             print(
                 json.dumps(

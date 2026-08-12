@@ -541,6 +541,7 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         repaired = self.policy._apply_task094_contract_repair(base)
         self.assertIsNotNone(repaired)
         assert repaired is not None
+        self.assertEqual(8, len(self.policy.TASK094_CONTRACT_REPLACEMENTS))
         self.assertIn("固定三进程串行流水线", repaired)
         self.assertIn("阶段1时间质量扫描器.c", repaired)
         self.assertIn("主进程与全部子进程峰值RSS保守求和", repaired)
@@ -660,6 +661,38 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         self.assertIn(
             "任务-000094资源证据executor_sha256未绑定最终头文件", reasons
         )
+
+        valid_summary_text = json.dumps(summary, ensure_ascii=False).replace(
+            '"executor_sha256": "' + "0" * 64 + '"',
+            '"executor_sha256": "'
+            + hashlib.sha256(b"executor\n").hexdigest()
+            + '"',
+            1,
+        )
+        duplicate_documents = (
+            valid_summary_text.replace(
+                f'"batch_id": "{batch_id}"',
+                f'"batch_id": "{batch_id}", "batch_id": "{batch_id}"',
+                1,
+            ),
+            valid_summary_text.replace(
+                '"members_parallelism": 1',
+                '"members_parallelism": 1, "members_parallelism": 1',
+                1,
+            ),
+        )
+        for duplicate_document in duplicate_documents:
+            with self.subTest(duplicate_document=duplicate_document):
+                facts[-1] = self.path_fact(
+                    summary_path,
+                    status="A",
+                    text=duplicate_document,
+                )
+                reasons = []
+                self.policy._validate_task094_batch_resource_evidence(
+                    facts, reasons
+                )
+                self.assertIn("任务-000094最终批次摘要无效", reasons)
 
     def test_任务095到094一次性合同修复不允许夹带(self):
         target_base = (
@@ -4048,6 +4081,7 @@ class GitPathFactIntegrationTests(unittest.TestCase):
         for task_lines in (
             "- 任务-000099\n",
             "- 任务-000068\n- 任务-000095\n",
+            "- 任务-000095\n- 任务-000095\n",
         ):
             with self.subTest(task_lines=task_lines):
                 metadata_path = self.repo / "invalid-contract-conflict-repair.json"
@@ -4130,6 +4164,9 @@ class GitPathFactIntegrationTests(unittest.TestCase):
             valid_body.replace("000095", "000099"),
             valid_body.replace(
                 "- 任务-000095", "- 任务-000068\n- 任务-000095"
+            ),
+            valid_body.replace(
+                "- 任务-000095", "- 任务-000095\n- 任务-000095"
             ),
         ):
             with self.subTest(invalid_body=invalid_body):
