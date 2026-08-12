@@ -654,6 +654,60 @@ def validate_metadata_snapshot(value: Mapping[str, Any]) -> None:
         raise ValueError("REMOTE_LOAD_ALARM")
 
 
+def _validate_process_facts(value: Any, *, rss_limit: int) -> None:
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != {"elapsed_seconds", "peak_rss_bytes"}
+        or not isinstance(value.get("elapsed_seconds"), (int, float))
+        or value["elapsed_seconds"] < 0
+        or not isinstance(value.get("peak_rss_bytes"), int)
+        or value["peak_rss_bytes"] <= 0
+        or value["peak_rss_bytes"] > rss_limit
+    ):
+        raise ValueError("PROCESS_FACTS_INVALID")
+
+
+def validate_metadata_evidence(
+    evidence: Mapping[str, Any], *, batch: str, intent_sha: str, rss_limit: int
+) -> None:
+    expected_fields = {
+        "schema_version",
+        "batch_id",
+        "intent_sha256",
+        "observed_at",
+        "root_compatible_read_only",
+        "remote_write_performed",
+        "metadata",
+        "metadata_sha256",
+        "process",
+    }
+    metadata = evidence.get("metadata")
+    try:
+        observed = dt.datetime.fromisoformat(
+            str(evidence.get("observed_at", "")).replace("Z", "+00:00")
+        )
+    except ValueError as exc:
+        raise ValueError("METADATA_EVIDENCE_SEMANTIC_DRIFT") from exc
+    if (
+        set(evidence) != expected_fields
+        or evidence.get("schema_version")
+        != "zhishi-simulated-order-metadata-evidence/v1"
+        or evidence.get("batch_id") != batch
+        or evidence.get("intent_sha256") != intent_sha
+        or evidence.get("root_compatible_read_only") is not True
+        or evidence.get("remote_write_performed") is not False
+        or not isinstance(metadata, Mapping)
+        or evidence.get("metadata_sha256") != sha256_bytes(canonical_bytes(metadata))
+        or observed.tzinfo is None
+    ):
+        raise ValueError("METADATA_EVIDENCE_SEMANTIC_DRIFT")
+    try:
+        validate_metadata_snapshot(metadata)
+        _validate_process_facts(evidence.get("process"), rss_limit=rss_limit)
+    except ValueError as exc:
+        raise ValueError("METADATA_EVIDENCE_SEMANTIC_DRIFT") from exc
+
+
 def probe_metadata(repo_root: Path, batch: str) -> dict[str, Any]:
     started = time.monotonic()
     intent, config, directory = _assert_intent(repo_root, batch)
@@ -675,6 +729,12 @@ def probe_metadata(repo_root: Path, batch: str) -> dict[str, Any]:
         "metadata_sha256": sha256_bytes(canonical_bytes(value)),
         "process": _process_facts(started),
     }
+    validate_metadata_evidence(
+        evidence,
+        batch=batch,
+        intent_sha=sha256_path(directory / "intent.json"),
+        rss_limit=config["资源上限"]["RSS字节"],
+    )
     write_json_exclusive(directory / "metadata.json", evidence)
     return evidence
 
@@ -777,6 +837,12 @@ def plan_queries(repo_root: Path, batch: str) -> dict[str, Any]:
     started = time.monotonic()
     intent, config, directory = _assert_intent(repo_root, batch)
     metadata = read_json(directory / "metadata.json")
+    validate_metadata_evidence(
+        metadata,
+        batch=batch,
+        intent_sha=sha256_path(directory / "intent.json"),
+        rss_limit=config["资源上限"]["RSS字节"],
+    )
     plan = build_query_plan(metadata, intent, config)
     explain_result = _run_ssh_python(
         _remote_query_program(plan["queries"], explain_only=True),
@@ -808,9 +874,61 @@ def plan_queries(repo_root: Path, batch: str) -> dict[str, Any]:
         "stdout_incrementally_bounded": explain_result["stdout_incrementally_bounded"],
         "process": _process_facts(started),
     }
+    validate_explain_evidence(explain, plan=plan, config=config)
     write_json_exclusive(directory / "query-plan.json", plan)
     write_json_exclusive(directory / "query-explain.json", explain)
     return {"plan": plan, "explain": explain}
+
+
+def validate_explain_evidence(
+    evidence: Mapping[str, Any], *, plan: Mapping[str, Any], config: Mapping[str, Any]
+) -> None:
+    expected_fields = {
+        "schema_version",
+        "batch_id",
+        "query_plan_sha256",
+        "results",
+        "estimated_rows",
+        "remote_peak_rss_bytes",
+        "remote_rss_limit_enforced",
+        "stdout_incrementally_bounded",
+        "process",
+    }
+    results = evidence.get("results")
+    if (
+        set(evidence) != expected_fields
+        or evidence.get("schema_version")
+        != "zhishi-simulated-order-query-explain/v1"
+        or evidence.get("batch_id") != plan.get("batch_id")
+        or evidence.get("query_plan_sha256") != sha256_bytes(canonical_bytes(plan))
+        or not isinstance(results, list)
+        or len(results) != len(plan.get("queries", []))
+        or evidence.get("remote_rss_limit_enforced") is not True
+        or evidence.get("stdout_incrementally_bounded") is not True
+        or not isinstance(evidence.get("remote_peak_rss_bytes"), int)
+        or evidence["remote_peak_rss_bytes"] > config["资源上限"]["RSS字节"]
+    ):
+        raise ValueError("EXPLAIN_EVIDENCE_SEMANTIC_DRIFT")
+    total = 0
+    for query, result in zip(plan["queries"], results, strict=True):
+        if (
+            set(result) != {"query_id", "plan", "response_sha256", "response_bytes"}
+            or result.get("query_id") != query["query_id"]
+            or SHA_PATTERN.fullmatch(str(result.get("response_sha256", ""))) is None
+            or not isinstance(result.get("response_bytes"), int)
+            or result["response_bytes"] <= 0
+        ):
+            raise ValueError("EXPLAIN_RESULT_SEMANTIC_DRIFT")
+        total += validate_explain(
+            result["plan"],
+            allowed_indexes={config["复合索引"]},
+            max_rows=config["资源上限"]["估算扫描行"],
+        )
+    if evidence.get("estimated_rows") != total:
+        raise ValueError("EXPLAIN_ESTIMATE_DRIFT")
+    _validate_process_facts(
+        evidence.get("process"), rss_limit=config["资源上限"]["RSS字节"]
+    )
 
 
 def _decimal_pair(value: Any) -> tuple[Decimal, Decimal]:
@@ -1021,9 +1139,15 @@ def collect(repo_root: Path, batch: str) -> dict[str, Any]:
     started = time.monotonic()
     intent, config, directory = _assert_intent(repo_root, batch)
     metadata = read_json(directory / "metadata.json")
-    validate_metadata_snapshot(metadata["metadata"])
+    validate_metadata_evidence(
+        metadata,
+        batch=batch,
+        intent_sha=sha256_path(directory / "intent.json"),
+        rss_limit=config["资源上限"]["RSS字节"],
+    )
     plan = read_json(directory / "query-plan.json")
     explain = read_json(directory / "query-explain.json")
+    validate_explain_evidence(explain, plan=plan, config=config)
     if explain.get("query_plan_sha256") != sha256_path(directory / "query-plan.json"):
         raise ValueError("QUERY_PLAN_FINGERPRINT_DRIFT")
     result = _run_ssh_python(
@@ -1040,12 +1164,17 @@ def collect(repo_root: Path, batch: str) -> dict[str, Any]:
     collected_at_ms = int(dt.datetime.now(dt.timezone.utc).timestamp() * 1000)
     members = []
     denominators = {}
+    query_receipts = []
     for query, item in zip(plan["queries"], result["results"], strict=True):
         _assert_rss(config["资源上限"]["RSS字节"])
         if item.get("query_id") != query["query_id"]:
             raise ValueError("DATABASE_QUERY_ID_DRIFT")
         encoded_rows = item.get("rows_base64")
-        if not isinstance(encoded_rows, list) or len(encoded_rows) > 256:
+        if (
+            not isinstance(encoded_rows, list)
+            or len(encoded_rows) > 256
+            or item.get("row_count") != len(encoded_rows)
+        ):
             raise ValueError("DATABASE_ROW_LIMIT_EXCEEDED")
         raw_rows = []
         for encoded in encoded_rows:
@@ -1067,6 +1196,15 @@ def collect(repo_root: Path, batch: str) -> dict[str, Any]:
         validate_member_order(symbol_members)
         members.extend(symbol_members)
         denominators[query["symbol"]] = len(symbol_members)
+        query_receipts.append(
+            {
+                "query_id": query["query_id"],
+                "symbol": query["symbol"],
+                "row_count": len(symbol_members),
+                "response_bytes": int(item["response_bytes"]),
+                "response_sha256": item["response_sha256"],
+            }
+        )
     if len(members) > config["资源上限"]["总快照"]:
         raise ValueError("TOTAL_SNAPSHOT_LIMIT_EXCEEDED")
     frozen = {
@@ -1080,6 +1218,7 @@ def collect(repo_root: Path, batch: str) -> dict[str, Any]:
         "denominators": denominators,
         "member_count": len(members),
         "database_response_bytes": response_bytes,
+        "query_receipts": query_receipts,
         "remote_peak_rss_bytes": result["remote_peak_rss_bytes"],
         "remote_rss_limit_enforced": result["remote_rss_limit_enforced"],
         "stdout_incrementally_bounded": result["stdout_incrementally_bounded"],
@@ -1092,6 +1231,12 @@ def collect(repo_root: Path, batch: str) -> dict[str, Any]:
             "network_order": False,
         },
     }
+    validate_frozen_semantics(
+        frozen,
+        plan=plan,
+        metadata_observed_at=str(metadata["observed_at"]),
+        cutoff_ms=int(intent["data_cutoff_ms"]),
+    )
     write_json_exclusive(directory / "frozen-input.json", frozen)
     return {
         "batch_id": batch,
@@ -1099,6 +1244,135 @@ def collect(repo_root: Path, batch: str) -> dict[str, Any]:
         "denominators": denominators,
         "database_response_bytes": response_bytes,
     }
+
+
+def validate_frozen_semantics(
+    frozen: Mapping[str, Any], *, plan: Mapping[str, Any], metadata_observed_at: str, cutoff_ms: int
+) -> None:
+    expected_fields = {
+        "schema_version",
+        "batch_id",
+        "intent_sha256",
+        "metadata_sha256",
+        "query_plan_sha256",
+        "query_explain_sha256",
+        "collected_at_ms",
+        "denominators",
+        "member_count",
+        "database_response_bytes",
+        "query_receipts",
+        "remote_peak_rss_bytes",
+        "remote_rss_limit_enforced",
+        "stdout_incrementally_bounded",
+        "process",
+        "members",
+        "safety",
+    }
+    members = frozen.get("members")
+    receipts = frozen.get("query_receipts")
+    if (
+        set(frozen) != expected_fields
+        or frozen.get("schema_version") != "zhishi-simulated-order-frozen-input/v1"
+        or frozen.get("batch_id") != plan.get("batch_id")
+        or not isinstance(members, list)
+        or not isinstance(receipts, list)
+        or frozen.get("remote_rss_limit_enforced") is not True
+        or frozen.get("stdout_incrementally_bounded") is not True
+        or frozen.get("safety")
+        != {
+            "remote_write": False,
+            "database_write": False,
+            "raw_price_or_quantity_persisted": False,
+            "network_order": False,
+        }
+    ):
+        raise ValueError("FROZEN_EVIDENCE_SEMANTIC_DRIFT")
+    denominators = dict(sorted(Counter(str(row.get("symbol")) for row in members).items()))
+    if frozen.get("denominators") != denominators:
+        raise ValueError("FROZEN_DENOMINATOR_DRIFT")
+    if frozen.get("member_count") != len(members):
+        raise ValueError("FROZEN_MEMBER_COUNT_DRIFT")
+    validate_member_order(members)
+    lower = int(plan["time_lower_ms"])
+    upper = int(plan["time_upper_ms"])
+    if upper != cutoff_ms:
+        raise ValueError("FROZEN_MEMBER_WINDOW_DRIFT")
+    member_fields = {
+        "snapshot_identity_sha256",
+        "snapshot_id_sha256",
+        "payload_sha256",
+        "symbol",
+        "capture_ts_ms",
+        "created_at_raw",
+        "market_event_time_ms",
+        "market_event_time_source",
+        "source_arrival_time_ms",
+        "source_arrival_time_source",
+        "confirmed_visible_time_ms",
+        "confirmed_visible_time_source",
+        "producer_identity_proved",
+        "time_semantics_status",
+        "time_semantics_reason",
+        "book_valid",
+        "aggressive_buy_fillable",
+        "aggressive_sell_fillable",
+        "member_sequence",
+    }
+    collected = frozen.get("collected_at_ms")
+    observed_ms = int(
+        dt.datetime.fromisoformat(metadata_observed_at.replace("Z", "+00:00")).timestamp()
+        * 1000
+    )
+    if not isinstance(collected, int) or collected < max(cutoff_ms, observed_ms):
+        raise ValueError("FROZEN_COLLECTION_TIME_DRIFT")
+    for member in members:
+        if set(member) != member_fields:
+            raise ValueError("FROZEN_MEMBER_SCHEMA_DRIFT")
+        capture = int(member["capture_ts_ms"])
+        event = member.get("market_event_time_ms")
+        arrival = member.get("source_arrival_time_ms")
+        visible = int(member["confirmed_visible_time_ms"])
+        if (
+            member["symbol"] not in plan_symbol_set(plan)
+            or not lower <= capture < upper
+            or event is not None and not lower <= int(event) < upper
+            or arrival is not None and not lower <= int(arrival) < upper
+            or event is not None and arrival is not None and int(event) > int(arrival)
+            or visible > collected
+            or arrival is not None and visible != int(arrival)
+            or int(member["created_at_raw"]) > collected
+        ):
+            raise ValueError("FROZEN_MEMBER_WINDOW_DRIFT")
+    expected_receipts = {}
+    for receipt in receipts:
+        if (
+            not isinstance(receipt, Mapping)
+            or set(receipt)
+            != {"query_id", "symbol", "row_count", "response_bytes", "response_sha256"}
+            or SHA_PATTERN.fullmatch(str(receipt.get("response_sha256", ""))) is None
+            or not isinstance(receipt.get("response_bytes"), int)
+            or receipt["response_bytes"] <= 0
+        ):
+            raise ValueError("FROZEN_QUERY_RECEIPT_DRIFT")
+        expected_receipts[receipt["query_id"]] = receipt
+    if set(expected_receipts) != {query["query_id"] for query in plan["queries"]}:
+        raise ValueError("FROZEN_QUERY_RECEIPT_DRIFT")
+    for query in plan["queries"]:
+        receipt = expected_receipts[query["query_id"]]
+        if (
+            receipt["symbol"] != query["symbol"]
+            or receipt["row_count"] != denominators.get(query["symbol"], 0)
+        ):
+            raise ValueError("FROZEN_QUERY_RECEIPT_DRIFT")
+    if frozen.get("database_response_bytes") != sum(
+        receipt["response_bytes"] for receipt in receipts
+    ):
+        raise ValueError("FROZEN_RESPONSE_BYTES_DRIFT")
+    _validate_process_facts(frozen.get("process"), rss_limit=268435456)
+
+
+def plan_symbol_set(plan: Mapping[str, Any]) -> set[str]:
+    return {str(query["symbol"]) for query in plan.get("queries", [])}
 
 
 def transition(current: str, target: str) -> str:
@@ -1394,12 +1668,27 @@ def _validate_evidence(directory: Path, config: Mapping[str, Any]) -> dict[str, 
     for number in (1, 2):
         proof = read_json(directory / f"replay-{number}.json")
         if (
-            proof.get("replay_number") != number
+            set(proof)
+            != {
+                "schema_version",
+                "batch_id",
+                "replay_number",
+                "frozen_input_sha256",
+                "result_sha256",
+                "matches_initial",
+                "independent_process",
+                "process",
+            }
+            or proof.get("schema_version") != "zhishi-simulated-order-replay-proof/v1"
+            or proof.get("batch_id") != frozen.get("batch_id")
+            or proof.get("replay_number") != number
+            or proof.get("frozen_input_sha256") != sha256_path(directory / "frozen-input.json")
             or proof.get("result_sha256") != expected_sha
             or proof.get("matches_initial") is not True
             or proof.get("independent_process") is not True
         ):
             raise ValueError("REPLAY_PROOF_INVALID")
+        _validate_process_facts(proof.get("process"), rss_limit=config["资源上限"]["RSS字节"])
     if frozen.get("safety") != {
         "remote_write": False,
         "database_write": False,
@@ -1420,6 +1709,12 @@ def _validate_published_bindings(
     plan = read_json(directory / "query-plan.json")
     explain = read_json(directory / "query-explain.json")
     frozen = read_json(directory / "frozen-input.json")
+    validate_metadata_evidence(
+        metadata,
+        batch=str(intent["batch_id"]),
+        intent_sha=intent_sha,
+        rss_limit=config["资源上限"]["RSS字节"],
+    )
     if (
         metadata.get("intent_sha256") != intent_sha
         or plan.get("intent_sha256") != intent_sha
@@ -1434,22 +1729,20 @@ def _validate_published_bindings(
     expected_plan = build_query_plan(metadata, intent, config)
     if plan != expected_plan:
         raise ValueError("QUERY_PLAN_DRIFT")
+    validate_explain_evidence(explain, plan=plan, config=config)
     cutoff = int(intent["data_cutoff_ms"])
-    members = frozen.get("members", [])
-    if any(
-        not isinstance(member, Mapping)
-        or int(member["capture_ts_ms"]) >= cutoff
-        or (
-            member.get("market_event_time_ms") is not None
-            and int(member["market_event_time_ms"]) >= cutoff
-        )
-        or (
-            member.get("source_arrival_time_ms") is not None
-            and int(member["source_arrival_time_ms"]) >= cutoff
-        )
-        for member in members
-    ):
-        raise ValueError("FROZEN_CUTOFF_DRIFT")
+    observed_ms = int(
+        dt.datetime.fromisoformat(str(metadata["observed_at"]).replace("Z", "+00:00")).timestamp()
+        * 1000
+    )
+    if observed_ms < cutoff:
+        raise ValueError("METADATA_OBSERVED_TIME_DRIFT")
+    validate_frozen_semantics(
+        frozen,
+        plan=plan,
+        metadata_observed_at=str(metadata["observed_at"]),
+        cutoff_ms=cutoff,
+    )
 
 
 def _validate_published_resource_semantics(
@@ -1581,6 +1874,7 @@ def validate_batch(repo_root: Path, batch: str) -> dict[str, Any]:
             "manifest_sha256": sha256_path(directory / "manifest.json"),
             "summary_sha256": sha256_path(directory / "summary.json"),
         }
+    _validate_published_bindings(directory=directory, intent=intent, config=config)
     evidence = _validate_evidence(directory, config)
     explain = read_json(directory / "query-explain.json")
     resource_facts = _resource_facts(intent, evidence["frozen"])

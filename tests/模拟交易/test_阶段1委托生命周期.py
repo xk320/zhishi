@@ -12,7 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "模拟交易" / "验证阶段1委托生命周期.py"
 CONFIG = ROOT / "config" / "模拟交易" / "任务-000103阶段1委托生命周期.json"
-FORMAL_BATCH = "stage1-simulated-lifecycle-20260812T191126Z-6a0be149c655"
+FORMAL_BATCH = "stage1-simulated-lifecycle-20260812T192916Z-720766dc5013"
 
 
 @pytest.fixture(scope="module")
@@ -351,7 +351,10 @@ def test_published_validation_rejects_rehashed_cutoff_drift(
     _rewrite_manifest_entry(module, copied, "intent.json")
     monkeypatch.setattr(module, "_batch_directory", lambda _root, _batch: copied)
     monkeypatch.setattr(module, "_active_directory", lambda _root, _batch: copied)
-    with pytest.raises(ValueError, match="(?:EVIDENCE_BINDING|QUERY_PLAN|FROZEN_CUTOFF)_DRIFT"):
+    with pytest.raises(
+        ValueError,
+        match="(?:METADATA_EVIDENCE_SEMANTIC|EVIDENCE_BINDING|QUERY_PLAN|FROZEN_CUTOFF)_DRIFT",
+    ):
         module.validate_batch(ROOT, FORMAL_BATCH)
 
 
@@ -381,6 +384,62 @@ def test_published_validation_rejects_rehashed_resource_understatement(
     monkeypatch.setattr(module, "_assert_intent", lambda _root, _batch: (intent, config, copied))
     with pytest.raises(ValueError, match="BATCH_RESOURCE_SEMANTIC_DRIFT"):
         module.validate_batch(tmp_path, FORMAL_BATCH)
+
+
+def test_metadata_evidence_rejects_outer_safety_drift(module, metadata):
+    evidence = {
+        "schema_version": "zhishi-simulated-order-metadata-evidence/v1",
+        "batch_id": "stage1-simulated-lifecycle-20260812T192916Z-720766dc5013",
+        "intent_sha256": "a" * 64,
+        "observed_at": "2026-08-12T19:11:36Z",
+        "root_compatible_read_only": False,
+        "remote_write_performed": True,
+        "metadata": metadata,
+        "metadata_sha256": "0" * 64,
+        "process": {"elapsed_seconds": 1.0, "peak_rss_bytes": 1},
+    }
+    with pytest.raises(ValueError, match="METADATA_EVIDENCE_SEMANTIC_DRIFT"):
+        module.validate_metadata_evidence(
+            evidence,
+            batch=evidence["batch_id"],
+            intent_sha="a" * 64,
+            rss_limit=268435456,
+        )
+
+
+def test_frozen_evidence_rejects_denominator_and_window_drift(module):
+    directory = ROOT / "artifacts" / "模拟交易" / "阶段1委托生命周期" / FORMAL_BATCH
+    frozen = json.loads((directory / "frozen-input.json").read_text(encoding="utf-8"))
+    plan = json.loads((directory / "query-plan.json").read_text(encoding="utf-8"))
+    frozen["query_receipts"] = [
+        {
+            "query_id": query["query_id"],
+            "symbol": query["symbol"],
+            "row_count": 256,
+            "response_bytes": frozen["database_response_bytes"] // 2,
+            "response_sha256": "a" * 64,
+        }
+        for query in plan["queries"]
+    ]
+    frozen["denominators"] = {"BTCUSDT": 0, "ETHUSDT": 0}
+    frozen["member_count"] = 0
+    frozen["members"][0]["capture_ts_ms"] = plan["time_lower_ms"] - 1
+    with pytest.raises(ValueError, match="FROZEN_(?:DENOMINATOR|MEMBER_WINDOW)_DRIFT"):
+        module.validate_frozen_semantics(
+            frozen,
+            plan=plan,
+            metadata_observed_at="2026-08-12T19:11:36Z",
+            cutoff_ms=plan["time_upper_ms"],
+        )
+
+
+def test_explain_evidence_rejects_rehashed_estimate_drift(module, config):
+    directory = ROOT / "artifacts" / "模拟交易" / "阶段1委托生命周期" / FORMAL_BATCH
+    explain = json.loads((directory / "query-explain.json").read_text(encoding="utf-8"))
+    plan = json.loads((directory / "query-plan.json").read_text(encoding="utf-8"))
+    explain["estimated_rows"] = 0
+    with pytest.raises(ValueError, match="EXPLAIN_ESTIMATE_DRIFT"):
+        module.validate_explain_evidence(explain, plan=plan, config=config)
 
 
 @pytest.mark.parametrize("entry_kind", ["directory", "symlink"])
@@ -605,8 +664,8 @@ def test_formal_batch_manifest_and_replays_are_reproducible(module):
     assert result == {
         "status": "ok",
         "batch_id": FORMAL_BATCH,
-        "manifest_sha256": "4fc4c880ce1444d02cf969af7df1f0d3f40c17ef0b209f302e158a6bdeecc865",
-        "summary_sha256": "07898fe7059f61d23e8a243e982deceded209f36e59aec610de1157cfad23c7a",
+        "manifest_sha256": "5a62de1fe46981c3c934c62f7f4d47eb9501630a9e0111a4b193f45caec71f03",
+        "summary_sha256": "422df2b1d6ae702648d181f973a07eec20b2ca2fee27233bbd19333c219e31ab",
     }
     intent = json.loads(
         (
