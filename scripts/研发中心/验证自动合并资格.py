@@ -1372,7 +1372,7 @@ def _has_unique_metadata_fields(
 
 
 def _successor_mutable_layout(
-    text: str,
+    text: str, *, allow_missing_dependency_release: bool = False,
 ) -> tuple[str, int, int, int] | None:
     """定位后继字段的固定任务头或依赖章节布局。"""
 
@@ -1444,9 +1444,12 @@ def _successor_mutable_layout(
     section_releases = [
         index for index in release_locations if section_start < index < section_end
     ]
+    allowed_release_counts = (
+        {0, 1} if allow_missing_dependency_release else {1}
+    )
     if (
         len(section_blockers) != 1
-        or len(section_releases) != 1
+        or len(section_releases) not in allowed_release_counts
         or not all(in_record(index) or section_start < index < section_end for index in blocker_locations)
         or not all(in_record(index) or section_start < index < section_end for index in release_locations)
     ):
@@ -1454,10 +1457,15 @@ def _successor_mutable_layout(
     return "dependency_section", first_section, section_start, section_end
 
 
-def _without_successor_mutable_lines(text: str) -> tuple[str, ...]:
+def _without_successor_mutable_lines(
+    text: str, *, allow_missing_dependency_release: bool = False
+) -> tuple[str, ...]:
     """移除已验证位置中的后继状态、阻塞原因与解除条件。"""
 
-    layout = _successor_mutable_layout(text)
+    layout = _successor_mutable_layout(
+        text,
+        allow_missing_dependency_release=allow_missing_dependency_release,
+    )
     if layout is None:
         return tuple(text.splitlines())
     kind, first_section, section_start, section_end = layout
@@ -1600,11 +1608,17 @@ def _header_field_line(text: str, prefix: str) -> str | None:
 
 
 def _without_blocking_mutable_lines(
-    text: str, *, allow_initial_metadata: bool
+    text: str, *, allow_initial_metadata: bool,
+    allow_missing_dependency_release: bool = False,
 ) -> tuple[str, ...]:
     """移除阻塞迁移允许变化的状态字段和首次执行元数据。"""
 
-    lines = list(_without_successor_mutable_lines(text))
+    lines = list(
+        _without_successor_mutable_lines(
+            text,
+            allow_missing_dependency_release=allow_missing_dependency_release,
+        )
+    )
     if not allow_initial_metadata:
         return tuple(lines)
     first_section = next(
@@ -1635,15 +1649,6 @@ def _validate_blocking_transition(
 ) -> None:
     """校验进入阻塞时的字段位置、不可变合同和首次执行记录。"""
 
-    base_layout = _successor_mutable_layout(base_task)
-    head_layout = _successor_mutable_layout(head_task)
-    if (
-        base_layout is None
-        or head_layout is None
-        or base_layout[0] != head_layout[0]
-    ):
-        _append_reason(reasons, "阻塞状态闭环字段位置无效")
-        return
     baseline_has_execution_metadata = any(
         (
             _header_field_line(base_task, "- 开始时间：") is not None,
@@ -1653,8 +1658,22 @@ def _validate_blocking_transition(
     allow_initial_metadata = (
         old_status == "待执行" and not baseline_has_execution_metadata
     )
+    base_layout = _successor_mutable_layout(
+        base_task,
+        allow_missing_dependency_release=allow_initial_metadata,
+    )
+    head_layout = _successor_mutable_layout(head_task)
+    if (
+        base_layout is None
+        or head_layout is None
+        or base_layout[0] != head_layout[0]
+    ):
+        _append_reason(reasons, "阻塞状态闭环字段位置无效")
+        return
     if _without_blocking_mutable_lines(
-        base_task, allow_initial_metadata=allow_initial_metadata
+        base_task,
+        allow_initial_metadata=allow_initial_metadata,
+        allow_missing_dependency_release=allow_initial_metadata,
     ) != _without_blocking_mutable_lines(
         head_task, allow_initial_metadata=allow_initial_metadata
     ):
