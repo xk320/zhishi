@@ -102,6 +102,15 @@ def _加载模块(路径: Path, 名称: str) -> Any:
     return 模块
 
 
+def _验证上游子进程结果(结果: Mapping[str, Any], 任务: str, RSS上限: int) -> int:
+    RSS = 结果.get("rss_bytes")
+    if 结果.get("task") != 任务 or 结果.get("status") != "通过":
+        raise 合同错误(f"UPSTREAM_VALIDATOR_INVALID:{任务}")
+    if not isinstance(RSS, int) or isinstance(RSS, bool) or RSS <= 0 or RSS > RSS上限:
+        raise 合同错误(f"UPSTREAM_VALIDATOR_RSS_LIMIT:{任务}")
+    return RSS
+
+
 def _运行上游验证器(仓库: Path, 文档: dict[str, dict[str, Any]], 配置: Mapping[str, Any]) -> None:
     # 000094/000099的最终可信语义由任务-000099验证器复核，避免重新扫描854GB正文。
     重放 = _加载模块(仓库 / "scripts/审计/重放阶段1精确冻结点数据资格决策.py", "任务99最终验证器")
@@ -137,9 +146,9 @@ def _运行上游验证器(仓库: Path, 文档: dict[str, dict[str, Any]], 配�
             结果 = json.loads(完成.stdout)
         except json.JSONDecodeError as 错误:
             raise 合同错误(f"UPSTREAM_VALIDATOR_INVALID:{任务}") from 错误
-        if 结果.get("task") != 任务 or 结果.get("status") != "通过":
-            raise 合同错误(f"UPSTREAM_VALIDATOR_INVALID:{任务}")
+        RSS = _验证上游子进程结果(结果, 任务, int(配置["资源上限"]["RSS字节"]))
         文档[任务]["验证器状态"] = "通过"
+        文档[任务]["验证器RSS字节"] = RSS
 
 
 def 验证正式输入(仓库: Path, 配置: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
@@ -474,7 +483,14 @@ def 执行正式批次(仓库: Path, 配置路径: Path, 输出根: Path, 批次
         ):
             raise 合同错误("REPLAY_PROCESS_DRIFT")
         文件值 = {
-            "input-validation.json": {任务: {"batch": 事实[任务]["批次"], "validator_status": 事实[任务]["验证器状态"]} for 任务 in 必需任务},
+            "input-validation.json": {
+                任务: {
+                    "batch": 事实[任务]["批次"],
+                    "validator_status": 事实[任务]["验证器状态"],
+                    **({"validator_rss_bytes": 事实[任务]["验证器RSS字节"]} if 任务 in {"000100", "000103", "000104"} else {}),
+                }
+                for 任务 in 必需任务
+            },
             "decision.json": 裁决, "replay-1.json": 重放1, "replay-2.json": 重放2,
         }
         for 名称, 值 in 文件值.items():
@@ -493,6 +509,9 @@ def 执行正式批次(仓库: Path, 配置路径: Path, 输出根: Path, 批次
             "memory_available_percent": 结束资源["memory_available_percent"],
             "disk_available_bytes": 结束资源["disk_available_bytes"],
             "replay_rss_bytes": [重放1["rss_bytes"], 重放2["rss_bytes"]],
+            "input_validator_rss_bytes": {
+                任务: 事实[任务]["验证器RSS字节"] for 任务 in ("000100", "000103", "000104")
+            },
         },
         "input_validators": {任务: 事实[任务]["验证器状态"] for 任务 in 必需任务},
         "cleanup_completed_before_publish": True,
@@ -559,6 +578,16 @@ def 验证已发布批次(仓库: Path, 配置路径: Path, 目录: Path) -> dic
     ):
         raise 合同错误("REPLAY_PROCESS_DRIFT")
     摘要 = 读取JSON(目录 / "summary.json")
+    输入验证 = 读取JSON(目录 / "input-validation.json")
+    记录验证RSS = {
+        任务: 输入验证.get(任务, {}).get("validator_rss_bytes")
+        for 任务 in ("000100", "000103", "000104")
+    }
+    for 任务, RSS in 记录验证RSS.items():
+        _验证上游子进程结果(
+            {"task": 任务, "status": 输入验证.get(任务, {}).get("validator_status"), "rss_bytes": RSS},
+            任务, int(配置["资源上限"]["RSS字节"]),
+        )
     期望摘要 = {
         "result_sha256": 指纹,
         "leaf_count": 期望裁决["leaf_count"],
@@ -579,6 +608,7 @@ def 验证已发布批次(仓库: Path, 配置路径: Path, 目录: Path) -> dic
         or 摘要.get("cleanup_completed_before_publish") is not True
         or set(摘要.get("input_validators", {}).values()) != {"通过"}
         or 摘要.get("resource_facts", {}).get("replay_rss_bytes") != [项["rss_bytes"] for 项 in 重放们]
+        or 摘要.get("resource_facts", {}).get("input_validator_rss_bytes") != 记录验证RSS
     ):
         raise 合同错误("DELIVERY_BINDING_DRIFT")
     return 摘要

@@ -147,6 +147,14 @@ class 阶段1当前最终门禁测试(unittest.TestCase):
             self.assertEqual(list(输出根.iterdir()), [])
 
     @unittest.skipIf(模块 is None, "等待执行器实现")
+    def test_上游验证器子进程RSS超限被拒绝(self):
+        with self.assertRaisesRegex(模块.合同错误, "UPSTREAM_VALIDATOR_RSS_LIMIT:000103"):
+            模块._验证上游子进程结果(
+                {"task": "000103", "status": "通过", "rss_bytes": 268435457},
+                "000103", 268435456,
+            )
+
+    @unittest.skipIf(模块 is None, "等待执行器实现")
     def test_两次重放来自顺序独立进程且发布不覆盖(self):
         配置路径 = 根 / "config/审计/任务-000105阶段1最终审计.json"
         with tempfile.TemporaryDirectory(prefix="zhishi-task105-process-") as 临时:
@@ -166,6 +174,9 @@ class 阶段1当前最终门禁测试(unittest.TestCase):
                 json.loads((目标 / "summary.json").read_text(encoding="utf-8"))["resource_facts"]["replay_rss_bytes"],
                 [重放1["rss_bytes"], 重放2["rss_bytes"]],
             )
+            验证RSS = json.loads((目标 / "summary.json").read_text(encoding="utf-8"))["resource_facts"]["input_validator_rss_bytes"]
+            self.assertEqual(set(验证RSS), {"000100", "000103", "000104"})
+            self.assertTrue(all(0 < 值 <= 268435456 for 值 in 验证RSS.values()))
             原摘要 = (目标 / "summary.json").read_bytes()
             with self.assertRaises((FileExistsError, 模块.合同错误)):
                 模块.执行正式批次(根, 配置路径, 输出根, 批次, 测试模式=True)
