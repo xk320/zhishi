@@ -12,7 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "模拟交易" / "验证阶段1委托生命周期.py"
 CONFIG = ROOT / "config" / "模拟交易" / "任务-000103阶段1委托生命周期.json"
-FORMAL_BATCH = "stage1-simulated-lifecycle-20260812T185838Z-8d1a58bd8a0a"
+FORMAL_BATCH = "stage1-simulated-lifecycle-20260812T191126Z-6a0be149c655"
 
 
 @pytest.fixture(scope="module")
@@ -333,6 +333,56 @@ def test_published_validation_rejects_rehashed_summary_safety_drift(
         module.validate_batch(tmp_path, FORMAL_BATCH)
 
 
+def test_published_validation_rejects_rehashed_cutoff_drift(
+    module, tmp_path, monkeypatch
+):
+    source = ROOT / "artifacts" / "模拟交易" / "阶段1委托生命周期" / FORMAL_BATCH
+    copied = tmp_path / FORMAL_BATCH
+    shutil.copytree(source, copied)
+    intent_path = copied / "intent.json"
+    intent = json.loads(intent_path.read_text(encoding="utf-8"))
+    intent["created_at"] = "2020-01-01T00:00:00Z"
+    intent["data_cutoff_ms"] = 1577836800000
+    intent["script_sha256"] = module.sha256_path(SCRIPT)
+    intent_path.write_text(
+        json.dumps(intent, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    _rewrite_manifest_entry(module, copied, "intent.json")
+    monkeypatch.setattr(module, "_batch_directory", lambda _root, _batch: copied)
+    monkeypatch.setattr(module, "_active_directory", lambda _root, _batch: copied)
+    with pytest.raises(ValueError, match="(?:EVIDENCE_BINDING|QUERY_PLAN|FROZEN_CUTOFF)_DRIFT"):
+        module.validate_batch(ROOT, FORMAL_BATCH)
+
+
+def test_published_validation_rejects_rehashed_resource_understatement(
+    module, config, tmp_path, monkeypatch
+):
+    source = ROOT / "artifacts" / "模拟交易" / "阶段1委托生命周期" / FORMAL_BATCH
+    copied = tmp_path / FORMAL_BATCH
+    shutil.copytree(source, copied)
+    summary_path = copied / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    for key in (
+        "business_query_count",
+        "estimated_database_rows",
+        "database_response_bytes",
+        "snapshot_count",
+        "query_retry_count",
+    ):
+        summary["resource_facts"][key] = 0
+    summary_path.write_text(
+        json.dumps(summary, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    _rewrite_manifest_entry(module, copied, "summary.json")
+    intent = json.loads((copied / "intent.json").read_text(encoding="utf-8"))
+    monkeypatch.setattr(module, "_batch_directory", lambda _root, _batch: copied)
+    monkeypatch.setattr(module, "_assert_intent", lambda _root, _batch: (intent, config, copied))
+    with pytest.raises(ValueError, match="BATCH_RESOURCE_SEMANTIC_DRIFT"):
+        module.validate_batch(tmp_path, FORMAL_BATCH)
+
+
 @pytest.mark.parametrize("entry_kind", ["directory", "symlink"])
 def test_published_validation_rejects_non_regular_entry(
     module, config, tmp_path, monkeypatch, entry_kind
@@ -555,8 +605,8 @@ def test_formal_batch_manifest_and_replays_are_reproducible(module):
     assert result == {
         "status": "ok",
         "batch_id": FORMAL_BATCH,
-        "manifest_sha256": "fd30092ed3148e2e2306c079a791be7ad86ab179016ecd8704fa8cf3a0f4747e",
-        "summary_sha256": "3f2b2c82a142e498a2f5e6f9889b258e6ee836bb8a0729616321e88bb3aaa072",
+        "manifest_sha256": "4fc4c880ce1444d02cf969af7df1f0d3f40c17ef0b209f302e158a6bdeecc865",
+        "summary_sha256": "07898fe7059f61d23e8a243e982deceded209f36e59aec610de1157cfad23c7a",
     }
     intent = json.loads(
         (

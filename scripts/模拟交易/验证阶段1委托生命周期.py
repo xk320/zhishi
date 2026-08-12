@@ -1412,6 +1412,78 @@ def _validate_evidence(directory: Path, config: Mapping[str, Any]) -> dict[str, 
     return {"frozen": frozen, "lifecycle": lifecycle, "result_sha256": expected_sha}
 
 
+def _validate_published_bindings(
+    *, directory: Path, intent: Mapping[str, Any], config: Mapping[str, Any]
+) -> None:
+    intent_sha = sha256_path(directory / "intent.json")
+    metadata = read_json(directory / "metadata.json")
+    plan = read_json(directory / "query-plan.json")
+    explain = read_json(directory / "query-explain.json")
+    frozen = read_json(directory / "frozen-input.json")
+    if (
+        metadata.get("intent_sha256") != intent_sha
+        or plan.get("intent_sha256") != intent_sha
+        or frozen.get("intent_sha256") != intent_sha
+        or plan.get("metadata_sha256") != sha256_path(directory / "metadata.json")
+        or explain.get("query_plan_sha256") != sha256_path(directory / "query-plan.json")
+        or frozen.get("metadata_sha256") != sha256_path(directory / "metadata.json")
+        or frozen.get("query_plan_sha256") != sha256_path(directory / "query-plan.json")
+        or frozen.get("query_explain_sha256") != sha256_path(directory / "query-explain.json")
+    ):
+        raise ValueError("EVIDENCE_BINDING_DRIFT")
+    expected_plan = build_query_plan(metadata, intent, config)
+    if plan != expected_plan:
+        raise ValueError("QUERY_PLAN_DRIFT")
+    cutoff = int(intent["data_cutoff_ms"])
+    members = frozen.get("members", [])
+    if any(
+        not isinstance(member, Mapping)
+        or int(member["capture_ts_ms"]) >= cutoff
+        or (
+            member.get("market_event_time_ms") is not None
+            and int(member["market_event_time_ms"]) >= cutoff
+        )
+        or (
+            member.get("source_arrival_time_ms") is not None
+            and int(member["source_arrival_time_ms"]) >= cutoff
+        )
+        for member in members
+    ):
+        raise ValueError("FROZEN_CUTOFF_DRIFT")
+
+
+def _validate_published_resource_semantics(
+    *, directory: Path, intent: Mapping[str, Any], summary: Mapping[str, Any]
+) -> None:
+    facts = summary.get("resource_facts")
+    plan = read_json(directory / "query-plan.json")
+    explain = read_json(directory / "query-explain.json")
+    frozen = read_json(directory / "frozen-input.json")
+    expected = {
+        "estimated_database_rows": explain["estimated_rows"],
+        "business_query_count": plan["query_count"],
+        "query_retry_count": plan["retry_count"],
+        "database_response_bytes": frozen["database_response_bytes"],
+        "snapshot_count": frozen["member_count"],
+    }
+    if not isinstance(facts, Mapping) or any(
+        facts.get(key) != value for key, value in expected.items()
+    ):
+        raise ValueError("BATCH_RESOURCE_SEMANTIC_DRIFT")
+    manifest = read_json(directory / "manifest.json")
+    created = dt.datetime.fromisoformat(str(intent["created_at"]).replace("Z", "+00:00"))
+    published = dt.datetime.fromisoformat(
+        str(manifest["published_at"]).replace("Z", "+00:00")
+    )
+    elapsed = facts.get("elapsed_seconds")
+    if (
+        not isinstance(elapsed, (int, float))
+        or elapsed < 0
+        or elapsed > (published - created).total_seconds()
+    ):
+        raise ValueError("BATCH_RESOURCE_SEMANTIC_DRIFT")
+
+
 def _expected_summary_semantics(
     *, batch: str, evidence: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -1476,6 +1548,7 @@ def validate_batch(repo_root: Path, batch: str) -> dict[str, Any]:
             path = directory / name
             if sha256_path(path) != facts["sha256"] or path.stat().st_size != facts["bytes"]:
                 raise ValueError("BATCH_FILE_DRIFT")
+        _validate_published_bindings(directory=directory, intent=intent, config=config)
         evidence = _validate_evidence(directory, config)
         summary = read_json(directory / "summary.json")
         time_counts = Counter(
@@ -1498,6 +1571,9 @@ def validate_batch(repo_root: Path, batch: str) -> dict[str, Any]:
             summary.get(key) != value for key, value in expected_summary.items()
         ):
             raise ValueError("BATCH_SUMMARY_SEMANTIC_DRIFT")
+        _validate_published_resource_semantics(
+            directory=directory, intent=intent, summary=summary
+        )
         _validate_resource_facts(declared_resources, config["资源上限"])
         return {
             "status": "ok",
