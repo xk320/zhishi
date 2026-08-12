@@ -12,7 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "scripts" / "数据" / "验证阶段1成本执行.py"
 CONFIG_PATH = ROOT / "config" / "数据" / "任务-000100阶段1成本执行.json"
-FORMAL_BATCH = "stage1-cost-execution-20260812T165500Z-7cd1992a98c0"
+FORMAL_BATCH = "stage1-cost-execution-20260812T170000Z-81f61b9fae06"
 FORMAL_ROOT = ROOT / "artifacts" / "数据" / "阶段1成本执行" / FORMAL_BATCH
 
 
@@ -359,8 +359,8 @@ def test_敏感文本失败关闭(module):
 
 def test_正式批次清单与分母可复算(module):
     result = module.validate_batch(ROOT, FORMAL_BATCH)
-    assert result["manifest_sha256"] == "7ed2fc957f37981e11d40bdccf68ec6d39a0a8225aa5a984d875efb321a8610b"
-    assert result["summary_sha256"] == "7ed4906c02c311455c9c022503ed60bb9a4993171d4c9a95c9494f839e180f65"
+    assert result["manifest_sha256"] == "a06f20359d7c198c5ecc615671a5a096c855a1ad4afd344bf61eb80127e831b9"
+    assert result["summary_sha256"] == "1f8c6e0fc9f93fc8e043c097f3e7c97be84a385d0d47ba69e8b1e2aa0942c15e"
     assert result["candidate_group_count"] == 32
     assert result["cost_execution_gate"] == "无法判定"
 
