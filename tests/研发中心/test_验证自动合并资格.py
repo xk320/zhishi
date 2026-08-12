@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import io
 import json
@@ -509,6 +510,221 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         }
         values.update(overrides)
         return self.policy.PathFact(path=path, **values)
+
+    def test_任务094精确C扫描器白名单不扩散(self):
+        path = "scripts/审计/阶段1时间质量扫描器.c"
+        self.assertTrue(
+            self.policy._task094_native_scanner_allowed(
+                task_ids=("000094",), change_type="任务交付", path=path
+            )
+        )
+        for task_ids, change_type, candidate in (
+            (("000095",), "任务交付", path),
+            (("000094",), "任务登记", path),
+            (("000094",), "任务交付", "scripts/审计/其他扫描器.c"),
+            (("000094",), "任务交付", "src/阶段1时间质量扫描器.c"),
+            (("000094",), "任务交付", "scripts/审计/阶段1时间质量扫描器.o"),
+        ):
+            with self.subTest(task_ids=task_ids, change_type=change_type, path=candidate):
+                self.assertFalse(
+                    self.policy._task094_native_scanner_allowed(
+                        task_ids=task_ids,
+                        change_type=change_type,
+                        path=candidate,
+                    )
+                )
+
+    def test_任务094合同修复必须完整且逐字(self):
+        base = (REPO_ROOT / "docs/研发中心/任务/任务-000094.md").read_text(
+            encoding="utf-8"
+        )
+        repaired = self.policy._apply_task094_contract_repair(base)
+        self.assertIsNotNone(repaired)
+        assert repaired is not None
+        self.assertEqual(8, len(self.policy.TASK094_CONTRACT_REPLACEMENTS))
+        self.assertIn("固定三进程串行流水线", repaired)
+        self.assertIn("阶段1时间质量扫描器.c", repaired)
+        self.assertIn("主进程与全部子进程峰值RSS保守求和", repaired)
+        self.assertIn("- 解除条件：任务-000095", repaired)
+        self.assertEqual(1, repaired.count("- 解除条件："))
+        self.assertIsNone(
+            self.policy._apply_task094_contract_repair(
+                base.replace("单进程逐ZIP逐行扫描", "抽样扫描", 1)
+            )
+        )
+
+    def test_任务094进程组资源事实严格守恒(self):
+        valid = {
+            "measurement_protocol": "zhishi-process-group-rusage/v1",
+            "measurement_platform": "darwin-rusage-maxrss-by-process/v1",
+            "rss_unit": "bytes",
+            "process_topology": [
+                "python_controller",
+                "fixed_clang_compile",
+                "fixed_unzip",
+                "fixed_scanner",
+            ],
+            "members_parallelism": 1,
+            "controller_max_rss_bytes": 120000000,
+            "compiler_max_rss_bytes": 10000000,
+            "unzip_max_rss_bytes": 20000000,
+            "scanner_max_rss_bytes": 50000000,
+            "children_conservative_sum_max_rss_bytes": 80000000,
+            "conservative_process_group_max_rss_bytes": 200000000,
+        }
+        self.assertEqual((), self.policy._task094_resource_fact_reasons(valid))
+        for mutation in (
+            {**valid, "members_parallelism": 2},
+            {**valid, "scanner_max_rss_bytes": 0},
+            {**valid, "measurement_platform": "self-reported"},
+            {**valid, "measurement_protocol": "unknown"},
+            {
+                key: value
+                for key, value in valid.items()
+                if key != "unzip_max_rss_bytes"
+            },
+            {**valid, "children_conservative_sum_max_rss_bytes": 79999999},
+            {**valid, "conservative_process_group_max_rss_bytes": 199999999},
+            {**valid, "conservative_process_group_max_rss_bytes": 536870913},
+        ):
+            with self.subTest(mutation=mutation):
+                self.assertTrue(self.policy._task094_resource_fact_reasons(mutation))
+
+    def test_任务094资源证据绑定最终头文件与批次(self):
+        task_text_value = self.policy._apply_task094_contract_repair(
+            (REPO_ROOT / "docs/研发中心/任务/任务-000094.md").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert task_text_value is not None
+        texts = {
+            self.policy.TASK094_EXECUTOR_PATH: "executor\n",
+            self.policy.TASK094_CONFIG_PATH: "config\n",
+            self.policy.TASK094_NATIVE_SCANNER_PATH: "scanner\n",
+            self.policy.TASK094_TASK_PATH: task_text_value,
+        }
+        batch_id = "stage1-time-quality-test-deadbeef"
+        summary = {
+            "batch_id": batch_id,
+            "executor_sha256": hashlib.sha256(b"executor\n").hexdigest(),
+            "config_sha256": hashlib.sha256(b"config\n").hexdigest(),
+            "scanner_source_sha256": hashlib.sha256(b"scanner\n").hexdigest(),
+            "task_contract_sha256": self.policy._task094_contract_digest(
+                task_text_value
+            ),
+            "process_group_resource_facts": {
+                "measurement_protocol": "zhishi-process-group-rusage/v1",
+                "measurement_platform": "darwin-rusage-maxrss-by-process/v1",
+                "rss_unit": "bytes",
+                "process_topology": [
+                    "python_controller",
+                    "fixed_clang_compile",
+                    "fixed_unzip",
+                    "fixed_scanner",
+                ],
+                "members_parallelism": 1,
+                "controller_max_rss_bytes": 100,
+                "compiler_max_rss_bytes": 20,
+                "unzip_max_rss_bytes": 30,
+                "scanner_max_rss_bytes": 40,
+                "children_conservative_sum_max_rss_bytes": 90,
+                "conservative_process_group_max_rss_bytes": 190,
+            },
+        }
+        facts = [
+            self.path_fact(path, status="A", text=text)
+            for path, text in texts.items()
+        ]
+        summary_path = (
+            "artifacts/审计/阶段1逐行时间质量/"
+            f"{batch_id}/summary.json"
+        )
+        facts.append(
+            self.path_fact(
+                summary_path,
+                status="A",
+                text=json.dumps(summary, ensure_ascii=False),
+            )
+        )
+        reasons = []
+        self.policy._validate_task094_batch_resource_evidence(facts, reasons)
+        self.assertEqual([], reasons)
+
+        summary["executor_sha256"] = "0" * 64
+        facts[-1] = self.path_fact(
+            summary_path,
+            status="A",
+            text=json.dumps(summary, ensure_ascii=False),
+        )
+        reasons = []
+        self.policy._validate_task094_batch_resource_evidence(facts, reasons)
+        self.assertIn(
+            "任务-000094资源证据executor_sha256未绑定最终头文件", reasons
+        )
+
+        valid_summary_text = json.dumps(summary, ensure_ascii=False).replace(
+            '"executor_sha256": "' + "0" * 64 + '"',
+            '"executor_sha256": "'
+            + hashlib.sha256(b"executor\n").hexdigest()
+            + '"',
+            1,
+        )
+        duplicate_documents = (
+            valid_summary_text.replace(
+                f'"batch_id": "{batch_id}"',
+                f'"batch_id": "{batch_id}", "batch_id": "{batch_id}"',
+                1,
+            ),
+            valid_summary_text.replace(
+                '"members_parallelism": 1',
+                '"members_parallelism": 1, "members_parallelism": 1',
+                1,
+            ),
+        )
+        for duplicate_document in duplicate_documents:
+            with self.subTest(duplicate_document=duplicate_document):
+                facts[-1] = self.path_fact(
+                    summary_path,
+                    status="A",
+                    text=duplicate_document,
+                )
+                reasons = []
+                self.policy._validate_task094_batch_resource_evidence(
+                    facts, reasons
+                )
+                self.assertIn("任务-000094最终批次摘要无效", reasons)
+
+    def test_任务095到094一次性合同修复不允许夹带(self):
+        target_base = (
+            REPO_ROOT / "docs/研发中心/任务/任务-000094.md"
+        ).read_text(encoding="utf-8")
+        target_head = self.policy._apply_task094_contract_repair(target_base)
+        assert target_head is not None
+        executor = task_text(status="已完成", task_type="治理")
+        reasons = []
+        allowed = self.policy._validate_task094_contract_repair(
+            task_ids=("000095",),
+            changed_paths=("docs/研发中心/任务/任务-000094.md",),
+            base_tasks={"000095": executor, "000094": target_base},
+            head_tasks={"000095": executor, "000094": target_head},
+            base_board="same",
+            head_board="same",
+            reasons=reasons,
+        )
+        self.assertEqual({"000094", "000095"}, allowed)
+        self.assertEqual([], reasons)
+        tampered = target_head.replace("512MiB", "513MiB", 1)
+        tampered_reasons = []
+        self.policy._validate_task094_contract_repair(
+            task_ids=("000095",),
+            changed_paths=("docs/研发中心/任务/任务-000094.md",),
+            base_tasks={"000095": executor, "000094": target_base},
+            head_tasks={"000095": executor, "000094": tampered},
+            base_board="same",
+            head_board="same",
+            reasons=tampered_reasons,
+        )
+        self.assertIn("任务-000094未按固定完整合同修复", tampered_reasons)
 
     def registration_inputs(
         self,
@@ -3787,6 +4003,182 @@ class GitPathFactIntegrationTests(unittest.TestCase):
             "000068",
             conflict_check.call_args.kwargs["task_id"],
         )
+
+    def test_cli任务095合同冲突修复路由到同一执行任务(self):
+        metadata_path = self.repo / "task095-contract-conflict-repair.json"
+        metadata_path.write_text(
+            json.dumps(
+                {
+                    "body": (
+                        "## 关联任务\n\n- 任务-000095\n\n"
+                        "## 变更类型\n\n- 任务合同冲突修复\n"
+                    ),
+                    "base_ref": "main",
+                    "repository": "xk320/zhishi",
+                    "head_repository": "xk320/zhishi",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        arguments = SimpleNamespace(
+            repo_root=self.repo,
+            base_ref="base",
+            head_ref="head",
+            metadata=metadata_path,
+        )
+        facts = (
+            self.policy.PathFact(
+                path="docs/研发中心/任务/任务-000094.md",
+                status="M",
+                mode="100644",
+                object_type="blob",
+                size=4,
+                text="safe",
+            ),
+        )
+        output = io.StringIO()
+        with (
+            mock.patch.object(self.policy, "_parse_arguments", return_value=arguments),
+            mock.patch.object(self.policy, "_load_path_facts", return_value=facts),
+            mock.patch.object(
+                self.policy,
+                "_load_ref_task_ids",
+                return_value=("000094", "000095"),
+            ),
+            mock.patch.object(
+                self.policy,
+                "_load_ref_tasks",
+                side_effect=({}, {}),
+            ),
+            mock.patch.object(
+                self.policy,
+                "_validate_task094_contract_repair",
+                return_value={"000094", "000095"},
+            ) as contract_repair,
+            mock.patch.object(self.policy, "_read_path_at_ref", return_value=None),
+            mock.patch.object(self.policy, "_derive_merge_facts", return_value={}),
+            mock.patch.object(
+                self.policy,
+                "_cross_carrier_conflict_reasons",
+                return_value=(),
+            ) as conflict_check,
+            redirect_stdout(output),
+        ):
+            return_code = self.policy.main()
+
+        self.assertEqual(0, return_code)
+        self.assertEqual(
+            ("000095",),
+            contract_repair.call_args.kwargs["task_ids"],
+        )
+        self.assertEqual(
+            "000095",
+            conflict_check.call_args.kwargs["task_id"],
+        )
+
+    def test_cli任务合同冲突修复拒绝未知与混合正文引用(self):
+        for task_lines in (
+            "- 任务-000099\n",
+            "- 任务-000068\n- 任务-000095\n",
+            "- 任务-000095\n- 任务-000095\n",
+        ):
+            with self.subTest(task_lines=task_lines):
+                metadata_path = self.repo / "invalid-contract-conflict-repair.json"
+                metadata_path.write_text(
+                    json.dumps(
+                        {
+                            "body": (
+                                "## 关联任务\n\n"
+                                f"{task_lines}\n"
+                                "## 变更类型\n\n- 任务合同冲突修复\n"
+                            ),
+                            "base_ref": "main",
+                            "repository": "xk320/zhishi",
+                            "head_repository": "xk320/zhishi",
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+                arguments = SimpleNamespace(
+                    repo_root=self.repo,
+                    base_ref="base",
+                    head_ref="head",
+                    metadata=metadata_path,
+                )
+                output = io.StringIO()
+                with (
+                    mock.patch.object(
+                        self.policy, "_parse_arguments", return_value=arguments
+                    ),
+                    mock.patch.object(self.policy, "_load_path_facts", return_value=()),
+                    mock.patch.object(
+                        self.policy, "_load_ref_task_ids", return_value=("000068",)
+                    ),
+                    mock.patch.object(
+                        self.policy, "evaluate_eligibility"
+                    ) as eligibility,
+                    redirect_stdout(output),
+                ):
+                    return_code = self.policy.main()
+
+                self.assertEqual(1, return_code)
+                self.assertFalse(eligibility.called)
+                payload = json.loads(output.getvalue())
+                self.assertIn(
+                    "任务合同冲突修复正文必须精确引用已登记执行任务",
+                    payload["reasons"],
+                )
+
+    def test_cli任务095到094真实git基线头正向与错误正文失败关闭(self):
+        task094_base = (
+            REPO_ROOT / "docs/研发中心/任务/任务-000094.md"
+        ).read_text(encoding="utf-8")
+        task095_complete = (
+            REPO_ROOT / "docs/研发中心/任务/任务-000095.md"
+        ).read_text(encoding="utf-8").replace("- 状态：待评审", "- 状态：已完成", 1)
+        self._write("docs/研发中心/任务/任务-000094.md", task094_base)
+        self._write("docs/研发中心/任务/任务-000095.md", task095_complete)
+        self._git("add", "--", ".")
+        self._git("commit", "-qm", "task095 completed base")
+        base_ref = self._git("rev-parse", "HEAD").stdout.decode().strip()
+
+        task094_head = self.policy._apply_task094_contract_repair(task094_base)
+        assert task094_head is not None
+        self._write("docs/研发中心/任务/任务-000094.md", task094_head)
+        self._git("add", "--", ".")
+        head_ref = self._commit_head()
+
+        valid_body = (
+            "## 关联任务\n\n- 任务-000095\n\n"
+            "## 变更类型\n\n- 任务合同冲突修复\n"
+        )
+        result, payload = self._run_cli(
+            head_ref, body=valid_body, base_ref=base_ref
+        )
+        self.assertEqual(0, result.returncode, payload)
+        self.assertTrue(payload["eligible"], payload["reasons"])
+
+        for invalid_body in (
+            valid_body.replace("000095", "000099"),
+            valid_body.replace(
+                "- 任务-000095", "- 任务-000068\n- 任务-000095"
+            ),
+            valid_body.replace(
+                "- 任务-000095", "- 任务-000095\n- 任务-000095"
+            ),
+        ):
+            with self.subTest(invalid_body=invalid_body):
+                result, payload = self._run_cli(
+                    head_ref, body=invalid_body, base_ref=base_ref
+                )
+                self.assertEqual(1, result.returncode)
+                self.assertFalse(payload["eligible"])
+                self.assertIn(
+                    "任务合同冲突修复正文必须精确引用已登记执行任务",
+                    payload["reasons"],
+                )
 
     def test_普通中文路径新增修改能生成事实并通过cli(self):
         self._prepare_task_delivery()
