@@ -1,8 +1,10 @@
 import importlib.util
 import json
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 根 = Path(__file__).resolve().parents[2]
@@ -80,6 +82,86 @@ class 阶段1当前最终门禁测试(unittest.TestCase):
                 文件.write(b"drift")
             with self.assertRaisesRegex(模块.合同错误, "PUBLISHED_FILE_DRIFT"):
                 模块.验证已发布批次(根, 配置路径, 目标)
+
+    @unittest.skipIf(模块 is None, "等待执行器实现")
+    def test_重签伪造阶段放行仍被上游事实拒绝(self):
+        配置路径 = 根 / "config/审计/任务-000105阶段1最终审计.json"
+        with tempfile.TemporaryDirectory(prefix="zhishi-task105-forge-") as 临时:
+            输出根 = Path(临时) / "输出"
+            输出根.mkdir()
+            目标 = 模块.执行正式批次(
+                根, 配置路径, 输出根,
+                "stage1-current-final-gate-20260812T220000Z-f1e2d3c4b5a6",
+                测试模式=True,
+            )
+            决策 = json.loads((目标 / "decision.json").read_text(encoding="utf-8"))
+            for 叶子 in 决策["leaves"]:
+                叶子["gates"]["成本与执行"]["status"] = "通过"
+                叶子["decision"] = "通过"
+            决策["allowed_research_leaf_count"] = 8
+            决策["remaining_gaps"] = []
+            决策["successor_recommendation"] = {"count": 0, "title": None}
+            决策["stage1_complete"] = True
+            决策["stage2_released"] = True
+            (目标 / "decision.json").write_text(模块.规范JSON(决策) + "\n", encoding="utf-8")
+            指纹 = hashlib.sha256(模块.规范JSON(决策).encode()).hexdigest()
+            for 名称 in ("replay-1.json", "replay-2.json"):
+                (目标 / 名称).write_text(
+                    模块.规范JSON({"result": 决策, "result_sha256": 指纹}) + "\n",
+                    encoding="utf-8",
+                )
+            摘要路径 = 目标 / "summary.json"
+            摘要 = json.loads(摘要路径.read_text(encoding="utf-8"))
+            摘要.update({
+                "result_sha256": 指纹,
+                "allowed_research_leaf_count": 8,
+                "remaining_gap_count": 0,
+                "remaining_gaps": [],
+                "stage1_complete": True,
+                "stage2_released": True,
+            })
+            摘要路径.write_text(模块.规范JSON(摘要) + "\n", encoding="utf-8")
+            (目标 / "manifest.json").write_text(
+                模块.规范JSON(模块._发布清单(目标, "2026-08-12T22:00:00Z")) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(模块.合同错误, "DECISION_FACT_DRIFT"):
+                模块.验证已发布批次(根, 配置路径, 目标)
+
+    @unittest.skipIf(模块 is None, "等待执行器实现")
+    def test_资源硬门在执行前失败关闭(self):
+        配置路径 = 根 / "config/审计/任务-000105阶段1最终审计.json"
+        with tempfile.TemporaryDirectory(prefix="zhishi-task105-resource-") as 临时:
+            输出根 = Path(临时) / "输出"
+            输出根.mkdir()
+            with mock.patch.object(
+                模块, "_资源快照",
+                return_value={"memory_available_percent": 19.0, "disk_available_bytes": 10**12, "rss_bytes": 1},
+            ):
+                with self.assertRaisesRegex(模块.合同错误, "MEMORY_AVAILABLE_LIMIT"):
+                    模块.执行正式批次(
+                        根, 配置路径, 输出根,
+                        "stage1-current-final-gate-20260812T220000Z-aabbccddeeff",
+                        测试模式=True,
+                    )
+            self.assertEqual(list(输出根.iterdir()), [])
+
+    @unittest.skipIf(模块 is None, "等待执行器实现")
+    def test_两次重放来自顺序独立进程且发布不覆盖(self):
+        配置路径 = 根 / "config/审计/任务-000105阶段1最终审计.json"
+        with tempfile.TemporaryDirectory(prefix="zhishi-task105-process-") as 临时:
+            输出根 = Path(临时) / "输出"
+            输出根.mkdir()
+            批次 = "stage1-current-final-gate-20260812T220000Z-112233aabbcc"
+            目标 = 模块.执行正式批次(根, 配置路径, 输出根, 批次, 测试模式=True)
+            重放1 = json.loads((目标 / "replay-1.json").read_text(encoding="utf-8"))
+            重放2 = json.loads((目标 / "replay-2.json").read_text(encoding="utf-8"))
+            self.assertNotEqual(重放1["process_id"], 重放2["process_id"])
+            self.assertNotEqual(重放1["process_id"], 模块.os.getpid())
+            原摘要 = (目标 / "summary.json").read_bytes()
+            with self.assertRaises((FileExistsError, 模块.合同错误)):
+                模块.执行正式批次(根, 配置路径, 输出根, 批次, 测试模式=True)
+            self.assertEqual((目标 / "summary.json").read_bytes(), 原摘要)
 
 
 if __name__ == "__main__":

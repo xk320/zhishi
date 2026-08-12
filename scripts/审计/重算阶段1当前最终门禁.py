@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import hashlib
 import importlib.util
 import json
@@ -11,6 +13,8 @@ import os
 import re
 import resource
 import shutil
+import subprocess
+import sys
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -268,6 +272,113 @@ def _当前RSS字节() -> int:
     return int(值 if os.uname().sysname == "Darwin" else 值 * 1024)
 
 
+def _可用内存比例() -> float:
+    if sys.platform == "darwin":
+        结果 = subprocess.run(
+            ["memory_pressure", "-Q"], capture_output=True, text=True,
+            timeout=10, check=True,
+        )
+        匹配 = re.search(r"free percentage: ([0-9.]+)%", 结果.stdout)
+        if 匹配 is None:
+            raise 合同错误("MEMORY_FACT_UNAVAILABLE")
+        return float(匹配.group(1))
+    内存 = {}
+    try:
+        for 行 in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            键, 值 = 行.split(":", 1)
+            内存[键] = int(值.strip().split()[0])
+        return round(内存["MemAvailable"] / 内存["MemTotal"] * 100, 2)
+    except (OSError, KeyError, ValueError) as 错误:
+        raise 合同错误("MEMORY_FACT_UNAVAILABLE") from 错误
+
+
+def _资源快照(输出根: Path) -> dict[str, Any]:
+    磁盘 = shutil.disk_usage(输出根)
+    return {
+        "memory_available_percent": _可用内存比例(),
+        "disk_available_bytes": 磁盘.free,
+        "rss_bytes": _当前RSS字节(),
+    }
+
+
+def _验证资源(快照: Mapping[str, Any], 限制: Mapping[str, Any], 开始: float) -> None:
+    if float(快照["memory_available_percent"]) < float(限制["最小可用内存比例"]):
+        raise 合同错误("MEMORY_AVAILABLE_LIMIT")
+    if int(快照["disk_available_bytes"]) < int(限制["最小可用磁盘字节"]):
+        raise 合同错误("DISK_AVAILABLE_LIMIT")
+    if int(快照["rss_bytes"]) > int(限制["RSS字节"]):
+        raise 合同错误("RSS_LIMIT_EXCEEDED")
+    if time.monotonic() - 开始 > float(限制["总时限秒"]):
+        raise 合同错误("TIME_LIMIT_EXCEEDED")
+
+
+def _原子不覆盖发布(来源: Path, 目标: Path) -> None:
+    if 来源.parent.stat().st_dev != 目标.parent.stat().st_dev:
+        raise 合同错误("PUBLISH_FILESYSTEM_MISMATCH")
+    库 = ctypes.CDLL(None, use_errno=True)
+    源字节, 目标字节 = os.fsencode(来源), os.fsencode(目标)
+    if sys.platform == "darwin" and hasattr(库, "renamex_np"):
+        操作 = 库.renamex_np
+        操作.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        操作.restype = ctypes.c_int
+        返回 = 操作(源字节, 目标字节, 0x00000004)
+    elif sys.platform.startswith("linux") and hasattr(库, "renameat2"):
+        操作 = 库.renameat2
+        操作.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        操作.restype = ctypes.c_int
+        返回 = 操作(-100, 源字节, -100, 目标字节, 0x00000001)
+    else:
+        raise 合同错误("ATOMIC_NOREPLACE_UNAVAILABLE")
+    if 返回 == 0:
+        return
+    错号 = ctypes.get_errno()
+    if 错号 in {errno.EEXIST, errno.ENOTEMPTY}:
+        raise FileExistsError(目标)
+    raise OSError(错号, os.strerror(错号), 目标)
+
+
+def _新建受控临时根(父目录: Path, 前缀: str) -> tuple[Path, str]:
+    根 = Path(tempfile.mkdtemp(prefix=前缀, dir=父目录))
+    令牌 = hashlib.sha256(os.urandom(32)).hexdigest()
+    (根 / ".zhishi-task105-sentinel").write_text(令牌, encoding="ascii")
+    return 根, 令牌
+
+
+def _安全清理(目标: Path, 允许父目录: Path, 令牌: str) -> None:
+    try:
+        目标.resolve(strict=True).relative_to(允许父目录.resolve(strict=True))
+    except (OSError, ValueError) as 错误:
+        raise 合同错误("CLEANUP_PATH_INVALID") from 错误
+    哨兵 = 目标 / ".zhishi-task105-sentinel"
+    if 目标.is_symlink() or not 目标.name.startswith(".task105-") or not 哨兵.is_file() or 哨兵.is_symlink():
+        raise 合同错误("CLEANUP_IDENTITY_INVALID")
+    if 哨兵.read_text(encoding="ascii") != 令牌:
+        raise 合同错误("CLEANUP_IDENTITY_INVALID")
+    shutil.rmtree(目标)
+
+
+def _独立重算(仓库: Path, 配置路径: Path, 批次: str, 槽位: int, 超时: float) -> dict[str, Any]:
+    命令 = [
+        sys.executable, str(Path(__file__).resolve()), "replay-worker",
+        "--repo-root", str(仓库), "--config", str(配置路径), "--batch", 批次,
+        "--slot", str(槽位),
+    ]
+    环境 = {**os.environ, "PYTHONHASHSEED": "0"}
+    完成 = subprocess.run(
+        命令, cwd=仓库, env=环境, capture_output=True, text=True,
+        timeout=max(1.0, 超时), check=False,
+    )
+    if 完成.returncode != 0 or len(完成.stdout.encode()) > 16 * 1024 * 1024:
+        raise 合同错误(f"REPLAY_PROCESS_FAILED:{槽位}")
+    try:
+        结果 = json.loads(完成.stdout)
+    except json.JSONDecodeError as 错误:
+        raise 合同错误(f"REPLAY_PROCESS_INVALID:{槽位}") from 错误
+    if 结果.get("slot") != 槽位 or not isinstance(结果.get("process_id"), int):
+        raise 合同错误(f"REPLAY_PROCESS_INVALID:{槽位}")
+    return 结果
+
+
 def _任务合同指纹(路径: Path) -> str:
     易变前缀 = (
         "- 状态：", "- 执行分支：", "- 开始时间：", "- 实现提交SHA：",
@@ -316,9 +427,10 @@ def 执行正式批次(仓库: Path, 配置路径: Path, 输出根: Path, 批次
         raise 合同错误("BATCH_ID_INVALID")
     开始 = time.monotonic()
     配置 = 读取配置(配置路径)
-    事实 = 验证正式输入(仓库, 配置)
-    裁决 = 生成裁决(事实)
-    结果指纹 = hashlib.sha256(规范JSON(裁决).encode()).hexdigest()
+    输出根.mkdir(parents=True, exist_ok=True)
+    限制 = 配置["资源上限"]
+    起始资源 = _资源快照(输出根)
+    _验证资源(起始资源, 限制, 开始)
     当前 = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     主分支SHA = os.environ.get("ZHISHI_MAIN_SHA", "test" if 测试模式 else "")
     if not 测试模式 and re.fullmatch(r"[0-9a-f]{40}", 主分支SHA) is None:
@@ -332,62 +444,81 @@ def 执行正式批次(仓库: Path, 配置路径: Path, 输出根: Path, 批次
         "input_batches": {任务: 配置["正式输入"][任务]["批次"] for 任务 in 必需任务},
         "resource_limits": 配置["资源上限"], "remote_access": False, "database_access": False, "market_data_access": False,
     }
-    文件值 = {
-        "intent.json": 意图, "input-validation.json": {任务: {"batch": 事实[任务]["批次"]} for 任务 in 必需任务},
-        "decision.json": 裁决, "replay-1.json": {"result": 裁决, "result_sha256": 结果指纹},
-        "replay-2.json": {"result": 裁决, "result_sha256": 结果指纹},
-    }
-    摘要 = {
+    工作根, 工作令牌 = _新建受控临时根(输出根, ".task105-work-")
+    工作批次 = 工作根 / "batch"
+    工作批次.mkdir()
+    (工作批次 / "intent.json").write_text(规范JSON(意图) + "\n", encoding="utf-8")
+    try:
+        事实 = 验证正式输入(仓库, 配置)
+        裁决 = 生成裁决(事实)
+        结果指纹 = hashlib.sha256(规范JSON(裁决).encode()).hexdigest()
+        剩余 = float(限制["总时限秒"]) - (time.monotonic() - 开始)
+        重放1 = _独立重算(仓库, 配置路径, 批次, 1, 剩余)
+        _验证资源(_资源快照(输出根), 限制, 开始)
+        剩余 = float(限制["总时限秒"]) - (time.monotonic() - 开始)
+        重放2 = _独立重算(仓库, 配置路径, 批次, 2, 剩余)
+        if (
+            重放1["process_id"] == 重放2["process_id"]
+            or 重放1["process_id"] == os.getpid()
+            or any(项.get("result_sha256") != 结果指纹 or 规范JSON(项.get("result")) != 规范JSON(裁决) for 项 in (重放1, 重放2))
+        ):
+            raise 合同错误("REPLAY_PROCESS_DRIFT")
+        文件值 = {
+            "input-validation.json": {任务: {"batch": 事实[任务]["批次"], "validator_status": 事实[任务]["验证器状态"]} for 任务 in 必需任务},
+            "decision.json": 裁决, "replay-1.json": 重放1, "replay-2.json": 重放2,
+        }
+        for 名称, 值 in 文件值.items():
+            (工作批次 / 名称).write_text(规范JSON(值) + "\n", encoding="utf-8")
+        结束资源 = _资源快照(输出根)
+        _验证资源(结束资源, 限制, 开始)
+        摘要 = {
         "schema_version": "zhishi-stage1-current-final-gate-summary/v1", "task_id": "000105", "batch_id": 批次,
         "result_sha256": 结果指纹, "replays_equal": True, "leaf_count": 8, "allowed_research_leaf_count": 0,
         "remaining_gap_count": len(裁决["remaining_gaps"]), "remaining_gaps": 裁决["remaining_gaps"],
         "stage1_complete": 裁决["stage1_complete"], "stage2_released": 裁决["stage2_released"],
         "resource_facts": {
             "elapsed_seconds": round(time.monotonic() - 开始, 6),
-            "rss_bytes": _当前RSS字节(),
+            "rss_bytes": 结束资源["rss_bytes"],
             "input_bytes": _固定输入总字节(仓库, 配置),
+            "memory_available_percent": 结束资源["memory_available_percent"],
+            "disk_available_bytes": 结束资源["disk_available_bytes"],
         },
         "input_validators": {任务: 事实[任务]["验证器状态"] for 任务 in 必需任务},
         "cleanup_completed_before_publish": True,
         "safety": {"remote_access": False, "database_access": False, "market_data_access": False, "source_write": False, "model_or_backtest": False, "trade_decision": False},
-    }
-    文件值["summary.json"] = 摘要
-    输出根.mkdir(parents=True, exist_ok=True)
-    目标 = 输出根 / 批次
-    if 目标.exists():
-        raise 合同错误("BATCH_EXISTS")
-    发布字节: dict[str, bytes] = {}
-    临时路径: Path | None = None
-    with tempfile.TemporaryDirectory(prefix="zhishi-task105-") as 临时:
-        临时路径 = Path(临时)
-        临时目录 = Path(临时) / 批次
-        临时目录.mkdir()
-        for 名称, 值 in 文件值.items():
-            (临时目录 / 名称).write_text(规范JSON(值) + "\n", encoding="utf-8")
+        }
+        (工作批次 / "summary.json").write_text(规范JSON(摘要) + "\n", encoding="utf-8")
         发布 = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        清单 = _发布清单(临时目录, 发布)
-        (临时目录 / "manifest.json").write_text(规范JSON(清单) + "\n", encoding="utf-8")
-        if sum(项.stat().st_size for 项 in 临时目录.iterdir()) > int(配置["资源上限"]["输出字节"]):
+        清单 = _发布清单(工作批次, 发布)
+        (工作批次 / "manifest.json").write_text(规范JSON(清单) + "\n", encoding="utf-8")
+        if sum(项.stat().st_size for 项 in 工作批次.iterdir()) > int(限制["输出字节"]):
             raise 合同错误("OUTPUT_LIMIT_EXCEEDED")
-        发布字节 = {项.name: 项.read_bytes() for 项 in sorted(临时目录.iterdir())}
-    if 临时路径 is None or 临时路径.exists():
-        raise 合同错误("CLEANUP_FAILED")
-    发布暂存 = Path(tempfile.mkdtemp(prefix=f".{批次}-", dir=输出根))
+        验证已发布批次(仓库, 配置路径, 工作批次)
+        发布字节 = {项.name: 项.read_bytes() for 项 in sorted(工作批次.iterdir())}
+    finally:
+        if 工作根.exists():
+            _安全清理(工作根, 输出根, 工作令牌)
+    发布根, 发布令牌 = _新建受控临时根(输出根, ".task105-publish-")
+    发布暂存 = 发布根 / "batch"
+    发布暂存.mkdir()
     try:
         for 名称, 内容 in 发布字节.items():
             (发布暂存 / 名称).write_bytes(内容)
-        发布暂存.rename(目标)
-    except Exception:
-        if 发布暂存.exists():
-            shutil.rmtree(发布暂存)
-        raise
+        验证已发布批次(仓库, 配置路径, 发布暂存)
+        _验证资源(_资源快照(输出根), 限制, 开始)
+        目标 = 输出根 / 批次
+        _原子不覆盖发布(发布暂存, 目标)
+    finally:
+        if 发布根.exists():
+            _安全清理(发布根, 输出根, 发布令牌)
     验证已发布批次(仓库, 配置路径, 目标)
     return 目标
 
 
 def 验证已发布批次(仓库: Path, 配置路径: Path, 目录: Path) -> dict[str, Any]:
     配置 = 读取配置(配置路径)
-    验证正式输入(仓库, 配置)
+    事实 = 验证正式输入(仓库, 配置)
+    期望裁决 = 生成裁决(事实)
     清单 = 读取JSON(目录 / "manifest.json")
     if set(清单.get("files", {})) != {项.name for 项 in 目录.iterdir() if 项.is_file() and 项.name != "manifest.json"}:
         raise 合同错误("PUBLISHED_FILE_SET_DRIFT")
@@ -396,13 +527,32 @@ def 验证已发布批次(仓库: Path, 配置路径: Path, 目录: Path) -> dic
         if 路径.stat().st_size != 声明["bytes"] or 文件SHA256(路径) != 声明["sha256"]:
             raise 合同错误("PUBLISHED_FILE_DRIFT")
     决策 = 读取JSON(目录 / "decision.json")
+    if 规范JSON(决策) != 规范JSON(期望裁决):
+        raise 合同错误("DECISION_FACT_DRIFT")
     指纹 = hashlib.sha256(规范JSON(决策).encode()).hexdigest()
     for 名称 in ("replay-1.json", "replay-2.json"):
         重放 = 读取JSON(目录 / 名称)
         if 重放.get("result_sha256") != 指纹 or 规范JSON(重放.get("result")) != 规范JSON(决策):
             raise 合同错误("REPLAY_DRIFT")
+    重放们 = [读取JSON(目录 / 名称) for 名称 in ("replay-1.json", "replay-2.json")]
+    if (
+        [项.get("slot") for 项 in 重放们] != [1, 2]
+        or any(not isinstance(项.get("process_id"), int) or 项["process_id"] <= 0 for 项 in 重放们)
+        or 重放们[0]["process_id"] == 重放们[1]["process_id"]
+    ):
+        raise 合同错误("REPLAY_PROCESS_DRIFT")
     摘要 = 读取JSON(目录 / "summary.json")
-    if 摘要.get("result_sha256") != 指纹 or 摘要.get("leaf_count") != 8:
+    期望摘要 = {
+        "result_sha256": 指纹,
+        "leaf_count": 期望裁决["leaf_count"],
+        "allowed_research_leaf_count": 期望裁决["allowed_research_leaf_count"],
+        "remaining_gap_count": len(期望裁决["remaining_gaps"]),
+        "remaining_gaps": 期望裁决["remaining_gaps"],
+        "stage1_complete": 期望裁决["stage1_complete"],
+        "stage2_released": 期望裁决["stage2_released"],
+        "replays_equal": True,
+    }
+    if any(摘要.get(键) != 值 for 键, 值 in 期望摘要.items()):
         raise 合同错误("SUMMARY_DRIFT")
     意图 = 读取JSON(目录 / "intent.json")
     if (
@@ -418,11 +568,12 @@ def 验证已发布批次(仓库: Path, 配置路径: Path, 目录: Path) -> dic
 
 def main() -> int:
     解析器 = argparse.ArgumentParser(description=__doc__)
-    解析器.add_argument("command", choices=("run", "validate"))
+    解析器.add_argument("command", choices=("run", "validate", "replay-worker"))
     解析器.add_argument("--repo-root", type=Path, default=Path.cwd())
     解析器.add_argument("--config", type=Path, default=预期配置)
     解析器.add_argument("--output-root", type=Path, default=预期输出根)
     解析器.add_argument("--batch", required=True)
+    解析器.add_argument("--slot", type=int, choices=(1, 2))
     参数 = 解析器.parse_args()
     仓库 = 参数.repo_root.resolve(strict=True)
     配置路径 = 参数.config if 参数.config.is_absolute() else 仓库 / 参数.config
@@ -430,6 +581,19 @@ def main() -> int:
     if 配置路径.resolve(strict=True) != (仓库 / 预期配置).resolve(strict=True) or 输出根.resolve(strict=False) != (仓库 / 预期输出根).resolve(strict=False):
         raise 合同错误("PATH_INVALID")
     目录 = 输出根 / 参数.batch
+    if 参数.command == "replay-worker":
+        if 参数.slot is None:
+            raise 合同错误("REPLAY_SLOT_REQUIRED")
+        事实 = 验证正式输入(仓库, 读取配置(配置路径))
+        裁决 = 生成裁决(事实)
+        结果 = {
+            "slot": 参数.slot, "process_id": os.getpid(),
+            "process_started_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "result": 裁决,
+            "result_sha256": hashlib.sha256(规范JSON(裁决).encode()).hexdigest(),
+        }
+        print(规范JSON(结果))
+        return 0
     结果 = 执行正式批次(仓库, 配置路径, 输出根, 参数.batch) if 参数.command == "run" else 验证已发布批次(仓库, 配置路径, 目录)
     print(规范JSON({"batch": 参数.batch, "result": str(结果)}))
     return 0
