@@ -123,21 +123,23 @@ def _运行上游验证器(仓库: Path, 文档: dict[str, dict[str, Any]], 配�
     文档["000094"]["验证器状态"] = "通过"
     文档["000099"]["验证器状态"] = "通过"
 
-    成本 = _加载模块(仓库 / "scripts/数据/验证阶段1成本执行.py", "任务100最终验证器")
-    成本.validate_batch(仓库, 文档["000100"]["批次"])
-    文档["000100"]["验证器状态"] = "通过"
-
-    生命周期 = _加载模块(仓库 / "scripts/模拟交易/验证阶段1委托生命周期.py", "任务103最终验证器")
-    生命周期.validate_batch(仓库, 文档["000103"]["批次"])
-    文档["000103"]["验证器状态"] = "通过"
-
-    容量 = _加载模块(仓库 / "scripts/审计/验证阶段1模拟负载容量恢复.py", "任务104最终验证器")
-    容量配置路径 = 仓库 / "config/审计/任务-000104容量恢复.json"
-    容量.验证已发布批次(
-        仓库 / 配置["正式输入"]["000104"]["目录"],
-        容量.读取JSON(容量配置路径), repo_root=仓库, config_path=容量配置路径,
-    )
-    文档["000104"]["验证器状态"] = "通过"
+    for 任务 in ("000100", "000103", "000104"):
+        完成 = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "input-validator-worker",
+             "--repo-root", str(仓库), "--config", str(仓库 / 预期配置),
+             "--batch", str(文档[任务]["批次"]), "--task", 任务],
+            cwd=仓库, env={**os.environ, "PYTHONHASHSEED": "0"},
+            capture_output=True, text=True, timeout=120, check=False,
+        )
+        if 完成.returncode != 0:
+            raise 合同错误(f"UPSTREAM_VALIDATOR_FAILED:{任务}")
+        try:
+            结果 = json.loads(完成.stdout)
+        except json.JSONDecodeError as 错误:
+            raise 合同错误(f"UPSTREAM_VALIDATOR_INVALID:{任务}") from 错误
+        if 结果.get("task") != 任务 or 结果.get("status") != "通过":
+            raise 合同错误(f"UPSTREAM_VALIDATOR_INVALID:{任务}")
+        文档[任务]["验证器状态"] = "通过"
 
 
 def 验证正式输入(仓库: Path, 配置: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
@@ -584,12 +586,13 @@ def 验证已发布批次(仓库: Path, 配置路径: Path, 目录: Path) -> dic
 
 def main() -> int:
     解析器 = argparse.ArgumentParser(description=__doc__)
-    解析器.add_argument("command", choices=("run", "validate", "replay-worker"))
+    解析器.add_argument("command", choices=("run", "validate", "replay-worker", "input-validator-worker"))
     解析器.add_argument("--repo-root", type=Path, default=Path.cwd())
     解析器.add_argument("--config", type=Path, default=预期配置)
     解析器.add_argument("--output-root", type=Path, default=预期输出根)
     解析器.add_argument("--batch", required=True)
     解析器.add_argument("--slot", type=int, choices=(1, 2))
+    解析器.add_argument("--task", choices=("000100", "000103", "000104"))
     参数 = 解析器.parse_args()
     仓库 = 参数.repo_root.resolve(strict=True)
     配置路径 = 参数.config if 参数.config.is_absolute() else 仓库 / 参数.config
@@ -597,6 +600,24 @@ def main() -> int:
     if 配置路径.resolve(strict=True) != (仓库 / 预期配置).resolve(strict=True) or 输出根.resolve(strict=False) != (仓库 / 预期输出根).resolve(strict=False):
         raise 合同错误("PATH_INVALID")
     目录 = 输出根 / 参数.batch
+    if 参数.command == "input-validator-worker":
+        if 参数.task is None:
+            raise 合同错误("VALIDATOR_TASK_REQUIRED")
+        if 参数.task == "000100":
+            模块 = _加载模块(仓库 / "scripts/数据/验证阶段1成本执行.py", "任务100最终验证器")
+            模块.validate_batch(仓库, 参数.batch)
+        elif 参数.task == "000103":
+            模块 = _加载模块(仓库 / "scripts/模拟交易/验证阶段1委托生命周期.py", "任务103最终验证器")
+            模块.validate_batch(仓库, 参数.batch)
+        else:
+            模块 = _加载模块(仓库 / "scripts/审计/验证阶段1模拟负载容量恢复.py", "任务104最终验证器")
+            容量配置路径 = 仓库 / "config/审计/任务-000104容量恢复.json"
+            模块.验证已发布批次(
+                仓库 / 读取配置(配置路径)["正式输入"]["000104"]["目录"],
+                模块.读取JSON(容量配置路径), repo_root=仓库, config_path=容量配置路径,
+            )
+        print(规范JSON({"task": 参数.task, "status": "通过", "rss_bytes": _当前RSS字节()}))
+        return 0
     if 参数.command == "replay-worker":
         if 参数.slot is None:
             raise 合同错误("REPLAY_SLOT_REQUIRED")
