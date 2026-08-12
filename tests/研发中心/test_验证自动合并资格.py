@@ -93,11 +93,23 @@ def task094_contract_versions(policy, current: str | None = None) -> tuple[str, 
             REPO_ROOT / "docs/研发中心/任务/任务-000094.md"
         ).read_text(encoding="utf-8")
     replacements = policy.TASK094_CONTRACT_REPLACEMENTS
-    repaired = policy._apply_task094_contract_repair(current)
-    if repaired is not None:
+    lines = current.splitlines()
+
+    def exact_block_count(block: str) -> int:
+        block_lines = block.splitlines()
+        width = len(block_lines)
+        return sum(
+            lines[index : index + width] == block_lines
+            for index in range(len(lines) - width + 1)
+        )
+
+    old_complete = all(exact_block_count(old) == 1 for old, _ in replacements)
+    new_complete = all(exact_block_count(new) == 1 for _, new in replacements)
+    repaired = policy._apply_task094_contract_repair(current) if old_complete else None
+    if repaired is not None and not new_complete:
         return current, repaired
 
-    if not all(current.count(new) == 1 for _, new in replacements):
+    if not new_complete:
         raise AssertionError("任务-000094合同不是完整修复前或完整修复后版本")
     base = current
     for old, new in reversed(replacements):
