@@ -772,6 +772,78 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         )
         self.assertIn("任务-000094未按固定完整合同修复", tampered_reasons)
 
+    def test_任务102到100只允许唯一输出条目替换(self):
+        old = self.policy.TASK100_OUTPUT_CONTRACT_OLD
+        new = self.policy.TASK100_OUTPUT_CONTRACT_NEW
+        target_base = (
+            "# 任务-000100：闭合阶段1成本与执行证据\n\n"
+            "- 状态：待执行\n- 类型：数据审计\n\n"
+            f"## 输出合同\n\n{old}\n\n"
+            "## 验收标准\n\n1. 既有八项验收标准逐字不变。\n"
+        )
+        target_head = target_base.replace(old, new, 1)
+        executor = task_text(status="已完成", task_type="治理")
+        reasons = []
+        allowed = self.policy._validate_task100_contract_repair(
+            task_ids=("000102",),
+            changed_paths=("docs/研发中心/任务/任务-000100.md",),
+            base_tasks={"000102": executor, "000100": target_base},
+            head_tasks={"000102": executor, "000100": target_head},
+            base_board="same",
+            head_board="same",
+            reasons=reasons,
+        )
+        self.assertEqual({"000100", "000102"}, allowed)
+        self.assertEqual([], reasons)
+
+        cases = {
+            "夹带验收改写": target_head.replace("逐字不变", "允许变化"),
+            "重复旧条目": target_base.replace(old, f"{old}\n{old}"),
+            "目标状态迁移": target_head.replace("- 状态：待执行", "- 状态：执行中"),
+        }
+        for name, tampered in cases.items():
+            with self.subTest(name=name):
+                tampered_reasons = []
+                self.policy._validate_task100_contract_repair(
+                    task_ids=("000102",),
+                    changed_paths=("docs/研发中心/任务/任务-000100.md",),
+                    base_tasks={"000102": executor, "000100": target_base},
+                    head_tasks={"000102": executor, "000100": tampered},
+                    base_board="same",
+                    head_board="same",
+                    reasons=tampered_reasons,
+                )
+                self.assertTrue(tampered_reasons, name)
+
+        not_completed = task_text(status="待评审", task_type="治理")
+        incomplete_reasons = []
+        self.policy._validate_task100_contract_repair(
+            task_ids=("000102",),
+            changed_paths=("docs/研发中心/任务/任务-000100.md",),
+            base_tasks={"000102": not_completed, "000100": target_base},
+            head_tasks={"000102": not_completed, "000100": target_head},
+            base_board="same",
+            head_board="same",
+            reasons=incomplete_reasons,
+        )
+        self.assertIn("任务-000102必须先完成状态闭环", incomplete_reasons)
+
+    def test_任务102合同修复入口精确单引用且真实目标可替换(self):
+        self.assertEqual(
+            "000102", self.policy._contract_conflict_executor(("000102",))
+        )
+        for references in ((), ("000100",), ("000102", "000095"), ("000102", "000102")):
+            with self.subTest(references=references):
+                self.assertIsNone(self.policy._contract_conflict_executor(references))
+        target = (
+            REPO_ROOT / "docs/研发中心/任务/任务-000100.md"
+        ).read_text(encoding="utf-8")
+        repaired = self.policy._apply_task100_contract_repair(target)
+        self.assertIsNotNone(repaired)
+        assert repaired is not None
+        self.assertNotIn(self.policy.TASK100_OUTPUT_CONTRACT_OLD, repaired)
+        self.assertEqual(1, repaired.count(self.policy.TASK100_OUTPUT_CONTRACT_NEW))
+
     def registration_inputs(
         self,
         *,

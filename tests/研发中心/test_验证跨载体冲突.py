@@ -403,6 +403,82 @@ class CrossCarrierConflictTests(unittest.TestCase):
             )
         self.assertEqual([], conflicts)
 
+    def test任务100合同修复只允许固定输出条目(self):
+        path = "docs/研发中心/任务/任务-000100.md"
+        base_text = (
+            "# 任务-000100：闭合阶段1成本与执行证据\n\n"
+            "- 状态：待执行\n\n"
+            f"## 输出合同\n\n{CONFLICT.TASK100_OUTPUT_CONTRACT_OLD}\n\n"
+            "## 验收标准\n\n1. 八项验收保持不变。\n"
+        )
+        head_text = base_text.replace(
+            CONFLICT.TASK100_OUTPUT_CONTRACT_OLD,
+            CONFLICT.TASK100_OUTPUT_CONTRACT_NEW,
+            1,
+        )
+
+        def paths(_repo, _ref):
+            return (path,)
+
+        def read(_repo, ref, requested):
+            self.assertEqual(path, requested)
+            return base_text if ref == "base" else head_text
+
+        conflicts = []
+        with mock.patch.object(CONFLICT, "_list_task_paths", side_effect=paths), mock.patch.object(
+            CONFLICT, "_read_at_ref", side_effect=read
+        ):
+            CONFLICT._check_task_contract_drift(
+                ROOT,
+                "base",
+                "head",
+                conflicts,
+                task100_contract_repair_target="000100",
+            )
+        self.assertEqual([], conflicts)
+
+        tampered = head_text.replace("八项验收保持不变", "验收可变化")
+        conflicts = []
+        with mock.patch.object(CONFLICT, "_list_task_paths", side_effect=paths), mock.patch.object(
+            CONFLICT,
+            "_read_at_ref",
+            side_effect=lambda _repo, ref, _path: base_text if ref == "base" else tampered,
+        ):
+            CONFLICT._check_task_contract_drift(
+                ROOT,
+                "base",
+                "head",
+                conflicts,
+                task100_contract_repair_target="000100",
+            )
+        self.assertTrue(any(item.code == "TASK_CONTRACT_CONFLICT" for item in conflicts))
+
+    def test任务102已完成源任务沿用历史执行元数据(self):
+        task_text = (
+            "# 任务-000102：执行任务-000100合同修复\n\n"
+            "- 状态：已完成\n"
+            "- 执行分支：`codex/task-000102-contract-repair-v1`\n"
+            "- 开始时间：`2026-08-12T23:30:00+08:00`\n"
+            "- Pull Request：[#280](https://github.com/xk320/zhishi/pull/280)\n"
+        )
+        conflicts = []
+        with mock.patch.object(CONFLICT, "_read_at_ref", return_value=task_text):
+            CONFLICT._check_task_execution_metadata(
+                ROOT,
+                "contract-repair-head",
+                "000102",
+                {
+                    "body": (
+                        "## 关联任务\n- 任务-000102\n\n"
+                        "## 变更类型\n- 任务合同冲突修复\n"
+                    ),
+                    "head_ref": "codex/task-000100-contract-repair-v1",
+                    "pr_number": 281,
+                },
+                conflicts,
+            )
+        self.assertEqual([], conflicts)
+
     def testroot只读兼容合同修复目标允许追加固定段落(self):
         path = "docs/研发中心/任务/任务-000084.md"
         base_text = (ROOT / path).read_text(encoding="utf-8")
