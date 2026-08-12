@@ -3537,11 +3537,11 @@ class GitPathFactIntegrationTests(unittest.TestCase):
         *,
         body: str | None = None,
         base_ref: str | None = None,
+        head_branch: str | None = None,
+        pr_number: int | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], dict]:
         metadata_path = self.repo / "metadata.json"
-        metadata_path.write_text(
-            json.dumps(
-                {
+        metadata = {
                     "body": body or (
                         "## 关联任务\n\n"
                         "- 任务-000013\n\n"
@@ -3551,7 +3551,14 @@ class GitPathFactIntegrationTests(unittest.TestCase):
                     "base_ref": "main",
                     "repository": "xk320/zhishi",
                     "head_repository": "xk320/zhishi",
-                },
+                }
+        if head_branch is not None:
+            metadata["head_ref"] = head_branch
+        if pr_number is not None:
+            metadata["pr_number"] = pr_number
+        metadata_path.write_text(
+            json.dumps(
+                metadata,
                 ensure_ascii=False,
             ),
             encoding="utf-8",
@@ -4193,7 +4200,11 @@ class GitPathFactIntegrationTests(unittest.TestCase):
             "## 变更类型\n\n- 任务合同冲突修复\n"
         )
         result, payload = self._run_cli(
-            head_ref, body=valid_body, base_ref=base_ref
+            head_ref,
+            body=valid_body,
+            base_ref=base_ref,
+            head_branch="codex/task-000094-contract-repair-v2",
+            pr_number=260,
         )
         self.assertEqual(0, result.returncode, payload)
         self.assertTrue(payload["eligible"], payload["reasons"])
