@@ -1275,6 +1275,59 @@ def _check_task_execution_metadata(
                 )
             )
         return
+    if (
+        change_type == "任务合同冲突修复"
+        and task_id == TASK094_CONTRACT_REPAIR_EXECUTOR
+    ):
+        # 任务-000095是已完成的治理授权任务。后续PR只对任务-000094
+        # 执行可信规则冻结的八段合同替换；源任务的历史执行分支和PR
+        # 不能绑定到新的目标修复PR。源任务逐字不变和目标修复范围由
+        # 自动合并资格校验器另行复算，这里仍要求历史元数据完整。
+        if status != "已完成":
+            conflicts.append(
+                _conflict(
+                    "TASK_CONTRACT_CONFLICT",
+                    path,
+                    authority="任务-000094合同修复源任务",
+                    decision="失败关闭",
+                    repair_mode="禁止使用未完成治理任务",
+                    release_condition="先完成任务-000095并保持其历史合同不变",
+                )
+            )
+        if not task_branch:
+            conflicts.append(
+                _conflict(
+                    "TASK_CONTRACT_CONFLICT",
+                    path,
+                    authority="任务文件执行元数据",
+                    decision="失败关闭",
+                    repair_mode="禁止缺少源任务执行分支",
+                    release_condition="补齐任务-000095历史执行分支",
+                )
+            )
+        if not task_started:
+            conflicts.append(
+                _conflict(
+                    "TASK_CONTRACT_CONFLICT",
+                    path,
+                    authority="任务文件执行元数据",
+                    decision="失败关闭",
+                    repair_mode="禁止缺少源任务开始时间",
+                    release_condition="补齐任务-000095历史开始时间",
+                )
+            )
+        if not _field(PR_PATTERN, text):
+            conflicts.append(
+                _conflict(
+                    "TASK_CONTRACT_CONFLICT",
+                    path,
+                    authority="任务文件Pull Request元数据",
+                    decision="失败关闭",
+                    repair_mode="禁止缺少源任务PR证据",
+                    release_condition="补齐任务-000095历史PR引用",
+                )
+            )
+        return
     if status in {"执行中", "待评审", "需修复", "已完成"} and not task_branch:
         conflicts.append(
             _conflict(
