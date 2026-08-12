@@ -88,9 +88,10 @@ def task_text(
 def task094_contract_versions(policy, current: str | None = None) -> tuple[str, str]:
     """严格接受任务-000094完整修复前或完整修复后合同。"""
 
-    current = current or (
-        REPO_ROOT / "docs/研发中心/任务/任务-000094.md"
-    ).read_text(encoding="utf-8")
+    if current is None:
+        current = (
+            REPO_ROOT / "docs/研发中心/任务/任务-000094.md"
+        ).read_text(encoding="utf-8")
     replacements = policy.TASK094_CONTRACT_REPLACEMENTS
     repaired = policy._apply_task094_contract_repair(current)
     if repaired is not None:
@@ -576,8 +577,20 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             *self.policy.TASK094_CONTRACT_REPLACEMENTS[0],
             1,
         )
-        with self.assertRaisesRegex(AssertionError, "不是完整修复前或完整修复后"):
-            task094_contract_versions(self.policy, mixed)
+        first_old, _ = self.policy.TASK094_CONTRACT_REPLACEMENTS[0]
+        invalid_contracts = (
+            mixed,
+            "",
+            base.replace(first_old, "", 1),
+            base.replace(first_old, f"{first_old}\n{first_old}", 1),
+            base.replace(first_old, f"{first_old}额外字符", 1),
+        )
+        for invalid_contract in invalid_contracts:
+            with self.subTest(invalid_contract=invalid_contract):
+                with self.assertRaisesRegex(
+                    AssertionError, "不是完整修复前或完整修复后"
+                ):
+                    task094_contract_versions(self.policy, invalid_contract)
 
     def test_任务094进程组资源事实严格守恒(self):
         valid = {
