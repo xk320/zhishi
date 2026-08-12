@@ -1,0 +1,83 @@
+{
+  "allowed_datasets": [
+    "aggTrades",
+    "trades"
+  ],
+  "allowed_groups": {
+    "BTCUSDT-aggTrades": {
+      "contract": "BTCUSDT",
+      "dataset": "aggTrades",
+      "formal_member_count": 423,
+      "quality_proved_count": 423,
+      "quality_rejected_count": 0,
+      "underlying": "BTC"
+    },
+    "BTCUSDT-trades": {
+      "contract": "BTCUSDT",
+      "dataset": "trades",
+      "formal_member_count": 2514,
+      "quality_proved_count": 2266,
+      "quality_rejected_count": 248,
+      "underlying": "BTC"
+    },
+    "ETHUSDT-trades": {
+      "contract": "ETHUSDT",
+      "dataset": "trades",
+      "formal_member_count": 2243,
+      "quality_proved_count": 2100,
+      "quality_rejected_count": 143,
+      "underlying": "ETH"
+    }
+  },
+  "allowed_underlyings": [
+    "BTC",
+    "ETH"
+  ],
+  "decision_at": "2026-08-12T10:19:32.999999Z",
+  "source_completed_at": "2026-08-12T10:19:32Z",
+  "expected_counts": {
+    "audited_member_count": 5180,
+    "candidate_total": 5387,
+    "leaf_count": 8,
+    "observation_item_count": 2,
+    "quality_proved_count": 4789,
+    "quality_rejected_count": 391,
+    "scanned_row_count": 16121999478,
+    "segment_count": 175,
+    "source_rejected_count": 207,
+    "uncompressed_bytes": 854743871570
+  },
+  "expected_source_files": {
+    "formal-batch-files.json": "ea4acd6a3eb158d1533da0b181f8042332cc68ad35635bf44d5d1e765b7a091d",
+    "leaves.json": "63128f5abf48d64a0be0b28abade39aadd2b95dfb8d3cdd139814d3a3dcfae38",
+    "members-001.json": "ac1fd49d72bd7940cb37528a493ebbf7176398e78bda3d4c22ead046ecbe7c64",
+    "segments.json": "42a5f33a3884c6fe470d7bda6c8d19b1bab20dc69e70b960ad0d2926b4555b98",
+    "source-batch-files.json": "3763381337a5931413a8e333d1d87ebfe0ce3497f0143a82499fe3ac63d605b9",
+    "source-rejected.json": "6a2619579406b0620ef250cba426cea4ccf8c1a7b9985e70e9fca1f401feb6aa",
+    "summary.json": "6487a1f0cd7a3891ec5506920251c697297663522d0895bf78a30f63259e2d0c"
+  },
+  "limits": {
+    "max_elapsed_seconds": 120,
+    "max_member_count": 6000,
+    "max_output_bytes": 26214400,
+    "max_rss_bytes": 536870912,
+    "max_source_file_bytes": 5242880,
+    "max_source_file_count": 7
+  },
+  "main_horizons_hours": [
+    4,
+    8,
+    24,
+    48
+  ],
+  "observation_windows_minutes": [
+    15,
+    60
+  ],
+  "schema_version": "zhishi-stage1-versioned-replay-config/v1",
+  "source_batch_files_fingerprint": "7d01f26fe70874afd01d979fa3642bcf3de24c484ba5830b1d75f0a8d92325d0",
+  "source_batch_id": "stage1-time-quality-20260812T091000Z-6968246516ef",
+  "source_batch_relative_path": "artifacts/审计/阶段1逐行时间质量/stage1-time-quality-20260812T091000Z-6968246516ef",
+  "task_000094_merge_commit": "a2e50bf6ad86ddb1eecb0bff071de1a429347bd2",
+  "task_id": "000098"
+}
