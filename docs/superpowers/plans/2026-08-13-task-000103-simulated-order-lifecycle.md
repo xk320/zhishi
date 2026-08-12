@@ -246,7 +246,7 @@ git diff --check
 
 Expected: all commands exit0, one test process at a time, Node heap capped at256MiB.
 
-- [ ] **Step 4: Commit, push, create PR and enter read-only review**
+- [x] **Step 4: Commit, push, create PR and enter read-only review**
 
 ```bash
 git add README.md config/模拟交易/任务-000103阶段1委托生命周期.json scripts/数据/验证阶段1成本执行.py scripts/模拟交易/验证阶段1委托生命周期.py tests/模拟交易/test_阶段1委托生命周期.py docs/数据/模拟委托生命周期数据合同.md docs/数据/成本流动性与执行数据合同.md docs/审计/阶段1模拟执行生命周期证据报告.md docs/研发中心/总体计划.md docs/研发中心/任务/任务-000103.md docs/研发中心/看板.md docs/superpowers/plans/2026-08-13-task-000103-simulated-order-lifecycle.md artifacts/模拟交易/阶段1委托生命周期/stage1-simulated-lifecycle-20260812T175300Z-0638c3587854
