@@ -1,0 +1,11 @@
+{
+  "records": [
+    {
+      "batch_id": "stage1-prior-frozen-replay-20260812T121100Z-ca8ae0a8ecd7",
+      "reason": "执行器在对齐任务输出合同文件名之前生成，保留为不可变预验收批次，不作为任务-000099最终证据",
+      "replacement_batch_id": "stage1-prior-frozen-replay-20260812T122000Z-ca8ae0a8ecd7",
+      "status": "失效"
+    }
+  ],
+  "schema_version": "zhishi-stage1-replay-supersession/v1"
+}
