@@ -1,0 +1,37 @@
+{
+  "schema_version": "zhishi-orderbook-producer-time-semantics/v1",
+  "仓库快照": "orderbook-intelligence-service-release-20260731",
+  "提交": "030499faca3d6955d75c75cbc59656a4981f6c05",
+  "既有治理证据": {
+    "任务-000071 SHA-256": "f7576c6eaeecd23658872b698878b79ad2a92e30d7dadaa3b947e65c4c9bdaf7",
+    "设计合同 SHA-256": "0ce170d8143ea1874345d447a9757012acf69afb98c9b1c084c219d0220988a7",
+    "源代码合同 SHA-256": "817be170438d94193e91146b1f73b4fff1d295b3f98c6448cf02240a5d15a158"
+  },
+  "源码文件": [
+    {
+      "路径": "src/orderbook_service/real_orderbook.py",
+      "SHA-256": "fdb17777bd325aa52b55a5b03af5187ebc5804ded8ab3cde81237561be17639e",
+      "语义片段": [
+        {"用途": "市场事件赋值", "原文": "self.latest_event_time_ms = event.get(\"E\")", "SHA-256": "d0e7bee89e93ad6079bdca28214adae1f9f36f27a2d51dff7c03a74e86ad8e4a"},
+        {"用途": "系统到达赋值", "原文": "self.latest_local_recv_ts_ms = now_ms()", "SHA-256": "584ce4c59bbe7e0ed26c3c94874001d03efc89da1707bb375710904d995153b8"},
+        {"用途": "市场事件输出", "原文": "\"last_event_time_ms\": self.latest_event_time_ms", "SHA-256": "4c90c46846e4b51af93be4f5f963c37f6dde97711b26d37e5b6dd573c9ebff96"},
+        {"用途": "系统到达输出", "原文": "\"last_local_recv_ts_ms\": self.latest_local_recv_ts_ms", "SHA-256": "f0e142be92b0e2b73368a06939a5948677fd56ed303bdc8140892ed06d7009b9"},
+        {"用途": "快照Schema版本", "原文": "\"snapshot_schema_version\": 1", "SHA-256": "cd1359769cd6e7f3f4cfd5277e6b334051057682e672d2b5e0a9a2bd733faf60"},
+        {"用途": "快照来源", "原文": "\"source\": \"canonical_book\"", "SHA-256": "68fdc1025f5922e0ce77066cfaa989e4337137a34f280d898322d7e7bbb9ddf2"},
+        {"用途": "快照正文", "原文": "\"payload\": self.snapshot(symbol)", "SHA-256": "7b2be6c603448de4e040ff759f7c04549f79cdd4082a42f6c3f0aaee8afef670"}
+      ]
+    },
+    {
+      "路径": "src/orderbook_service/storage.py",
+      "SHA-256": "d4fed7bf0fc89666a9836a17f144ef41d2a6d13d829124437032c9787bf9b05d",
+      "语义片段": [
+        {"用途": "完整快照序列化", "原文": "json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)", "SHA-256": "bfdf119afb010ab911e1123c5351c165cbeeb0766241ec3b5c99edbd4a41842d"}
+      ]
+    }
+  ],
+  "字段映射": {
+    "市场事件时间": {"字段": "payload.last_event_time_ms", "来源": "Binance USDⓈ-M深度增量事件E", "单位": "UTC毫秒"},
+    "系统到达时间": {"字段": "payload.last_local_recv_ts_ms", "来源": "apply_diff处理增量事件时的now_ms墙钟", "单位": "UTC毫秒"},
+    "证明条件": {"source": "canonical_book", "snapshot_schema_version": 1}
+  }
+}
