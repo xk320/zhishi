@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import copy
 import hashlib
 import json
@@ -543,6 +545,7 @@ def _check_resources(
         raise ValueError("OUTPUT_SIZE_LIMIT_EXCEEDED")
     return {
         "elapsed_seconds": elapsed,
+        "measured_at": utc_now(),
         "output_bytes": output_bytes,
         "process_max_rss_bytes": rss,
         "processes": 1,
@@ -562,6 +565,142 @@ def _release_lock(file_descriptor: int, path: Path) -> None:
         path.unlink()
     except FileNotFoundError:
         pass
+
+
+def _atomic_rename_noreplace(source: Path, target: Path) -> None:
+    """使用内核原子 no-replace 原语发布目录；不支持的平台失败关闭。"""
+
+    library = ctypes.CDLL(None, use_errno=True)
+    source_bytes = os.fsencode(source)
+    target_bytes = os.fsencode(target)
+    if sys.platform == "darwin":
+        operation = getattr(library, "renamex_np", None)
+        if operation is None:
+            raise ValueError("ATOMIC_NOREPLACE_UNAVAILABLE")
+        operation.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        operation.restype = ctypes.c_int
+        result = operation(source_bytes, target_bytes, 0x00000004)  # RENAME_EXCL
+    elif sys.platform.startswith("linux"):
+        operation = getattr(library, "renameat2", None)
+        if operation is None:
+            raise ValueError("ATOMIC_NOREPLACE_UNAVAILABLE")
+        operation.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        operation.restype = ctypes.c_int
+        result = operation(-100, source_bytes, -100, target_bytes, 0x00000001)
+    else:
+        raise ValueError("ATOMIC_NOREPLACE_UNAVAILABLE")
+    if result == 0:
+        return
+    error_number = ctypes.get_errno()
+    if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
+        raise ValueError("OUTPUT_TARGET_EXISTS")
+    if error_number in {errno.ENOSYS, errno.ENOTSUP, errno.EINVAL}:
+        raise ValueError("ATOMIC_NOREPLACE_UNAVAILABLE")
+    raise OSError(error_number, os.strerror(error_number))
+
+
+def _write_completion_evidence(
+    temporary: Path,
+    phase_name: str,
+    started: float,
+    config: Mapping[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """在原子发布前写入完成标记，并持久化最后一次预提交资源测量。"""
+
+    payload_bytes = sum(path.stat().st_size for path in temporary.iterdir())
+    facts = _check_resources(started, payload_bytes, config)
+    completion = {
+        "completion_marker_required": True,
+        "final_gate_rechecked_after_completion_readback": True,
+        "phase": phase_name,
+        "final_precommit_resource_facts": facts,
+        "published_bytes": 0,
+        "schema_version": "zhishi-stage1-atomic-publish-completion/v1",
+    }
+    for _ in range(8):
+        completion_bytes = len(canonical_json(completion).encode("utf-8")) + 1
+        total = payload_bytes + completion_bytes
+        if completion["published_bytes"] == total:
+            break
+        completion["published_bytes"] = total
+    else:
+        raise ValueError("COMPLETION_SIZE_DID_NOT_CONVERGE")
+    completion_sha = _write_json(temporary / "completion.json", completion)
+    if sum(path.stat().st_size for path in temporary.iterdir()) != completion["published_bytes"]:
+        raise ValueError("COMPLETION_PUBLISHED_BYTES_DRIFT")
+    load_json_strict(temporary / "completion.json")
+    final_facts = _check_resources(
+        started,
+        int(completion["published_bytes"]),
+        config,
+    )
+    return completion_sha, final_facts
+
+
+def _write_publication_marker(
+    batch_root: Path,
+    phase_name: str,
+    completion_sha256: str,
+) -> dict[str, Any]:
+    marker = batch_root / f"{phase_name}-published.json"
+    payload = {
+        "completion_sha256": completion_sha256,
+        "phase": phase_name,
+        "published_at": utc_now(),
+        "schema_version": "zhishi-stage1-phase-publication/v1",
+    }
+    encoded = canonical_json(payload).encode("utf-8") + b"\n"
+    try:
+        descriptor = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o444)
+    except FileExistsError as error:
+        raise ValueError("PUBLICATION_MARKER_EXISTS") from error
+    try:
+        written = os.write(descriptor, encoded)
+        if written != len(encoded):
+            raise ValueError("PUBLICATION_MARKER_WRITE_FAILED")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    if marker.read_bytes() != encoded:
+        raise ValueError("PUBLICATION_MARKER_READBACK_DRIFT")
+    return payload
+
+
+def _load_publication_marker(
+    repo_root: Path,
+    batch_root: Path,
+    phase_name: str,
+) -> dict[str, Any]:
+    marker, _ = _load_phase_file(
+        repo_root,
+        (batch_root / f"{phase_name}-published.json").relative_to(repo_root),
+    )
+    if (
+        marker.get("schema_version") != "zhishi-stage1-phase-publication/v1"
+        or marker.get("phase") != phase_name
+        or not SHA_PATTERN.fullmatch(str(marker.get("completion_sha256", "")))
+    ):
+        raise ValueError("PUBLICATION_MARKER_INVALID")
+    parse_utc(marker.get("published_at"))
+    completion_path = batch_root / phase_name / "completion.json"
+    completion, completion_sha = _load_phase_file(
+        repo_root, completion_path.relative_to(repo_root)
+    )
+    if (
+        completion_sha != marker["completion_sha256"]
+        or completion.get("schema_version")
+        != "zhishi-stage1-atomic-publish-completion/v1"
+        or completion.get("phase") != phase_name
+        or completion.get("final_gate_rechecked_after_completion_readback") is not True
+    ):
+        raise ValueError("PUBLICATION_COMPLETION_DRIFT")
+    return marker
 
 
 def _prepare_output_root(repo_root: Path, output_root: Path) -> None:
@@ -619,12 +758,21 @@ def _publish_batch_with_intent(
                 if path.is_symlink() or not path.is_file():
                     raise ValueError("OUTPUT_FILE_INVALID")
                 sha256_file(path)
-            total = sum(path.stat().st_size for path in intent_dir.iterdir())
-            _check_resources(started, total, config)
+            completion_sha, final_resources = _write_completion_evidence(
+                intent_dir, "intent", started, config
+            )
             if batch_target.exists() or batch_target.is_symlink():
                 raise ValueError("OUTPUT_BATCH_EXISTS")
-            os.rename(temporary, batch_target)
-            return {"intent_sha256": intent_sha, "resource_facts": resource_facts}
+            _atomic_rename_noreplace(temporary, batch_target)
+            publication = _write_publication_marker(
+                batch_target, "intent", completion_sha
+            )
+            return {
+                "completion_sha256": completion_sha,
+                "intent_sha256": intent_sha,
+                "published_at": publication["published_at"],
+                "resource_facts": final_resources,
+            }
     finally:
         _release_lock(lock_fd, lock_path)
 
@@ -674,15 +822,21 @@ def _publish_phase(
             fourth = verify_source_files(source_dir, config)
             if fourth != third:
                 raise ValueError("SOURCE_FINAL_DRIFT")
-            total = sum(path.stat().st_size for path in temporary.iterdir())
-            final_resources = _check_resources(started, total, config)
+            completion_sha, final_resources = _write_completion_evidence(
+                temporary, phase_name, started, config
+            )
             if target.exists() or target.is_symlink():
                 raise ValueError("OUTPUT_PHASE_EXISTS")
-            os.rename(temporary, target)
+            _atomic_rename_noreplace(temporary, target)
+            publication = _write_publication_marker(
+                batch_root, phase_name, completion_sha
+            )
             return {
+                "completion_sha256": completion_sha,
                 "output_sha256": output_sha,
                 "receipt_sha256": receipt_sha,
                 "resource_facts": final_resources,
+                "published_at": publication["published_at"],
             }
     finally:
         _release_lock(lock_fd, lock_path)
@@ -752,6 +906,12 @@ def decide(
         str((output_root / batch_id).relative_to(repo_root)),
         final_kind="directory",
     )
+    intent_publication = _load_publication_marker(
+        repo_root, batch_root, "intent"
+    )
+    phase_started_at = utc_now()
+    if parse_utc(phase_started_at) <= parse_utc(intent_publication["published_at"]):
+        raise ValueError("PROCESS_START_ORDER_INVALID")
     intent, intent_sha = _load_phase_file(
         repo_root,
         (batch_root / "intent" / "intent.json").relative_to(repo_root),
@@ -784,7 +944,7 @@ def decide(
         "intent_sha256": intent_sha,
         "process_id": os.getpid(),
         "process_run_id": str(uuid.uuid4()),
-        "process_started_at": utc_now(),
+        "process_started_at": phase_started_at,
         "result": result,
         "result_sha256": result_sha,
         "schema_version": DECISION_SCHEMA,
@@ -827,6 +987,13 @@ def replay(
         str((output_root / batch_id).relative_to(repo_root)),
         final_kind="directory",
     )
+    prerequisite = "decision" if slot == 1 else "replay-1"
+    prerequisite_publication = _load_publication_marker(
+        repo_root, batch_root, prerequisite
+    )
+    phase_started_at = utc_now()
+    if parse_utc(phase_started_at) <= parse_utc(prerequisite_publication["published_at"]):
+        raise ValueError("PROCESS_START_ORDER_INVALID")
     intent, intent_sha = _load_phase_file(
         repo_root,
         (batch_root / "intent" / "intent.json").relative_to(repo_root),
@@ -871,7 +1038,7 @@ def replay(
         "intent_sha256": intent_sha,
         "process_id": os.getpid(),
         "process_run_id": process_run_id,
-        "process_started_at": utc_now(),
+        "process_started_at": phase_started_at,
         "replay_slot": slot,
         "result": result,
         "result_sha256": result_sha,
@@ -919,7 +1086,7 @@ def main() -> int:
     if args.config.resolve(strict=True) != expected_config:
         raise ValueError("CONFIG_PATH_INVALID")
     expected_output = repo_root / EXPECTED_OUTPUT_RELATIVE_PATH
-    if Path(os.path.abspath(args.output_root)) != expected_output:
+    if args.output_root.resolve(strict=False) != expected_output.resolve(strict=False):
         raise ValueError("OUTPUT_ROOT_PATH_INVALID")
     config = load_config(expected_config)
     if args.mode == "prepare":

@@ -2,8 +2,18 @@
   "records": [
     {
       "batch_id": "stage1-prior-frozen-replay-20260812T121100Z-ca8ae0a8ecd7",
-      "reason": "执行器在对齐任务输出合同文件名之前生成，保留为不可变预验收批次，不作为任务-000099最终证据",
-      "replacement_batch_id": "stage1-prior-frozen-replay-20260812T122000Z-ca8ae0a8ecd7",
+      "executor_sha256": "46a38b30a48aad258a9210ba4cadb6ea5f77436d84616fec8a94b2a0698325eb",
+      "reason": "预验收执行器SHA-256未绑定任何交付Git对象，保留为不可变过程证据，不作为任务-000099最终证据",
+      "replacement_executor_sha256": "feeb98e2d2232f3cb4216b9094fb6af81a73592ea34c11a441a01b50893ad42e",
+      "replacement_batch_id": "stage1-prior-frozen-replay-20260812T124000Z-ca8ae0a8ecd7",
+      "status": "失效"
+    },
+    {
+      "batch_id": "stage1-prior-frozen-replay-20260812T122000Z-ca8ae0a8ecd7",
+      "executor_sha256": "20a8c42340c82cbd45da534f6107d0e3b785b447936e835cd74297b1d91beb98",
+      "reason": "交付评审发现发布no-clobber竞态和进程开始时间证据不足，后续修复改变执行器SHA-256，原批次保留且不作为最终证据",
+      "replacement_executor_sha256": "feeb98e2d2232f3cb4216b9094fb6af81a73592ea34c11a441a01b50893ad42e",
+      "replacement_batch_id": "stage1-prior-frozen-replay-20260812T124000Z-ca8ae0a8ecd7",
       "status": "失效"
     }
   ],
