@@ -772,6 +772,206 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         )
         self.assertIn("任务-000094未按固定完整合同修复", tampered_reasons)
 
+    def test_任务102到100只允许唯一输出条目替换(self):
+        old = self.policy.TASK100_OUTPUT_CONTRACT_OLD
+        new = self.policy.TASK100_OUTPUT_CONTRACT_NEW
+        target_base = (
+            "# 任务-000100：闭合阶段1成本与执行证据\n\n"
+            "- 状态：待执行\n- 类型：数据审计\n\n"
+            f"## 输出合同\n\n{old}\n\n"
+            "## 验收标准\n\n1. 既有八项验收标准逐字不变。\n"
+        )
+        target_head = target_base.replace(old, new, 1)
+        executor = task_text(status="已完成", task_type="治理")
+        governance = task_text(status="已完成", task_type="治理")
+        common_base = {
+            "000102": executor,
+            "000101": governance,
+            "000100": target_base,
+        }
+        common_head = {
+            "000102": executor,
+            "000101": governance,
+            "000100": target_head,
+        }
+        reasons = []
+        allowed = self.policy._validate_task100_contract_repair(
+            task_ids=("000102",),
+            changed_paths=("docs/研发中心/任务/任务-000100.md",),
+            base_tasks=common_base,
+            head_tasks=common_head,
+            base_board="same",
+            head_board="same",
+            reasons=reasons,
+        )
+        self.assertEqual({"000100", "000102"}, allowed)
+        self.assertEqual([], reasons)
+
+        cases = {
+            "夹带验收改写": target_head.replace("逐字不变", "允许变化"),
+            "重复旧条目": target_base.replace(old, f"{old}\n{old}"),
+            "目标状态迁移": target_head.replace("- 状态：待执行", "- 状态：执行中"),
+        }
+        for name, tampered in cases.items():
+            with self.subTest(name=name):
+                tampered_reasons = []
+                self.policy._validate_task100_contract_repair(
+                    task_ids=("000102",),
+                    changed_paths=("docs/研发中心/任务/任务-000100.md",),
+                    base_tasks=common_base,
+                    head_tasks={**common_head, "000100": tampered},
+                    base_board="same",
+                    head_board="same",
+                    reasons=tampered_reasons,
+                )
+                self.assertTrue(tampered_reasons, name)
+
+        not_completed = task_text(status="待评审", task_type="治理")
+        incomplete_reasons = []
+        self.policy._validate_task100_contract_repair(
+            task_ids=("000102",),
+            changed_paths=("docs/研发中心/任务/任务-000100.md",),
+            base_tasks={**common_base, "000102": not_completed},
+            head_tasks={**common_head, "000102": not_completed},
+            base_board="same",
+            head_board="same",
+            reasons=incomplete_reasons,
+        )
+        self.assertIn("任务-000102必须先完成状态闭环", incomplete_reasons)
+
+        governance_incomplete = task_text(status="待评审", task_type="治理")
+        governance_reasons = []
+        self.policy._validate_task100_contract_repair(
+            task_ids=("000102",),
+            changed_paths=("docs/研发中心/任务/任务-000100.md",),
+            base_tasks={**common_base, "000101": governance_incomplete},
+            head_tasks={**common_head, "000101": governance_incomplete},
+            base_board="same",
+            head_board="same",
+            reasons=governance_reasons,
+        )
+        self.assertIn("任务-000101必须先完成状态闭环", governance_reasons)
+
+        source_drift_reasons = []
+        self.policy._validate_task100_contract_repair(
+            task_ids=("000102",),
+            changed_paths=("docs/研发中心/任务/任务-000100.md",),
+            base_tasks=common_base,
+            head_tasks={**common_head, "000102": executor + "\n夹带改写\n"},
+            base_board="same",
+            head_board="same",
+            reasons=source_drift_reasons,
+        )
+        self.assertIn(
+            "任务-000102在目标合同修复中必须逐字不变", source_drift_reasons
+        )
+
+        for name, extra_path in {
+            "历史审计": "docs/审计/阶段1最终审计报告.md",
+            "旧批次": "artifacts/审计/历史批次/summary.json",
+            "数据": "data/raw.csv",
+            "生产": "deploy/production.yml",
+        }.items():
+            with self.subTest(name=name):
+                path_reasons = []
+                self.policy._validate_task100_contract_repair(
+                    task_ids=("000102",),
+                    changed_paths=(
+                        "docs/研发中心/任务/任务-000100.md",
+                        extra_path,
+                    ),
+                    base_tasks=common_base,
+                    head_tasks=common_head,
+                    base_board="same",
+                    head_board="same",
+                    reasons=path_reasons,
+                )
+                self.assertIn("任务-000100合同修复只能修改目标任务文件", path_reasons)
+
+        board_reasons = []
+        self.policy._validate_task100_contract_repair(
+            task_ids=("000102",),
+            changed_paths=("docs/研发中心/任务/任务-000100.md",),
+            base_tasks=common_base,
+            head_tasks=common_head,
+            base_board="base",
+            head_board="drift",
+            reasons=board_reasons,
+        )
+        self.assertIn("任务-000100合同修复不得改写看板", board_reasons)
+
+    def test_任务102合同修复入口精确单引用且真实目标可替换(self):
+        self.assertEqual(
+            "000102", self.policy._contract_conflict_executor(("000102",))
+        )
+        for references in ((), ("000100",), ("000102", "000095"), ("000102", "000102")):
+            with self.subTest(references=references):
+                self.assertIsNone(self.policy._contract_conflict_executor(references))
+        target = (
+            REPO_ROOT / "docs/研发中心/任务/任务-000100.md"
+        ).read_text(encoding="utf-8")
+        repaired = self.policy._apply_task100_contract_repair(target)
+        self.assertIsNotNone(repaired)
+        assert repaired is not None
+        self.assertNotIn(self.policy.TASK100_OUTPUT_CONTRACT_OLD, repaired)
+        self.assertEqual(1, repaired.count(self.policy.TASK100_OUTPUT_CONTRACT_NEW))
+
+    def test_任务102登记必须等待并依赖已完成任务101(self):
+        task = registration_task(task_id="000102").replace(
+            "任务-000039", "任务-000101"
+        )
+        base_tasks = {
+            f"{number:06d}": "基线任务\n"
+            for number in range(1, 102)
+        }
+        base_tasks["000101"] = task_text(status="已完成", task_type="治理")
+        result = self.evaluate_registration(
+            task_id="000102",
+            task=task,
+            base_tasks=base_tasks,
+            head_tasks={"000102": task},
+            base_board=registration_board(status=None),
+            head_board=registration_board(
+                status="待执行", task_id="000102"
+            ).replace(
+                "| P1 | 任务-000102 | 新增自动任务登记资格 | 000039 |",
+                "| P1 | 任务-000102 | 新增自动任务登记资格 | 000101 |",
+            ),
+        )
+        self.assertTrue(result.eligible, result.reasons)
+
+        incomplete = {**base_tasks, "000101": task_text(status="待评审")}
+        blocked = self.evaluate_registration(
+            task_id="000102",
+            task=task,
+            base_tasks=incomplete,
+            head_tasks={"000102": task},
+            base_board=registration_board(status=None),
+            head_board=registration_board(
+                status="待执行", task_id="000102"
+            ).replace(
+                "| P1 | 任务-000102 | 新增自动任务登记资格 | 000039 |",
+                "| P1 | 任务-000102 | 新增自动任务登记资格 | 000101 |",
+            ),
+        )
+        self.assertIn("任务-000102只能在任务-000101完成后登记", blocked.reasons)
+
+        wrong_dependency = task.replace("任务-000101", "任务-000099")
+        wrong = self.evaluate_registration(
+            task_id="000102",
+            task=wrong_dependency,
+            base_tasks=base_tasks,
+            head_tasks={"000102": wrong_dependency},
+            base_board=registration_board(status=None),
+            head_board=registration_board(
+                status="待执行", task_id="000102"
+            ).replace(
+                "| P1 | 任务-000102 | 新增自动任务登记资格 | 000039 |",
+                "| P1 | 任务-000102 | 新增自动任务登记资格 | 000099 |",
+            ),
+        )
+        self.assertIn("任务-000102唯一前序依赖必须为任务-000101", wrong.reasons)
+
     def registration_inputs(
         self,
         *,

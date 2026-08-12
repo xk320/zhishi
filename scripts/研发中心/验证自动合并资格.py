@@ -224,6 +224,11 @@ CONTRACT_CONFLICT_REPAIR_ALLOWED_PATHS = frozenset(
 )
 TASK094_CONTRACT_REPAIR_EXECUTOR = "000095"
 TASK094_CONTRACT_REPAIR_TARGET = "000094"
+TASK100_CONTRACT_REPAIR_EXECUTOR = "000102"
+TASK100_CONTRACT_REPAIR_TARGET = "000100"
+TASK100_CONTRACT_REPAIR_GOVERNANCE = "000101"
+TASK100_OUTPUT_CONTRACT_OLD = "- 更新阶段1最终审计报告、数据缺口清单、README、总体计划、任务文件和看板；"
+TASK100_OUTPUT_CONTRACT_NEW = "- 保持docs/审计/阶段1最终审计报告.md和docs/审计/数据缺口与补采清单.md字节不变；新增docs/审计/阶段1成本与执行证据报告.md，并更新README、总体计划、任务文件和看板；"
 TASK094_NATIVE_SCANNER_PATH = "scripts/审计/阶段1时间质量扫描器.c"
 TASK094_EXECUTOR_PATH = "scripts/审计/审计阶段1新正式输入时间质量.py"
 TASK094_CONFIG_PATH = "config/审计/任务-000094逐行时间质量审计.json"
@@ -290,13 +295,25 @@ def _task094_native_scanner_allowed(
 
 
 def _contract_conflict_executor(body_task_ids: Sequence[str]) -> str | None:
-    """只接受两个已登记的一次性合同修复入口，未知或混合引用失败关闭。"""
+    """只接受已登记的一次性合同修复入口，未知或混合引用失败关闭。"""
 
     if tuple(body_task_ids) == (CONTRACT_CONFLICT_REPAIR_EXECUTOR,):
         return CONTRACT_CONFLICT_REPAIR_EXECUTOR
     if tuple(body_task_ids) == (TASK094_CONTRACT_REPAIR_EXECUTOR,):
         return TASK094_CONTRACT_REPAIR_EXECUTOR
+    if tuple(body_task_ids) == (TASK100_CONTRACT_REPAIR_EXECUTOR,):
+        return TASK100_CONTRACT_REPAIR_EXECUTOR
     return None
+
+
+def _apply_task100_contract_repair(text: str) -> str | None:
+    """逐字替换任务-000100唯一输出条目，不接受缺失或重复。"""
+
+    if text.count(TASK100_OUTPUT_CONTRACT_OLD) != 1:
+        return None
+    if TASK100_OUTPUT_CONTRACT_NEW in text:
+        return None
+    return text.replace(TASK100_OUTPUT_CONTRACT_OLD, TASK100_OUTPUT_CONTRACT_NEW, 1)
 
 
 def _apply_task094_contract_repair(text: str) -> str | None:
@@ -2421,6 +2438,67 @@ def _validate_task094_contract_repair(
     return allowed
 
 
+def _validate_task100_contract_repair(
+    *,
+    task_ids: Sequence[str],
+    changed_paths: Sequence[str],
+    base_tasks: Mapping[str, str],
+    head_tasks: Mapping[str, str],
+    base_board: str | None,
+    head_board: str | None,
+    reasons: list[str],
+) -> set[str]:
+    """验证任务-000102→任务-000100的唯一输出条目合同修复。"""
+
+    executor_id = TASK100_CONTRACT_REPAIR_EXECUTOR
+    target_id = TASK100_CONTRACT_REPAIR_TARGET
+    allowed = {executor_id, target_id}
+    if tuple(task_ids) != (executor_id,):
+        _append_reason(reasons, "任务-000100合同修复必须且只能关联任务-000102")
+        return allowed
+    target_path = f"docs/研发中心/任务/任务-{target_id}.md"
+    if set(changed_paths) != {target_path}:
+        _append_reason(reasons, "任务-000100合同修复只能修改目标任务文件")
+    executor_base = base_tasks.get(executor_id)
+    executor_head = head_tasks.get(executor_id)
+    governance_base = base_tasks.get(TASK100_CONTRACT_REPAIR_GOVERNANCE)
+    governance_head = head_tasks.get(TASK100_CONTRACT_REPAIR_GOVERNANCE)
+    target_base = base_tasks.get(target_id)
+    target_head = head_tasks.get(target_id)
+    if None in (
+        executor_base,
+        executor_head,
+        governance_base,
+        governance_head,
+        target_base,
+        target_head,
+    ):
+        _append_reason(reasons, "任务-000100合同修复缺少治理任务、执行任务或目标任务正文")
+        return allowed
+    assert executor_base is not None and executor_head is not None
+    assert governance_base is not None and governance_head is not None
+    assert target_base is not None and target_head is not None
+    if executor_base != executor_head:
+        _append_reason(reasons, "任务-000102在目标合同修复中必须逐字不变")
+    if governance_base != governance_head:
+        _append_reason(reasons, "任务-000101在目标合同修复中必须逐字不变")
+    if _task_field(TASK_STATUS_PATTERN, governance_base) != "已完成":
+        _append_reason(reasons, "任务-000101必须先完成状态闭环")
+    if _task_field(TASK_STATUS_PATTERN, executor_base) != "已完成":
+        _append_reason(reasons, "任务-000102必须先完成状态闭环")
+    if (
+        _task_field(TASK_STATUS_PATTERN, target_base) != "待执行"
+        or _task_field(TASK_STATUS_PATTERN, target_head) != "待执行"
+    ):
+        _append_reason(reasons, "任务-000100基线和头部必须保持待执行")
+    expected = _apply_task100_contract_repair(target_base)
+    if expected is None or target_head != expected:
+        _append_reason(reasons, "任务-000100未按固定唯一输出条目修复")
+    if base_board is not None and head_board is not None and base_board != head_board:
+        _append_reason(reasons, "任务-000100合同修复不得改写看板")
+    return allowed
+
+
 def _registration_field_value(text: str, field: str) -> str | None:
     """读取任务头部严格唯一且非空的合同字段。"""
 
@@ -2718,6 +2796,15 @@ def _validate_task_registration(
                 reasons,
                 f"任务-{task_id}唯一前序依赖必须且只能出现一次",
             )
+        if task_id == TASK100_CONTRACT_REPAIR_EXECUTOR:
+            governance_task = base_tasks.get(TASK100_CONTRACT_REPAIR_GOVERNANCE)
+            if (
+                governance_task is None
+                or _task_field(TASK_STATUS_PATTERN, governance_task) != "已完成"
+            ):
+                _append_reason(reasons, "任务-000102只能在任务-000101完成后登记")
+            if dependencies != [TASK100_CONTRACT_REPAIR_GOVERNANCE]:
+                _append_reason(reasons, "任务-000102唯一前序依赖必须为任务-000101")
         if status == "阻塞":
             blocker_lines = [
                 line
@@ -3118,6 +3205,16 @@ def evaluate_eligibility(
                 head_board=head_board,
                 reasons=reasons,
             )
+        elif tuple(task_ids) == (TASK100_CONTRACT_REPAIR_EXECUTOR,):
+            allowed_unreferenced_task_ids = _validate_task100_contract_repair(
+                task_ids=task_ids,
+                changed_paths=changed_paths,
+                base_tasks=base_tasks,
+                head_tasks=head_tasks,
+                base_board=base_board,
+                head_board=head_board,
+                reasons=reasons,
+            )
         else:
             allowed_unreferenced_task_ids = _validate_contract_conflict_repair(
                 repo_root=repo_root,
@@ -3191,6 +3288,8 @@ def evaluate_eligibility(
             contract_task_ids = (
                 {TASK094_CONTRACT_REPAIR_EXECUTOR, TASK094_CONTRACT_REPAIR_TARGET}
                 if tuple(task_ids) == (TASK094_CONTRACT_REPAIR_EXECUTOR,)
+                else {TASK100_CONTRACT_REPAIR_EXECUTOR, TASK100_CONTRACT_REPAIR_TARGET}
+                if tuple(task_ids) == (TASK100_CONTRACT_REPAIR_EXECUTOR,)
                 else {CONTRACT_CONFLICT_REPAIR_EXECUTOR, CONTRACT_CONFLICT_REPAIR_TARGET}
             )
             is_allowed_task = (
@@ -3437,6 +3536,12 @@ def main() -> int:
                 and match.group(1) == TASK094_CONTRACT_REPAIR_TARGET
             ):
                 continue
+            if (
+                change_type == CONTRACT_CONFLICT_REPAIR_TYPE
+                and body_task_ids == {TASK100_CONTRACT_REPAIR_EXECUTOR}
+                and match.group(1) == TASK100_CONTRACT_REPAIR_TARGET
+            ):
+                continue
             task_ids.add(match.group(1))
     if len(task_ids) > _task_reference_limit(change_type):
         print(
@@ -3454,6 +3559,8 @@ def main() -> int:
     ordered_ids = tuple(sorted(task_ids))
 
     load_ids = set(ordered_ids)
+    if change_type == "任务登记" and ordered_ids == (TASK100_CONTRACT_REPAIR_EXECUTOR,):
+        load_ids.add(TASK100_CONTRACT_REPAIR_GOVERNANCE)
     if change_type == BLOCKED_CONTRACT_REPAIR_TYPE and len(ordered_ids) == 1:
         target_id = {
             BLOCKED_CONTRACT_REPAIR_EXECUTOR: BLOCKED_CONTRACT_REPAIR_TARGET,
@@ -3466,6 +3573,13 @@ def main() -> int:
         and ordered_ids == (TASK094_CONTRACT_REPAIR_EXECUTOR,)
     ):
         load_ids.add(TASK094_CONTRACT_REPAIR_TARGET)
+    if (
+        change_type == CONTRACT_CONFLICT_REPAIR_TYPE
+        and ordered_ids == (TASK100_CONTRACT_REPAIR_EXECUTOR,)
+    ):
+        load_ids.update(
+            {TASK100_CONTRACT_REPAIR_GOVERNANCE, TASK100_CONTRACT_REPAIR_TARGET}
+        )
     loaded_ids = tuple(sorted(load_ids))
     base_tasks = _load_ref_tasks(repo_root, arguments.base_ref, loaded_ids)
     head_tasks = _load_ref_tasks(repo_root, arguments.head_ref, loaded_ids)
