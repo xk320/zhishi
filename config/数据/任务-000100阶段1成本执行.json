@@ -1,0 +1,51 @@
+{
+  "合同版本": "stage1-cost-execution-evidence-1.0",
+  "任务编号": "任务-000100",
+  "SSH逻辑别名": "ubuntu",
+  "数据库": "orderbook",
+  "标的": ["BTCUSDT", "ETHUSDT"],
+  "交易场所": "Binance",
+  "市场": "USDⓈ-M永续合约",
+  "方向": ["做多", "做空"],
+  "阶段": ["入场", "退出"],
+  "主研究尺度": ["主研究尺度：4小时", "主研究尺度：8小时", "主研究尺度：24小时", "主研究尺度：48小时"],
+  "事后观察窗口": ["15分钟", "1小时"],
+  "固定候选表": [
+    "order_book_raw_snapshots",
+    "order_book_feature_buckets",
+    "order_book_market_structure_snapshots",
+    "order_book_public_context_snapshots",
+    "symbol_metadata"
+  ],
+  "Binance公开端点": [
+    "/fapi/v1/exchangeInfo",
+    "/fapi/v1/depth",
+    "/fapi/v1/premiumIndex",
+    "/fapi/v1/fundingRate"
+  ],
+  "上游输入": {
+    "批次": "stage1-prior-frozen-replay-20260812T130000Z-ca8ae0a8ecd7",
+    "决策路径": "artifacts/审计/阶段1事前冻结决策重放/stage1-prior-frozen-replay-20260812T130000Z-ca8ae0a8ecd7/decision-published.json",
+    "决策SHA-256": "caec40c035a13b3e475c3829b7edac9db378252e343291b7c549be8625835d06",
+    "规范结果SHA-256": "d363c17bad6bbaa3a07ff0076b85c37e73ec41a3fb2d15929473c0e43c7a6e0b",
+    "候选总体": 5387,
+    "正式输入": 5180,
+    "质量已证明": 4789,
+    "质量拒绝": 391,
+    "来源拒绝": 207,
+    "连续段": 175,
+    "叶子": 8
+  },
+  "资源上限": {
+    "单SQL秒": 30,
+    "SQL总数": 24,
+    "单SQL估算扫描行": 250000,
+    "批次估算扫描行": 1000000,
+    "返回聚合行": 10000,
+    "业务读取字节": 268435456,
+    "远端日志字节": 65536,
+    "本地输出字节": 33554432,
+    "RSS字节": 536870912,
+    "总时限秒": 900
+  }
+}
