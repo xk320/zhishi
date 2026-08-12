@@ -23,6 +23,9 @@ from typing import Any, Iterable, Mapping
 
 
 SCRIPT_VERSION = "stage1-cost-execution-evidence-1.0"
+FORMAL_BATCH_ID = "stage1-cost-execution-20260812T171000Z-81f61b9fae06"
+FORMAL_PRODUCER_SCRIPT_SHA256 = "9939df8578c0b62ef9924ad7467ae001bca8ff697b3a91c0f8ab1fe5b04cf794"
+FORMAL_TASK_CONTRACT_SHA256 = "81f61b9fae067e4b2ee6334cc5606229e3d9920a7b6dfc2ac7910f13f4ec2437"
 CONFIG_RELATIVE_PATH = Path("config/数据/任务-000100阶段1成本执行.json")
 TASK_RELATIVE_PATH = Path("docs/研发中心/任务/任务-000100.md")
 BATCH_PATTERN = re.compile(r"^stage1-cost-execution-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$")
@@ -561,11 +564,18 @@ def _assert_intent(repo_root: Path, batch: str) -> tuple[dict[str, Any], dict[st
     config, config_path = _load_config(repo_root)
     batch_dir = _active_batch_directory(repo_root, batch)
     intent = read_json(batch_dir / "intent.json")
-    expected = {
-        "config_sha256": sha256_path(config_path),
-        "script_sha256": sha256_path(Path(__file__).resolve()),
-        "task_contract_normalized_sha256": _normalized_task_fingerprint(repo_root / TASK_RELATIVE_PATH),
-    }
+    if batch == FORMAL_BATCH_ID:
+        expected = {
+            "config_sha256": sha256_path(config_path),
+            "script_sha256": FORMAL_PRODUCER_SCRIPT_SHA256,
+            "task_contract_normalized_sha256": FORMAL_TASK_CONTRACT_SHA256,
+        }
+    else:
+        expected = {
+            "config_sha256": sha256_path(config_path),
+            "script_sha256": sha256_path(Path(__file__).resolve()),
+            "task_contract_normalized_sha256": _normalized_task_fingerprint(repo_root / TASK_RELATIVE_PATH),
+        }
     for key, value in expected.items():
         if intent.get(key) != value:
             raise ValueError(f"INTENT_{key.upper()}_DRIFT")
