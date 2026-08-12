@@ -11,7 +11,7 @@ SCRIPT = ROOT / "scripts" / "审计" / "审计阶段1新正式输入时间质量
 CONFIG = ROOT / "config" / "审计" / "任务-000094逐行时间质量审计.json"
 FORMAL_BATCH = ROOT / "artifacts" / "审计" / "阶段1新候选集重算" / "stage1-candidate-recompute-20260811T145500Z-22191bf6b82a"
 SCANNER_SOURCE = ROOT / "scripts" / "审计" / "阶段1时间质量扫描器.c"
-FINAL_BATCH = ROOT / "artifacts" / "审计" / "阶段1逐行时间质量" / "stage1-time-quality-20260812T061600Z-6968246516ef"
+FINAL_BATCH = ROOT / "artifacts" / "审计" / "阶段1逐行时间质量" / "stage1-time-quality-20260812T075100Z-6968246516ef"
 
 
 def load_auditor():
@@ -275,11 +275,35 @@ class Stage1TimeQualityAuditTests(unittest.TestCase):
                 "历史重放": {"status": "无法判定", "reason_code": "REPLAY", "evidence_refs": ["d"], "release_conditions": ["d"]},
             },
         }]
-        updated = self.auditor.update_gate_leaves(old, {"BTC": 10}, {"BTC": 10}, {"BTC": 2})
+        btc_trades = ("BTC", "BTCUSDT", "trades")
+        updated = self.auditor.update_gate_leaves(
+            old, {btc_trades: 10}, {btc_trades: 10}, {btc_trades: 2}
+        )
         self.assertEqual("通过", updated[0]["gates"]["三类时间"]["status"])
         self.assertEqual("通过", updated[0]["gates"]["质量"]["status"])
         self.assertEqual(old[0]["gates"]["历史重放"], updated[0]["gates"]["历史重放"])
         self.assertEqual("阻塞", updated[0]["decision"])
+
+    def test_同一标的不同数据对象不得互相补偿连续覆盖(self):
+        old = [{
+            "underlying": "BTC", "horizon_hours": 48, "decision": "阻塞",
+            "gates": {
+                "来源身份": {"status": "通过"},
+                "三类时间": {"status": "无法判定"},
+                "质量": {"status": "无法判定"},
+                "历史重放": {"status": "无法判定"},
+            },
+        }]
+        trades = ("BTC", "BTCUSDT", "trades")
+        agg_trades = ("BTC", "BTCUSDT", "aggTrades")
+        updated = self.auditor.update_gate_leaves(
+            old,
+            {trades: 10, agg_trades: 10},
+            {trades: 10, agg_trades: 10},
+            {trades: 10, agg_trades: 1},
+        )
+        self.assertEqual("无法判定", updated[0]["gates"]["三类时间"]["status"])
+        self.assertEqual("无法判定", updated[0]["gates"]["质量"]["status"])
 
     def test_列式结果分片可逆且确定(self):
         records = [
