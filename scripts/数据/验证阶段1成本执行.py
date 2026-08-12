@@ -257,8 +257,8 @@ def validate_query_manifest(queries: list[Mapping[str, Any]], *, max_queries: in
         raise ValueError("QUERY_IDENTITY_INVALID")
 
 
-def validate_public_url(url: str, config: Mapping[str, Any]) -> bool:
-    parsed = urllib.parse.urlsplit(url)
+def validate_public_url(request_uri: str, config: Mapping[str, Any]) -> bool:
+    parsed = urllib.parse.urlsplit(request_uri)
     if (
         parsed.scheme != "https"
         or parsed.hostname != "fapi.binance.com"
