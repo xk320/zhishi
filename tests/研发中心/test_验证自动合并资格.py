@@ -3079,6 +3079,28 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         self.assertFalse(result.eligible)
         self.assertIn("阻塞状态闭环字段位置无效", result.reasons)
 
+    def test_合并后状态闭环拒绝首次补齐空解除条件(self):
+        base_task, head_task = self._首次补齐解除条件任务对()
+        head_task = head_task.replace(
+            "- 解除条件：任务-000012完成后重新执行。\n",
+            "- 解除条件：\n",
+            1,
+        )
+        result = self._评估首次补齐解除条件(base_task, head_task)
+
+        self.assertFalse(result.eligible)
+        self.assertIn("阻塞状态闭环字段位置无效", result.reasons)
+
+    def test_合并后状态闭环拒绝已有执行分支被覆盖(self):
+        base_task, head_task = self._首次补齐解除条件任务对()
+        base_task = base_task.replace(
+            "- 优先级：P1\n", "- 优先级：P1\n- 执行分支：`old-branch`\n", 1
+        )
+        result = self._评估首次补齐解除条件(base_task, head_task)
+
+        self.assertFalse(result.eligible)
+        self.assertIn("阻塞状态闭环字段位置无效", result.reasons)
+
     def test_合并后状态闭环拒绝首次补齐解除条件时改写合同(self):
         base_task, head_task = self._首次补齐解除条件任务对()
         head_task = head_task.replace("- 优先级：P1", "- 优先级：P0", 1)

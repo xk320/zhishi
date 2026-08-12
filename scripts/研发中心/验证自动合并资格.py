@@ -1454,6 +1454,8 @@ def _successor_mutable_layout(
         or not all(in_record(index) or section_start < index < section_end for index in release_locations)
     ):
         return None
+    if section_releases and not lines[section_releases[0]].split("：", 1)[1].strip():
+        return None
     return "dependency_section", first_section, section_start, section_end
 
 
@@ -1658,9 +1660,13 @@ def _validate_blocking_transition(
     allow_initial_metadata = (
         old_status == "待执行" and not baseline_has_execution_metadata
     )
+    allow_missing_dependency_release = (
+        allow_initial_metadata
+        and _header_field_line(base_task, "- 执行分支：") is None
+    )
     base_layout = _successor_mutable_layout(
         base_task,
-        allow_missing_dependency_release=allow_initial_metadata,
+        allow_missing_dependency_release=allow_missing_dependency_release,
     )
     head_layout = _successor_mutable_layout(head_task)
     if (
@@ -1673,7 +1679,7 @@ def _validate_blocking_transition(
     if _without_blocking_mutable_lines(
         base_task,
         allow_initial_metadata=allow_initial_metadata,
-        allow_missing_dependency_release=allow_initial_metadata,
+        allow_missing_dependency_release=allow_missing_dependency_release,
     ) != _without_blocking_mutable_lines(
         head_task, allow_initial_metadata=allow_initial_metadata
     ):
