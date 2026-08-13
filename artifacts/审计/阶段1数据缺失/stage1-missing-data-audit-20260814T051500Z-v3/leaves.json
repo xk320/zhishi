@@ -1,0 +1,498 @@
+[
+  {
+    "candidate_total": 2945,
+    "continuous_coverage": false,
+    "continuous_segment_count": 51,
+    "continuous_segment_day_count": 2689,
+    "covered_date_count": 2689,
+    "decision": "数据缺失审计，不构成研究准入或交易许可",
+    "formal_member_count": 2937,
+    "formal_status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 2689,
+      "拒绝": 248,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "group_coverage": [
+      {
+        "candidate_total": 423,
+        "continuous_segment_count": 1,
+        "continuous_segment_day_count": 423,
+        "covered_date_count": 423,
+        "formal_member_count": 423,
+        "group": "BTCUSDT-aggTrades",
+        "missing_date_count": 0,
+        "source_rejected_count": 0
+      },
+      {
+        "candidate_total": 2522,
+        "continuous_segment_count": 50,
+        "continuous_segment_day_count": 2266,
+        "covered_date_count": 2266,
+        "formal_member_count": 2514,
+        "group": "BTCUSDT-trades",
+        "missing_date_count": 256,
+        "source_rejected_count": 8
+      }
+    ],
+    "horizon_hours": 4,
+    "market_type": "USDⓈ-M合约",
+    "missing_date_count": 256,
+    "missing_member_count": 0,
+    "observed": 2937,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "source_rejected_count": 8,
+    "source_rejected_status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 0,
+      "拒绝": 8,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 2689,
+      "拒绝": 256,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "underlying": "BTC",
+    "venue": "Binance"
+  },
+  {
+    "candidate_total": 2945,
+    "continuous_coverage": false,
+    "continuous_segment_count": 51,
+    "continuous_segment_day_count": 2689,
+    "covered_date_count": 2689,
+    "decision": "数据缺失审计，不构成研究准入或交易许可",
+    "formal_member_count": 2937,
+    "formal_status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 2689,
+      "拒绝": 248,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "group_coverage": [
+      {
+        "candidate_total": 423,
+        "continuous_segment_count": 1,
+        "continuous_segment_day_count": 423,
+        "covered_date_count": 423,
+        "formal_member_count": 423,
+        "group": "BTCUSDT-aggTrades",
+        "missing_date_count": 0,
+        "source_rejected_count": 0
+      },
+      {
+        "candidate_total": 2522,
+        "continuous_segment_count": 50,
+        "continuous_segment_day_count": 2266,
+        "covered_date_count": 2266,
+        "formal_member_count": 2514,
+        "group": "BTCUSDT-trades",
+        "missing_date_count": 256,
+        "source_rejected_count": 8
+      }
+    ],
+    "horizon_hours": 8,
+    "market_type": "USDⓈ-M合约",
+    "missing_date_count": 256,
+    "missing_member_count": 0,
+    "observed": 2937,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "source_rejected_count": 8,
+    "source_rejected_status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 0,
+      "拒绝": 8,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 2689,
+      "拒绝": 256,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "underlying": "BTC",
+    "venue": "Binance"
+  },
+  {
+    "candidate_total": 2945,
+    "continuous_coverage": false,
+    "continuous_segment_count": 51,
+    "continuous_segment_day_count": 2689,
+    "covered_date_count": 2689,
+    "decision": "数据缺失审计，不构成研究准入或交易许可",
+    "formal_member_count": 2937,
+    "formal_status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 2689,
+      "拒绝": 248,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "group_coverage": [
+      {
+        "candidate_total": 423,
+        "continuous_segment_count": 1,
+        "continuous_segment_day_count": 423,
+        "covered_date_count": 423,
+        "formal_member_count": 423,
+        "group": "BTCUSDT-aggTrades",
+        "missing_date_count": 0,
+        "source_rejected_count": 0
+      },
+      {
+        "candidate_total": 2522,
+        "continuous_segment_count": 50,
+        "continuous_segment_day_count": 2266,
+        "covered_date_count": 2266,
+        "formal_member_count": 2514,
+        "group": "BTCUSDT-trades",
+        "missing_date_count": 256,
+        "source_rejected_count": 8
+      }
+    ],
+    "horizon_hours": 24,
+    "market_type": "USDⓈ-M合约",
+    "missing_date_count": 256,
+    "missing_member_count": 0,
+    "observed": 2937,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "source_rejected_count": 8,
+    "source_rejected_status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 0,
+      "拒绝": 8,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 2689,
+      "拒绝": 256,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "underlying": "BTC",
+    "venue": "Binance"
+  },
+  {
+    "candidate_total": 2945,
+    "continuous_coverage": false,
+    "continuous_segment_count": 51,
+    "continuous_segment_day_count": 2689,
+    "covered_date_count": 2689,
+    "decision": "数据缺失审计，不构成研究准入或交易许可",
+    "formal_member_count": 2937,
+    "formal_status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 2689,
+      "拒绝": 248,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "group_coverage": [
+      {
+        "candidate_total": 423,
+        "continuous_segment_count": 1,
+        "continuous_segment_day_count": 423,
+        "covered_date_count": 423,
+        "formal_member_count": 423,
+        "group": "BTCUSDT-aggTrades",
+        "missing_date_count": 0,
+        "source_rejected_count": 0
+      },
+      {
+        "candidate_total": 2522,
+        "continuous_segment_count": 50,
+        "continuous_segment_day_count": 2266,
+        "covered_date_count": 2266,
+        "formal_member_count": 2514,
+        "group": "BTCUSDT-trades",
+        "missing_date_count": 256,
+        "source_rejected_count": 8
+      }
+    ],
+    "horizon_hours": 48,
+    "market_type": "USDⓈ-M合约",
+    "missing_date_count": 256,
+    "missing_member_count": 0,
+    "observed": 2937,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "source_rejected_count": 8,
+    "source_rejected_status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 0,
+      "拒绝": 8,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 2689,
+      "拒绝": 256,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "underlying": "BTC",
+    "venue": "Binance"
+  },
+  {
+    "candidate_total": 2442,
+    "continuous_coverage": false,
+    "continuous_segment_count": 124,
+    "continuous_segment_day_count": 2100,
+    "covered_date_count": 2100,
+    "decision": "数据缺失审计，不构成研究准入或交易许可",
+    "formal_member_count": 2243,
+    "formal_status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 2100,
+      "拒绝": 143,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "group_coverage": [
+      {
+        "candidate_total": 2442,
+        "continuous_segment_count": 124,
+        "continuous_segment_day_count": 2100,
+        "covered_date_count": 2100,
+        "formal_member_count": 2243,
+        "group": "ETHUSDT-trades",
+        "missing_date_count": 342,
+        "source_rejected_count": 199
+      }
+    ],
+    "horizon_hours": 4,
+    "market_type": "USDⓈ-M合约",
+    "missing_date_count": 342,
+    "missing_member_count": 0,
+    "observed": 2243,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "source_rejected_count": 199,
+    "source_rejected_status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 0,
+      "拒绝": 199,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 2100,
+      "拒绝": 342,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "underlying": "ETH",
+    "venue": "Binance"
+  },
+  {
+    "candidate_total": 2442,
+    "continuous_coverage": false,
+    "continuous_segment_count": 124,
+    "continuous_segment_day_count": 2100,
+    "covered_date_count": 2100,
+    "decision": "数据缺失审计，不构成研究准入或交易许可",
+    "formal_member_count": 2243,
+    "formal_status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 2100,
+      "拒绝": 143,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "group_coverage": [
+      {
+        "candidate_total": 2442,
+        "continuous_segment_count": 124,
+        "continuous_segment_day_count": 2100,
+        "covered_date_count": 2100,
+        "formal_member_count": 2243,
+        "group": "ETHUSDT-trades",
+        "missing_date_count": 342,
+        "source_rejected_count": 199
+      }
+    ],
+    "horizon_hours": 8,
+    "market_type": "USDⓈ-M合约",
+    "missing_date_count": 342,
+    "missing_member_count": 0,
+    "observed": 2243,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "source_rejected_count": 199,
+    "source_rejected_status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 0,
+      "拒绝": 199,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 2100,
+      "拒绝": 342,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "underlying": "ETH",
+    "venue": "Binance"
+  },
+  {
+    "candidate_total": 2442,
+    "continuous_coverage": false,
+    "continuous_segment_count": 124,
+    "continuous_segment_day_count": 2100,
+    "covered_date_count": 2100,
+    "decision": "数据缺失审计，不构成研究准入或交易许可",
+    "formal_member_count": 2243,
+    "formal_status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 2100,
+      "拒绝": 143,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "group_coverage": [
+      {
+        "candidate_total": 2442,
+        "continuous_segment_count": 124,
+        "continuous_segment_day_count": 2100,
+        "covered_date_count": 2100,
+        "formal_member_count": 2243,
+        "group": "ETHUSDT-trades",
+        "missing_date_count": 342,
+        "source_rejected_count": 199
+      }
+    ],
+    "horizon_hours": 24,
+    "market_type": "USDⓈ-M合约",
+    "missing_date_count": 342,
+    "missing_member_count": 0,
+    "observed": 2243,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "source_rejected_count": 199,
+    "source_rejected_status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 0,
+      "拒绝": 199,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 2100,
+      "拒绝": 342,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "underlying": "ETH",
+    "venue": "Binance"
+  },
+  {
+    "candidate_total": 2442,
+    "continuous_coverage": false,
+    "continuous_segment_count": 124,
+    "continuous_segment_day_count": 2100,
+    "covered_date_count": 2100,
+    "decision": "数据缺失审计，不构成研究准入或交易许可",
+    "formal_member_count": 2243,
+    "formal_status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 2100,
+      "拒绝": 143,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "group_coverage": [
+      {
+        "candidate_total": 2442,
+        "continuous_segment_count": 124,
+        "continuous_segment_day_count": 2100,
+        "covered_date_count": 2100,
+        "formal_member_count": 2243,
+        "group": "ETHUSDT-trades",
+        "missing_date_count": 342,
+        "source_rejected_count": 199
+      }
+    ],
+    "horizon_hours": 48,
+    "market_type": "USDⓈ-M合约",
+    "missing_date_count": 342,
+    "missing_member_count": 0,
+    "observed": 2243,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "source_rejected_count": 199,
+    "source_rejected_status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 0,
+      "拒绝": 199,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "status_counts": {
+      "失效": 0,
+      "失败": 0,
+      "已证明": 2100,
+      "拒绝": 342,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "underlying": "ETH",
+    "venue": "Binance"
+  }
+]
