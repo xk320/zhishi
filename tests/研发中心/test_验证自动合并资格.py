@@ -1542,7 +1542,9 @@ class AutoMergeEligibilityTests(unittest.TestCase):
     def evaluate_blocked_repair(self, **overrides):
         return self.policy.evaluate_eligibility(**self.blocked_repair_inputs(**overrides))
 
-    def root_readonly_contract_repair_inputs(self, *, mutate_target: str = ""):
+    def root_readonly_contract_repair_inputs(
+        self, *, mutate_target: str = "", target_status: str = "阻塞"
+    ):
         executor = re.sub(
             r"^- 状态：[^\n]+$",
             "- 状态：已完成",
@@ -1558,6 +1560,9 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         root_section = self.policy.ROOT_READONLY_COMPAT_SECTION.strip()
         if root_section in target_base:
             target_base = target_base.split(root_section, 1)[0].rstrip("\n") + "\n"
+        target_base = target_base.replace(
+            "- 状态：阻塞", f"- 状态：{target_status}", 1
+        )
         target_head = target_base.rstrip("\n") + "\n\n" + self.policy.ROOT_READONLY_COMPAT_SECTION.strip() + "\n"
         if mutate_target == "status":
             target_head = target_head.replace("- 状态：阻塞", "- 状态：待执行", 1)
@@ -1604,6 +1609,13 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         drifted = self.evaluate_root_readonly_contract_repair(mutate_target="drift")
         self.assertFalse(drifted.eligible)
         self.assertIn("任务-000084只能追加固定root兼容合同段落", drifted.reasons)
+
+    def test_root只读兼容合同修复拒绝已取消目标(self):
+        result = self.evaluate_root_readonly_contract_repair(
+            target_status="已取消"
+        )
+        self.assertFalse(result.eligible)
+        self.assertIn("目标任务-000084已取消，旧root兼容映射已关闭", result.reasons)
 
     def test_root合同修复禁止治理策略和看板路径(self):
         inputs = self.root_readonly_contract_repair_inputs()

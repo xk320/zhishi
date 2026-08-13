@@ -2147,7 +2147,10 @@ def _validate_blocked_contract_repair(
             _append_reason(reasons, "任务-000056类型不是治理")
         if _task_field(AUTOMATION_SCOPE_PATTERN, executor_base) != AUTOMATION_SCOPE:
             _append_reason(reasons, "任务-000056未声明治理自动化授权")
-    if _task_field(TASK_STATUS_PATTERN, target_base) != "阻塞":
+    target_base_status = _task_field(TASK_STATUS_PATTERN, target_base)
+    if target_base_status == "已取消":
+        _append_reason(reasons, f"目标任务-{target_id}已取消，旧root兼容映射已关闭")
+    elif target_base_status != "阻塞":
         _append_reason(reasons, f"目标任务-{target_id}基线状态不是阻塞")
     if _task_field(TASK_STATUS_PATTERN, target_head) != "阻塞":
         _append_reason(reasons, f"目标任务-{target_id}状态不得在合同修复中迁移")
