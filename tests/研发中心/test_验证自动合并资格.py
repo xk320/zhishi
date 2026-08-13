@@ -1560,8 +1560,12 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         root_section = self.policy.ROOT_READONLY_COMPAT_SECTION.strip()
         if root_section in target_base:
             target_base = target_base.split(root_section, 1)[0].rstrip("\n") + "\n"
-        target_base = target_base.replace(
-            "- 状态：阻塞", f"- 状态：{target_status}", 1
+        target_base = re.sub(
+            r"^- 状态：[^\n]+$",
+            f"- 状态：{target_status}",
+            target_base,
+            count=1,
+            flags=re.MULTILINE,
         )
         target_head = target_base.rstrip("\n") + "\n\n" + self.policy.ROOT_READONLY_COMPAT_SECTION.strip() + "\n"
         if mutate_target == "status":
