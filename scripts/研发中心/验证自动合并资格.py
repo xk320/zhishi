@@ -3431,6 +3431,7 @@ def _derive_merge_facts(
     repo_root: Path,
     base_ref: str,
     head_tasks: Mapping[str, str],
+    referenced_prs: Mapping[str, object] | None = None,
 ) -> dict[str, MergeFact]:
     """只从已进入main基线的Git提交推导合并事实。"""
 
@@ -3463,14 +3464,51 @@ def _derive_merge_facts(
             )
             parents = parents_text.split() if parents_text else []
             delivery_match = DELIVERY_SHA_PATTERN.search(task)
-            if (
-                len(parents) != 2
-                or delivery_match is None
-                or not _git_is_ancestor(repo_root, parents[0], base_ref)
-                or not _git_is_ancestor(repo_root, delivery_match.group(1), parents[1])
-            ):
+            if len(parents) == 2:
+                if (
+                    delivery_match is None
+                    or not _git_is_ancestor(repo_root, parents[0], base_ref)
+                    or not _git_is_ancestor(repo_root, delivery_match.group(1), parents[1])
+                ):
+                    continue
+                pr_number = declared.pr_number
+            elif len(parents) == 1:
+                # GitHub squash merge产生单父提交，不能仅凭提交正文推断为PR合并。
+                # 只有工作流从GitHub API读取到同号、已合并、目标main且
+                # merge_commit_sha精确匹配的PR事实时才接受；父提交必须仍在
+                # 当前main祖先链中，防止任意单父提交冒充合并事实。
+                evidence = (
+                    referenced_prs.get(str(declared.pr_number))
+                    if isinstance(referenced_prs, Mapping)
+                    else None
+                )
+                if not isinstance(evidence, Mapping):
+                    continue
+                if (
+                    evidence.get("number") != declared.pr_number
+                    or evidence.get("state") != "closed"
+                    or not evidence.get("merged_at")
+                    or evidence.get("merge_commit_sha") != declared.sha
+                    or evidence.get("base_ref") != "main"
+                    or evidence.get("base_repo") != "xk320/zhishi"
+                    or evidence.get("head_repo") != "xk320/zhishi"
+                    or not re.fullmatch(r"[0-9a-f]{40}", str(evidence.get("head_sha", "")))
+                    or not _git_is_ancestor(repo_root, parents[0], base_ref)
+                ):
+                    continue
+                evidence_base_sha = evidence.get("base_sha")
+                if (
+                    isinstance(evidence_base_sha, str)
+                    and re.fullmatch(r"[0-9a-f]{40}", evidence_base_sha)
+                    and not (
+                        parents[0] == evidence_base_sha
+                        or _git_is_ancestor(repo_root, evidence_base_sha, base_ref)
+                    )
+                ):
+                    continue
+                pr_number = declared.pr_number
+            else:
                 continue
-            pr_number = declared.pr_number
         else:
             pr_number = int(pr_match.group(1))
         try:
@@ -3637,6 +3675,7 @@ def main() -> int:
             repo_root,
             arguments.base_ref,
             head_tasks,
+            referenced_prs=metadata.get("referenced_prs"),
         ),
         base_board=_read_path_at_ref(
             repo_root, arguments.base_ref, "docs/研发中心/看板.md"
