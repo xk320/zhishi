@@ -109,6 +109,14 @@ def git_head(cwd: pathlib.Path) -> str | None:
     return result.stdout.strip() or None
 
 
+def git_blob_sha(cwd: pathlib.Path, relative_path: str) -> str | None:
+    try:
+        result = subprocess.run(["git", "rev-parse", f"HEAD:{relative_path}"], cwd=cwd, check=True, capture_output=True, text=True)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return result.stdout.strip() or None
+
+
 def load_inputs(repo_root: pathlib.Path, config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, pathlib.Path]]:
     input_root = repo_root / config["input_root"]
     if not input_root.is_dir():
@@ -202,10 +210,16 @@ def validate_segments(raw: Any, covered: dict[str, set[str]]) -> list[dict[str, 
     return normalized
 
 
-def build_groups(members: list[dict[str, Any]], segments: list[dict[str, Any]], config: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def build_groups(members: list[dict[str, Any]], source_rejected: list[dict[str, Any]], segments: list[dict[str, Any]], config: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     by_group: dict[str, list[dict[str, Any]]] = collections.defaultdict(list)
     for item in members:
         by_group[item["group"]].append(item)
+    rejected_by_group: dict[str, list[dict[str, Any]]] = collections.defaultdict(list)
+    for item in source_rejected:
+        group = item.get("group")
+        if not isinstance(group, str):
+            raise AuditError("SOURCE_REJECTED_GROUP_MISSING")
+        rejected_by_group[group].append(item)
     covered: dict[str, set[str]] = {}
     groups: list[dict[str, Any]] = []
     missing_rows: list[dict[str, Any]] = []
@@ -224,16 +238,23 @@ def build_groups(members: list[dict[str, Any]], segments: list[dict[str, Any]], 
         group_fields = {field: rows[0].get(field) for field in GROUP_FIELDS}
         if any(any(item.get(field) != group_fields[field] for field in GROUP_FIELDS) for item in rows):
             raise AuditError(f"GROUP_FIELDS_DRIFT:{group_key}")
-        status_counts = {status: int(statuses.get(status, 0)) for status in STATUS_ORDER}
-        if sum(status_counts.values()) != len(rows):
+        formal_status_counts = {status: int(statuses.get(status, 0)) for status in STATUS_ORDER}
+        if sum(formal_status_counts.values()) != len(rows):
             raise AuditError(f"STATUS_COUNT_NOT_CONSERVE:{group_key}")
+        source_rejected_count = len(rejected_by_group.get(group_key, []))
+        source_rejected_status_counts = {status: source_rejected_count if status == "拒绝" else 0 for status in STATUS_ORDER}
+        status_counts = {status: formal_status_counts[status] + source_rejected_status_counts[status] for status in STATUS_ORDER}
         segment_day_count = sum(int(item["day_count"]) for item in segment_rows)
         if segment_day_count != len(good_dates):
             raise AuditError(f"SEGMENT_DAY_COUNT_NOT_CONSERVE:{group_key}")
         group_result = {
             **group_fields,
-            "candidate_total": len(rows),
+            "candidate_total": len(rows) + source_rejected_count,
+            "formal_member_count": len(rows),
             "observed": len(rows),
+            "source_rejected_count": source_rejected_count,
+            "formal_status_counts": formal_status_counts,
+            "source_rejected_status_counts": source_rejected_status_counts,
             "status_counts": status_counts,
             "missing_member_count": 0,
             "missing_date_count": len(missing_dates),
@@ -259,12 +280,19 @@ def build_leaves(raw: Any, groups: list[dict[str, Any]], config: dict[str, Any])
         raise AuditError("LEAF_COUNT_INVALID")
     group_by_underlying: dict[str, dict[str, Any]] = {}
     for group in groups:
-        group_by_underlying.setdefault(group["underlying"], {"candidate_total": 0, "observed": 0, "status_counts": {status: 0 for status in STATUS_ORDER}})
+        group_by_underlying.setdefault(group["underlying"], {"candidate_total": 0, "formal_member_count": 0, "observed": 0, "source_rejected_count": 0, "formal_status_counts": {status: 0 for status in STATUS_ORDER}, "source_rejected_status_counts": {status: 0 for status in STATUS_ORDER}, "status_counts": {status: 0 for status in STATUS_ORDER}, "continuous_segment_count": 0, "continuous_segment_day_count": 0, "covered_date_count": 0})
         aggregate = group_by_underlying[group["underlying"]]
         aggregate["candidate_total"] += group["candidate_total"]
+        aggregate["formal_member_count"] += group["formal_member_count"]
         aggregate["observed"] += group["observed"]
+        aggregate["source_rejected_count"] += group["source_rejected_count"]
         for status in STATUS_ORDER:
+            aggregate["formal_status_counts"][status] += group["formal_status_counts"][status]
+            aggregate["source_rejected_status_counts"][status] += group["source_rejected_status_counts"][status]
             aggregate["status_counts"][status] += group["status_counts"][status]
+        aggregate["continuous_segment_count"] += group["continuous_segment_count"]
+        aggregate["continuous_segment_day_count"] += group["continuous_segment_day_count"]
+        aggregate["covered_date_count"] += group["covered_date_count"]
     leaves: list[dict[str, Any]] = []
     seen: set[tuple[str, int]] = set()
     for leaf in raw:
@@ -275,18 +303,39 @@ def build_leaves(raw: Any, groups: list[dict[str, Any]], config: dict[str, Any])
             raise AuditError(f"LEAF_KEY_INVALID:{key}")
         seen.add(key)
         aggregate = group_by_underlying[key[0]]
-        if leaf.get("formal_member_count") != aggregate["candidate_total"] or leaf.get("observed_member_count") != aggregate["observed"]:
+        if leaf.get("formal_member_count") != aggregate["formal_member_count"] or leaf.get("observed_member_count") != aggregate["observed"]:
             raise AuditError(f"LEAF_MEMBER_COUNT_DRIFT:{key}")
+        group_coverage = [
+            {
+                "group": group["group"],
+                "candidate_total": group["candidate_total"],
+                "formal_member_count": group["formal_member_count"],
+                "source_rejected_count": group["source_rejected_count"],
+                "missing_date_count": group["missing_date_count"],
+                "covered_date_count": group["covered_date_count"],
+                "continuous_segment_count": group["continuous_segment_count"],
+                "continuous_segment_day_count": group["continuous_segment_day_count"],
+            }
+            for group in groups if group["underlying"] == key[0]
+        ]
         leaves.append({
             "underlying": key[0],
             "horizon_hours": key[1],
             "market_type": leaf.get("market_type"),
             "venue": leaf.get("venue"),
             "candidate_total": aggregate["candidate_total"],
+            "formal_member_count": aggregate["formal_member_count"],
             "observed": aggregate["observed"],
+            "source_rejected_count": aggregate["source_rejected_count"],
+            "formal_status_counts": aggregate["formal_status_counts"],
+            "source_rejected_status_counts": aggregate["source_rejected_status_counts"],
             "status_counts": aggregate["status_counts"],
             "missing_member_count": 0,
             "missing_date_count": sum(group["missing_date_count"] for group in groups if group["underlying"] == key[0]),
+            "covered_date_count": aggregate["covered_date_count"],
+            "continuous_segment_count": aggregate["continuous_segment_count"],
+            "continuous_segment_day_count": aggregate["continuous_segment_day_count"],
+            "group_coverage": group_coverage,
             "continuous_coverage": all(group["coverage_continuous"] for group in groups if group["underlying"] == key[0]),
             "post_event_observation_minutes": list(config["post_event_observation_minutes"]),
             "decision": "数据缺失审计，不构成研究准入或交易许可",
@@ -337,16 +386,18 @@ def run(repo_root: pathlib.Path, config_path: pathlib.Path, output_root: pathlib
     members = decode_members(loaded["members-001.json"], config)
     if len(members) != int(summary["formal_member_count"]):
         raise AuditError("MEMBER_COUNT_NOT_CONSERVE")
-    segments = validate_segments(loaded["segments.json"], {}) if not loaded["segments.json"] else loaded["segments.json"]
-    groups, missing_rows = build_groups(members, segments, config)
+    segments = loaded["segments.json"]
+    groups, missing_rows = build_groups(members, source_rejected, segments, config)
     leaves = build_leaves(loaded["leaves.json"], groups, config)
-    computed_status = {status: sum(group["status_counts"][status] for group in groups) for status in STATUS_ORDER}
-    if computed_status != {status: int(summary["status_counts"].get(status, 0)) for status in STATUS_ORDER}:
+    computed_formal_status = {status: sum(group["formal_status_counts"][status] for group in groups) for status in STATUS_ORDER}
+    if computed_formal_status != {status: int(summary["status_counts"].get(status, 0)) for status in STATUS_ORDER}:
         raise AuditError("COMPUTED_STATUS_NOT_CONSERVE")
-    formal_count = sum(group["candidate_total"] for group in groups)
+    computed_status = {status: sum(group["status_counts"][status] for group in groups) for status in STATUS_ORDER}
+    formal_count = sum(group["formal_member_count"] for group in groups)
+    candidate_count = sum(group["candidate_total"] for group in groups)
     if formal_count != int(summary["formal_member_count"]):
         raise AuditError("GROUP_MEMBER_COUNT_NOT_CONSERVE")
-    if formal_count + len(source_rejected) != int(summary["candidate_total"]):
+    if candidate_count != int(summary["candidate_total"]):
         raise AuditError("CANDIDATE_TOTAL_NOT_CONSERVE")
     missing_members = [
         {"member_id": item["member_id"], "underlying": item["underlying"], "group": item["group"], "status": item["status"], "reason_codes": item["reason_codes"]}
@@ -373,9 +424,12 @@ def run(repo_root: pathlib.Path, config_path: pathlib.Path, output_root: pathlib
     executor = {
         "schema_version": "zhishi-stage1-missing-data-audit-executor/v1",
         "script": "scripts/审计/审计阶段1数据缺失.py",
+        "script_blob_sha256": git_blob_sha(repo_root, "scripts/审计/审计阶段1数据缺失.py"),
         "python": sys.version.split()[0],
         "git_head": git_head(repo_root),
     }
+    if not executor["git_head"] or not executor["script_blob_sha256"]:
+        raise AuditError("EXECUTOR_SOURCE_NOT_RESOLVABLE")
     executor_sha = canonical_sha256(executor)
     now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
     if batch_id is None:
@@ -398,11 +452,12 @@ def run(repo_root: pathlib.Path, config_path: pathlib.Path, output_root: pathlib
             "executor_sha256": executor_sha,
             "source_identity_audit_performed": False,
             "source_identity_fact_reused": True,
-            "candidate_total": int(summary["candidate_total"]),
+            "candidate_total": candidate_count,
             "formal_member_count": formal_count,
             "source_rejected_count": len(source_rejected),
             "observed": formal_count,
             "missing_member_count": len(missing_members),
+            "formal_status_counts": computed_formal_status,
             "status_counts": computed_status,
             "missing_date_count": len(missing_rows),
             "group_count": len(groups),
