@@ -1,0 +1,36 @@
+{
+  "covered_statuses": [
+    "已证明"
+  ],
+  "cross_underlying_compensation": false,
+  "group_dimensions": [
+    "标的",
+    "数据对象",
+    "合约"
+  ],
+  "horizons_hours": [
+    4,
+    8,
+    24,
+    48
+  ],
+  "missing_date_rule": "正式成员日期范围内不在已证明集合的日期；拒绝日期也属于缺失覆盖",
+  "missing_member_rule": "正式成员记录缺失或处于无法判定/失败/未成熟/失效状态",
+  "post_event_observation_minutes": [
+    15,
+    60
+  ],
+  "result_visible_reclassification": false,
+  "schema_version": "zhishi-stage1-missing-data-audit-rules/v1",
+  "source_identity_audit_performed": false,
+  "source_identity_fact_reused": true,
+  "status_order": [
+    "已证明",
+    "拒绝",
+    "无法判定",
+    "失败",
+    "未成熟",
+    "失效"
+  ],
+  "trading_or_research_conclusion": false
+}
