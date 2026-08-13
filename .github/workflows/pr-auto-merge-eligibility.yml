@@ -38,6 +38,7 @@ jobs:
         env:
           EVENT_PATH: ${{ github.event_path }}
           METADATA_PATH: ${{ runner.temp }}/pr-auto-merge-metadata.json
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 - <<'PY'
           import json

@@ -120,6 +120,12 @@ class EligibilityWorkflowTests(unittest.TestCase):
         self.assertIn('"head_repo": fact.get("head", {}).get("repo", {}).get("full_name")', self.text)
         self.assertIn("subprocess.run", self.text)
 
+    def test_关联合并事实读取注入只读GitHub令牌(self):
+        metadata_block = self.text.split(
+            "- name: 生成只读评审元数据", maxsplit=1
+        )[1].split("- name: 验证自动合并资格", maxsplit=1)[0]
+        self.assertIn("GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}", metadata_block)
+
 
 @unittest.skipUnless(MERGE_WORKFLOW.exists(), "等待合并工作流实现")
 class MergeWorkflowTests(unittest.TestCase):
