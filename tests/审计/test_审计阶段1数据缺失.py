@@ -30,11 +30,15 @@ class Stage1MissingAuditTests(unittest.TestCase):
             self.assertEqual(summary["candidate_total"], 5387)
             self.assertEqual(summary["formal_member_count"], 5180)
             self.assertEqual(summary["source_rejected_count"], 207)
-            self.assertEqual(summary["status_counts"], {"已证明": 4789, "拒绝": 391, "无法判定": 0, "失败": 0, "未成熟": 0, "失效": 0})
+            self.assertEqual(summary["formal_status_counts"], {"已证明": 4789, "拒绝": 391, "无法判定": 0, "失败": 0, "未成熟": 0, "失效": 0})
+            self.assertEqual(summary["status_counts"], {"已证明": 4789, "拒绝": 598, "无法判定": 0, "失败": 0, "未成熟": 0, "失效": 0})
             self.assertEqual(len(groups), 3)
             self.assertEqual(len(leaves), 8)
             self.assertGreater(summary["missing_date_count"], 0)
-            self.assertEqual(sum(group["candidate_total"] for group in groups), 5180)
+            self.assertEqual(sum(group["candidate_total"] for group in groups), 5387)
+            self.assertEqual(sum(group["source_rejected_count"] for group in groups), 207)
+            self.assertEqual({leaf["underlying"]: leaf["source_rejected_count"] for leaf in leaves}, {"BTC": 8, "ETH": 199})
+            self.assertTrue(all(leaf["continuous_segment_count"] > 0 for leaf in leaves))
 
     def test_date_ranges_are_compressed_deterministically(self):
         self.assertEqual(

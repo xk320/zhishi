@@ -1,0 +1,48 @@
+{
+  "batch_id": "stage1-missing-data-audit-20260814T051500Z-v3",
+  "candidate_total": 5387,
+  "created_at": "2026-08-13T21:15:09Z",
+  "decision": "只报告数据缺失；不产生来源身份、研究准入或交易许可结论",
+  "executor_sha256": "ee1d0ed05d71b52694f8eb25d7b89124099bcd0de418a6c0f628ea50ac78ac26",
+  "formal_member_count": 5180,
+  "formal_status_counts": {
+    "失效": 0,
+    "失败": 0,
+    "已证明": 4789,
+    "拒绝": 391,
+    "无法判定": 0,
+    "未成熟": 0
+  },
+  "group_count": 3,
+  "input_fingerprint": "7d01f26fe70874afd01d979fa3642bcf3de24c484ba5830b1d75f0a8d92325d0",
+  "input_root": "artifacts/审计/阶段1逐行时间质量/stage1-time-quality-20260812T091000Z-6968246516ef",
+  "leaf_count": 8,
+  "missing_date_count": 598,
+  "missing_member_count": 0,
+  "observed": 5180,
+  "post_event_observation_minutes": [
+    15,
+    60
+  ],
+  "replaces_task_id": "000084",
+  "research_horizons_hours": [
+    4,
+    8,
+    24,
+    48
+  ],
+  "rules_sha256": "694f17241a9d06cecf40d27bff46323e87ff43535e84913b1bc02c5b638e9517",
+  "schema_version": "zhishi-stage1-missing-data-audit-batch/v1",
+  "source_identity_audit_performed": false,
+  "source_identity_fact_reused": true,
+  "source_rejected_count": 207,
+  "status_counts": {
+    "失效": 0,
+    "失败": 0,
+    "已证明": 4789,
+    "拒绝": 598,
+    "无法判定": 0,
+    "未成熟": 0
+  },
+  "task_id": "000109"
+}
