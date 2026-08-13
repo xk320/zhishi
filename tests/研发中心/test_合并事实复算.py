@@ -113,6 +113,73 @@ class MergeFactDerivationTests(unittest.TestCase):
             self.policy._derive_merge_facts(repo, "main", {"000001": task}),
         )
 
+    def test_squash_merge_requires_matching_github_pr_evidence(self):
+        directory, repo = self.create_repo()
+        self.addCleanup(directory.cleanup)
+        base_sha = git(repo, "rev-parse", "HEAD")
+        git(repo, "switch", "-q", "-c", "delivery")
+        (repo / "README.md").write_text("delivery\n", encoding="utf-8")
+        git(repo, "commit", "-qam", "delivery")
+        head_sha = git(repo, "rev-parse", "HEAD")
+        git(repo, "switch", "-q", "main")
+        git(repo, "merge", "--squash", "-q", "delivery")
+        git(repo, "commit", "-qm", "squash merge")
+        merge_sha = git(repo, "rev-parse", "HEAD")
+        merge_time = git(repo, "show", "-s", "--format=%cI", merge_sha)
+        normalized_time = self.policy.datetime.fromisoformat(merge_time).strftime(
+            "%Y-%m-%d %H:%M:%S %z"
+        )
+        task = (
+            "- Pull Request：[#304](https://github.com/xk320/zhishi/pull/304)\n"
+            f"- 合并时间：{normalized_time}\n"
+            f"- 合并提交SHA：`{merge_sha}`\n"
+        )
+        evidence = {
+            "304": {
+                "number": 304,
+                "state": "closed",
+                "merged_at": "2026-08-14T05:22:35Z",
+                "merge_commit_sha": merge_sha,
+                "base_ref": "main",
+                "base_sha": base_sha,
+                "base_repo": "xk320/zhishi",
+                "head_sha": head_sha,
+                "head_repo": "xk320/zhishi",
+            }
+        }
+        facts = self.policy._derive_merge_facts(
+            repo, "main", {"000001": task}, referenced_prs=evidence
+        )
+        self.assertEqual(facts["000001"].pr_number, 304)
+        self.assertEqual(facts["000001"].sha, merge_sha)
+
+    def test_squash_merge_without_matching_pr_evidence_is_rejected(self):
+        directory, repo = self.create_repo()
+        self.addCleanup(directory.cleanup)
+        git(repo, "switch", "-q", "-c", "delivery")
+        (repo / "README.md").write_text("delivery\n", encoding="utf-8")
+        git(repo, "commit", "-qam", "delivery")
+        git(repo, "switch", "-q", "main")
+        git(repo, "merge", "--squash", "-q", "delivery")
+        git(repo, "commit", "-qm", "squash merge")
+        merge_sha = git(repo, "rev-parse", "HEAD")
+        merge_time = git(repo, "show", "-s", "--format=%cI", merge_sha)
+        normalized_time = self.policy.datetime.fromisoformat(merge_time).strftime(
+            "%Y-%m-%d %H:%M:%S %z"
+        )
+        task = (
+            "- Pull Request：[#304](https://github.com/xk320/zhishi/pull/304)\n"
+            f"- 合并时间：{normalized_time}\n"
+            f"- 合并提交SHA：`{merge_sha}`\n"
+        )
+        evidence = {"304": {"number": 304, "state": "closed", "merged_at": None}}
+        self.assertNotIn(
+            "000001",
+            self.policy._derive_merge_facts(
+                repo, "main", {"000001": task}, referenced_prs=evidence
+            ),
+        )
+
     def test_custom_subject_three_parents_is_rejected(self):
         directory, repo = self.create_repo()
         self.addCleanup(directory.cleanup)
