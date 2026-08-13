@@ -42,12 +42,15 @@ jobs:
           python3 - <<'PY'
           import json
           import os
+          import re
+          import subprocess
           from pathlib import Path
 
           event = json.loads(Path(os.environ["EVENT_PATH"]).read_text(encoding="utf-8"))
           pull_request = event["pull_request"]
+          body = pull_request.get("body") or ""
           metadata = {
-              "body": pull_request.get("body") or "",
+              "body": body,
               "base_ref": pull_request["base"]["ref"],
               "base_sha": pull_request["base"]["sha"],
               "head_ref": pull_request["head"]["ref"],
@@ -56,6 +59,39 @@ jobs:
               "repository": pull_request["base"]["repo"]["full_name"],
               "head_repository": pull_request["head"]["repo"]["full_name"],
           }
+          merge_fact_sections = re.findall(
+              r"(?ms)^## 关联合并事实\s*\n((?:\s*-\s*PR #\d+\s*\n?)+)",
+              body,
+          )
+          referenced_pr_numbers = []
+          if merge_fact_sections:
+              referenced_pr_numbers = re.findall(
+                  r"(?m)^\s*-\s*PR #(\d+)\s*$", merge_fact_sections[0]
+              )
+          if len(referenced_pr_numbers) > 2 or len(set(referenced_pr_numbers)) != len(referenced_pr_numbers):
+              raise SystemExit("关联合并事实PR编号重复或超过上限")
+          if referenced_pr_numbers:
+              referenced = {}
+              for number in referenced_pr_numbers:
+                  result = subprocess.run(
+                      ["gh", "api", f"repos/{pull_request['base']['repo']['full_name']}/pulls/{number}"],
+                      check=True,
+                      capture_output=True,
+                      text=True,
+                  )
+                  fact = json.loads(result.stdout)
+                  referenced[number] = {
+                      "number": fact.get("number"),
+                      "state": fact.get("state"),
+                      "merged_at": fact.get("merged_at"),
+                      "merge_commit_sha": fact.get("merge_commit_sha"),
+                      "base_ref": fact.get("base", {}).get("ref"),
+                      "base_sha": fact.get("base", {}).get("sha"),
+                      "base_repo": fact.get("base", {}).get("repo", {}).get("full_name"),
+                      "head_sha": fact.get("head", {}).get("sha"),
+                      "head_repo": fact.get("head", {}).get("repo", {}).get("full_name"),
+                  }
+              metadata["referenced_prs"] = referenced
           Path(os.environ["METADATA_PATH"]).write_text(
               json.dumps(metadata, ensure_ascii=False), encoding="utf-8"
           )
