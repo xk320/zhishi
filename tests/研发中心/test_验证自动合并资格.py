@@ -85,6 +85,49 @@ def task_text(
     )
 
 
+def synthetic_task115_pre_execution(text: str) -> str:
+    """构造与真实生命周期无关的任务115待执行合同基线。"""
+
+    lines = text.splitlines()
+    record_start = next(
+        (index for index, line in enumerate(lines) if line.strip() == "## 执行记录"),
+        len(lines),
+    )
+    mutable_prefixes = (
+        "- 状态：",
+        "- 执行分支：",
+        "- 开始时间：",
+        "- Pull Request：",
+        "- 实现提交SHA：",
+        "- 完成实现时间：",
+        "- 架构评审结论：",
+        "- 合并完成时间：",
+        "- 合并时间：",
+        "- 合并提交SHA：",
+    )
+    contract_lines = lines[:record_start]
+    normalized = [
+        line
+        for index, line in enumerate(contract_lines)
+        if not (
+            index < next(
+                (i for i, candidate in enumerate(contract_lines) if candidate.startswith("## ")),
+                len(contract_lines),
+            )
+            and any(line.startswith(prefix) for prefix in mutable_prefixes)
+        )
+    ]
+    normalized.insert(3, "- 状态：待执行")
+    return "\n".join(normalized).rstrip() + "\n"
+
+
+def synthetic_task106_unrevised(text: str, policy: ModuleType) -> str:
+    """从当前任务106正文逆向得到未追加覆盖受限章节的测试基线。"""
+
+    section = policy.STAGE1_COVERAGE_LIMITED_SECTION
+    return text.replace(section + "\n\n", "", 1)
+
+
 def task094_contract_versions(policy, current: str | None = None) -> tuple[str, str]:
     """严格接受任务-000094完整修复前或完整修复后合同。"""
 
@@ -1761,9 +1804,11 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             self.assertIn("任务-000066合同修复夹带两项字段以外的改写", result.reasons)
 
     def test_任务116基线补齐映射固定单字段且失败关闭(self):
-        target_base = (
-            REPO_ROOT / "docs/研发中心/任务/任务-000115.md"
-        ).read_text(encoding="utf-8")
+        target_base = synthetic_task115_pre_execution(
+            (REPO_ROOT / "docs/研发中心/任务/任务-000115.md").read_text(
+                encoding="utf-8"
+            )
+        )
         target_head = self.policy._apply_task116_contract_repair(target_base)
         self.assertIsNotNone(target_head)
         executor = task_text(status="已完成", title="建立阶段1合同修订的受控资格路径")
@@ -1798,9 +1843,11 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         self.assertIn("任务-000115未按固定单字段规则补齐当前阻塞原因", result.reasons)
 
     def test_阶段1覆盖受限合同修订固定115到106且拒绝目标状态迁移(self):
-        executor_base = (
-            REPO_ROOT / "docs/研发中心/任务/任务-000115.md"
-        ).read_text(encoding="utf-8")
+        executor_base = synthetic_task115_pre_execution(
+            (REPO_ROOT / "docs/研发中心/任务/任务-000115.md").read_text(
+                encoding="utf-8"
+            )
+        )
         executor_head = executor_base.replace(
             "- 状态：待执行", "- 状态：待评审", 1
         )
@@ -1813,9 +1860,12 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             "\n## 依赖与阻塞条件",
             1,
         )
-        target_base = (
-            REPO_ROOT / "docs/研发中心/任务/任务-000106.md"
-        ).read_text(encoding="utf-8")
+        target_base = synthetic_task106_unrevised(
+            (REPO_ROOT / "docs/研发中心/任务/任务-000106.md").read_text(
+                encoding="utf-8"
+            ),
+            self.policy,
+        )
         target_head = self.policy._apply_stage1_contract_repair(target_base)
         self.assertIsNotNone(target_head)
         board = (REPO_ROOT / "docs/研发中心/看板.md").read_text(encoding="utf-8")
