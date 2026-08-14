@@ -1851,8 +1851,16 @@ class AutoMergeEligibilityTests(unittest.TestCase):
                 "## 关联任务\n\n- 任务-000115\n\n"
                 "## 变更类型\n\n- 阶段1覆盖受限合同修订\n"
             ),
-            "base_tasks": {"000115": executor_base, "000106": target_base},
-            "head_tasks": {"000115": executor_head, "000106": target_head},
+            "base_tasks": {
+                "000115": executor_base,
+                "000106": target_base,
+                "000116": task_text(status="已完成"),
+            },
+            "head_tasks": {
+                "000115": executor_head,
+                "000106": target_head,
+                "000116": task_text(status="已完成"),
+            },
             "base_board": board,
             "head_board": head_board,
             "base_branch": "main",
@@ -1862,6 +1870,29 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         inputs["path_facts"] = [self.path_fact(path) for path in paths]
         result = self.policy.evaluate_eligibility(**inputs)
         self.assertTrue(result.eligible, result.reasons)
+
+        governance_pending = dict(inputs)
+        governance_pending["base_tasks"] = {
+            **inputs["base_tasks"],
+            "000116": task_text(status="待评审"),
+        }
+        result = self.policy.evaluate_eligibility(**governance_pending)
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000116基线状态必须为已完成", result.reasons)
+
+        extra_workflow = dict(inputs)
+        extra_workflow["changed_paths"] = paths + [
+            ".github/workflows/pr-auto-merge.yml"
+        ]
+        extra_workflow["path_facts"] = [
+            self.path_fact(path) for path in extra_workflow["changed_paths"]
+        ]
+        result = self.policy.evaluate_eligibility(**extra_workflow)
+        self.assertFalse(result.eligible)
+        self.assertIn(
+            "阶段1覆盖受限合同修订变更路径“.github/workflows/pr-auto-merge.yml”不允许自动合并",
+            result.reasons,
+        )
 
         mismatched_metadata = dict(inputs)
         mismatched_metadata["head_ref_name"] = "codex/other-branch"
@@ -1874,6 +1905,7 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         migrated["head_tasks"] = {
             "000115": executor_head,
             "000106": target_head.replace("- 状态：阻塞", "- 状态：待执行", 1),
+            "000116": task_text(status="已完成"),
         }
         result = self.policy.evaluate_eligibility(**migrated)
         self.assertFalse(result.eligible)
@@ -1883,6 +1915,7 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         drifted["head_tasks"] = {
             "000115": executor_head,
             "000106": target_head.replace("禁止跨标的补偿", "允许跨标的补偿", 1),
+            "000116": task_text(status="已完成"),
         }
         result = self.policy.evaluate_eligibility(**drifted)
         self.assertFalse(result.eligible)

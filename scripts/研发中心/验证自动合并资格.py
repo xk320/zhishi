@@ -2459,6 +2459,7 @@ def _validate_stage1_contract_repair(
 
     executor_id = STAGE1_CONTRACT_REPAIR_EXECUTOR
     target_id = STAGE1_CONTRACT_REPAIR_TARGET
+    governance_id = TASK116_CONTRACT_REPAIR_EXECUTOR
     executor_path = f"docs/研发中心/任务/任务-{executor_id}.md"
     target_path = f"docs/研发中心/任务/任务-{target_id}.md"
     required = {executor_path, target_path, "docs/研发中心/看板.md"}
@@ -2472,11 +2473,30 @@ def _validate_stage1_contract_repair(
     executor_head = head_tasks.get(executor_id)
     target_base = base_tasks.get(target_id)
     target_head = head_tasks.get(target_id)
-    if None in (executor_base, executor_head, target_base, target_head):
-        _append_reason(reasons, "阶段1覆盖受限合同修订缺少任务115或任务106正文")
+    governance_base = base_tasks.get(governance_id)
+    governance_head = head_tasks.get(governance_id)
+    if None in (
+        executor_base,
+        executor_head,
+        target_base,
+        target_head,
+        governance_base,
+        governance_head,
+    ):
+        _append_reason(
+            reasons,
+            "阶段1覆盖受限合同修订缺少任务115、任务106或任务116完成事实",
+        )
         return {target_id}
     assert executor_base is not None and executor_head is not None
     assert target_base is not None and target_head is not None
+    assert governance_base is not None and governance_head is not None
+    if _task_field(TASK_STATUS_PATTERN, governance_base) != "已完成":
+        _append_reason(reasons, "任务-000116基线状态必须为已完成")
+    if _task_field(TASK_STATUS_PATTERN, governance_head) != "已完成":
+        _append_reason(reasons, "任务-000116头部状态必须为已完成")
+    if _delivery_contract_without_metadata(governance_base) != _delivery_contract_without_metadata(governance_head):
+        _append_reason(reasons, "任务-000116完成事实校验夹带合同改写")
     if _task_field(TASK_TYPE_PATTERN, executor_base) != "治理":
         _append_reason(reasons, "任务-000115类型不是治理")
     if _task_field(AUTOMATION_SCOPE_PATTERN, executor_base) != AUTOMATION_SCOPE:
@@ -3621,7 +3641,7 @@ def evaluate_eligibility(
                 and PurePosixPath(path).parts[:2] == ("tests", "研发中心")
                 and PurePosixPath(path).suffix == ".py"
             )
-            if path not in STAGE1_CONTRACT_REPAIR_ALLOWED_PATHS and path not in AUTOMATION_FILES and not is_allowed_test:
+            if path not in STAGE1_CONTRACT_REPAIR_ALLOWED_PATHS and not is_allowed_test:
                 _append_reason(
                     reasons,
                     f"阶段1覆盖受限合同修订变更路径“{path}”不允许自动合并",
@@ -3959,7 +3979,12 @@ def main() -> int:
         change_type == STAGE1_CONTRACT_REPAIR_TYPE
         and ordered_ids == (STAGE1_CONTRACT_REPAIR_EXECUTOR,)
     ):
-        load_ids.add(STAGE1_CONTRACT_REPAIR_TARGET)
+        load_ids.update(
+            {
+                STAGE1_CONTRACT_REPAIR_TARGET,
+                TASK116_CONTRACT_REPAIR_EXECUTOR,
+            }
+        )
     loaded_ids = tuple(sorted(load_ids))
     base_tasks = _load_ref_tasks(repo_root, arguments.base_ref, loaded_ids)
     head_tasks = _load_ref_tasks(repo_root, arguments.head_ref, loaded_ids)
