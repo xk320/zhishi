@@ -1760,6 +1760,100 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             self.assertFalse(result.eligible)
             self.assertIn("任务-000066合同修复夹带两项字段以外的改写", result.reasons)
 
+    def test_任务116基线补齐映射固定单字段且失败关闭(self):
+        target_base = (
+            REPO_ROOT / "docs/研发中心/任务/任务-000115.md"
+        ).read_text(encoding="utf-8")
+        target_head = self.policy._apply_task116_contract_repair(target_base)
+        self.assertIsNotNone(target_head)
+        executor = task_text(status="已完成", title="建立阶段1合同修订的受控资格路径")
+        board = (REPO_ROOT / "docs/研发中心/看板.md").read_text(encoding="utf-8")
+        inputs = {
+            "changed_paths": ["docs/研发中心/任务/任务-000115.md"],
+            "pr_body": (
+                "## 关联任务\n\n- 任务-000116\n\n"
+                "## 变更类型\n\n- 任务合同冲突修复\n"
+            ),
+            "base_tasks": {"000116": executor, "000115": target_base},
+            "head_tasks": {"000116": executor, "000115": target_head},
+            "base_board": board,
+            "head_board": board,
+            "base_branch": "main",
+            "repository": "xk320/zhishi",
+            "head_repository": "xk320/zhishi",
+            "repo_root": REPO_ROOT,
+            "base_ref": "HEAD",
+        }
+        inputs["path_facts"] = [self.path_fact(inputs["changed_paths"][0])]
+        result = self.policy.evaluate_eligibility(**inputs)
+        self.assertTrue(result.eligible, result.reasons)
+
+        drifted = dict(inputs)
+        drifted["head_tasks"] = {
+            "000116": executor,
+            "000115": target_head + "\n- 越权字段：拒绝\n",
+        }
+        result = self.policy.evaluate_eligibility(**drifted)
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000115未按固定单字段规则补齐当前阻塞原因", result.reasons)
+
+    def test_阶段1覆盖受限合同修订固定115到106且拒绝目标状态迁移(self):
+        executor_base = (
+            REPO_ROOT / "docs/研发中心/任务/任务-000115.md"
+        ).read_text(encoding="utf-8")
+        executor_head = executor_base.replace(
+            "- 状态：待执行", "- 状态：待评审", 1
+        )
+        target_base = (
+            REPO_ROOT / "docs/研发中心/任务/任务-000106.md"
+        ).read_text(encoding="utf-8")
+        marker = "## 覆盖受限模式（任务-000115适用规则）\n\n- 缺失保持无法判定。\n\n"
+        target_head = target_base.replace("## 背景", marker + "## 背景", 1)
+        board = (REPO_ROOT / "docs/研发中心/看板.md").read_text(encoding="utf-8")
+        old_row = next(
+            line for line in board.splitlines()
+            if line.startswith("| P0 | 任务-000115 |")
+        )
+        title = self.policy._task_field(
+            self.policy.TASK_TITLE_PATTERN, executor_base
+        )
+        head_row = (
+            f"| P0 | 任务-000115 | {title} | `codex/task-000115-test` | "
+            "[#999](https://github.com/xk320/zhishi/pull/999) |"
+        )
+        head_board = board.replace(old_row, head_row, 1)
+        paths = [
+            "docs/研发中心/任务/任务-000115.md",
+            "docs/研发中心/任务/任务-000106.md",
+            "docs/研发中心/看板.md",
+        ]
+        inputs = {
+            "changed_paths": paths,
+            "pr_body": (
+                "## 关联任务\n\n- 任务-000115\n\n"
+                "## 变更类型\n\n- 阶段1覆盖受限合同修订\n"
+            ),
+            "base_tasks": {"000115": executor_base, "000106": target_base},
+            "head_tasks": {"000115": executor_head, "000106": target_head},
+            "base_board": board,
+            "head_board": head_board,
+            "base_branch": "main",
+            "repository": "xk320/zhishi",
+            "head_repository": "xk320/zhishi",
+        }
+        inputs["path_facts"] = [self.path_fact(path) for path in paths]
+        result = self.policy.evaluate_eligibility(**inputs)
+        self.assertTrue(result.eligible, result.reasons)
+
+        migrated = dict(inputs)
+        migrated["head_tasks"] = {
+            "000115": executor_head,
+            "000106": target_head.replace("- 状态：阻塞", "- 状态：待执行", 1),
+        }
+        result = self.policy.evaluate_eligibility(**migrated)
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000106基线和头部必须保持阻塞", result.reasons)
+
     def test_阻塞任务合同修复只允许单字段目标映射(self):
         result = self.evaluate_blocked_repair()
         self.assertTrue(result.eligible, result.reasons)
