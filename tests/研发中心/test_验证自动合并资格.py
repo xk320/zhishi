@@ -542,6 +542,45 @@ class AutoMergeEligibilityTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.policy = load_policy_module()
 
+    def test_任务交付合同允许执行记录前单个Markdown分隔空行(self):
+        base = task_text(status="待执行", task_type="治理")
+        head = (
+            base.replace("- 状态：待执行", "- 状态：待评审", 1).rstrip()
+            + "\n\n## 执行记录\n\n"
+            + "- 交付状态：待评审。\n"
+        )
+        self.assertEqual(
+            self.policy._delivery_contract_without_metadata(base),
+            self.policy._delivery_contract_without_metadata(head),
+        )
+
+    def test_任务交付合同拒绝执行记录前多余空行或正文改写(self):
+        base = task_text(status="待执行", task_type="治理")
+        extra_blank = (
+            base.replace("- 状态：待执行", "- 状态：待评审", 1).rstrip()
+            + "\n\n\n## 执行记录\n\n"
+        )
+        changed = (
+            base.replace("- 状态：待执行", "- 状态：待评审", 1).rstrip()
+            + "\n\n- 合同正文改写\n\n## 执行记录\n\n"
+        )
+        self.assertNotEqual(
+            self.policy._delivery_contract_without_metadata(base),
+            self.policy._delivery_contract_without_metadata(extra_blank),
+        )
+        self.assertNotEqual(
+            self.policy._delivery_contract_without_metadata(base),
+            self.policy._delivery_contract_without_metadata(changed),
+        )
+
+    def test_无执行记录的任务合同拒绝尾部空行漂移(self):
+        base = "- 状态：待执行\n- 类型：治理\n正文\n"
+        head = base.rstrip("\n") + "\n\n"
+        self.assertNotEqual(
+            self.policy._delivery_contract_without_metadata(base),
+            self.policy._delivery_contract_without_metadata(head),
+        )
+
     def evaluate(self, **overrides):
         inputs = {
             "changed_paths": [
