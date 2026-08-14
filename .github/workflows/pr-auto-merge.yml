@@ -131,7 +131,7 @@ jobs:
               if len(task_ids) == 1:
                   output.write(f"task_id={task_ids[0]}\n")
               change_match = re.search(
-                  r"(?ms)^## 变更类型\s*\n+\s*-\s*(任务登记|任务交付|合并后状态闭环|阻塞任务合同修复|任务合同冲突修复)\s*$",
+                  r"(?ms)^## 变更类型\s*\n+\s*-\s*(任务登记|任务交付|合并后状态闭环|阻塞任务合同修复|任务合同冲突修复|阶段1覆盖受限合同修订)\s*$",
                   pull_request.get("body") or "",
               )
               if change_match:

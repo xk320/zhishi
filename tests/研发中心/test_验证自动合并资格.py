@@ -1760,6 +1760,167 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             self.assertFalse(result.eligible)
             self.assertIn("任务-000066合同修复夹带两项字段以外的改写", result.reasons)
 
+    def test_任务116基线补齐映射固定单字段且失败关闭(self):
+        target_base = (
+            REPO_ROOT / "docs/研发中心/任务/任务-000115.md"
+        ).read_text(encoding="utf-8")
+        target_head = self.policy._apply_task116_contract_repair(target_base)
+        self.assertIsNotNone(target_head)
+        executor = task_text(status="已完成", title="建立阶段1合同修订的受控资格路径")
+        board = (REPO_ROOT / "docs/研发中心/看板.md").read_text(encoding="utf-8")
+        inputs = {
+            "changed_paths": ["docs/研发中心/任务/任务-000115.md"],
+            "pr_body": (
+                "## 关联任务\n\n- 任务-000116\n\n"
+                "## 变更类型\n\n- 任务合同冲突修复\n"
+            ),
+            "base_tasks": {"000116": executor, "000115": target_base},
+            "head_tasks": {"000116": executor, "000115": target_head},
+            "base_board": board,
+            "head_board": board,
+            "base_branch": "main",
+            "repository": "xk320/zhishi",
+            "head_repository": "xk320/zhishi",
+            "repo_root": REPO_ROOT,
+            "base_ref": "HEAD",
+        }
+        inputs["path_facts"] = [self.path_fact(inputs["changed_paths"][0])]
+        result = self.policy.evaluate_eligibility(**inputs)
+        self.assertTrue(result.eligible, result.reasons)
+
+        drifted = dict(inputs)
+        drifted["head_tasks"] = {
+            "000116": executor,
+            "000115": target_head + "\n- 越权字段：拒绝\n",
+        }
+        result = self.policy.evaluate_eligibility(**drifted)
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000115未按固定单字段规则补齐当前阻塞原因", result.reasons)
+
+    def test_阶段1覆盖受限合同修订固定115到106且拒绝目标状态迁移(self):
+        executor_base = (
+            REPO_ROOT / "docs/研发中心/任务/任务-000115.md"
+        ).read_text(encoding="utf-8")
+        executor_head = executor_base.replace(
+            "- 状态：待执行", "- 状态：待评审", 1
+        )
+        executor_head = executor_head.replace(
+            "\n\n## 依赖与阻塞条件",
+            "\n- 开始时间：`2026-08-15T01:00:00+08:00`\n"
+            "- 执行分支：`codex/task-000115-test`\n"
+            "- Pull Request：[#999](https://github.com/xk320/zhishi/pull/999)\n"
+            "- 实现提交SHA：`0123456789abcdef0123456789abcdef01234567`\n"
+            "\n## 依赖与阻塞条件",
+            1,
+        )
+        target_base = (
+            REPO_ROOT / "docs/研发中心/任务/任务-000106.md"
+        ).read_text(encoding="utf-8")
+        target_head = self.policy._apply_stage1_contract_repair(target_base)
+        self.assertIsNotNone(target_head)
+        board = (REPO_ROOT / "docs/研发中心/看板.md").read_text(encoding="utf-8")
+        old_row = next(
+            line for line in board.splitlines()
+            if line.startswith("| P0 | 任务-000115 |")
+        )
+        title = self.policy._task_field(
+            self.policy.TASK_TITLE_PATTERN, executor_base
+        )
+        head_row = (
+            f"| P0 | 任务-000115 | {title} | `codex/task-000115-test` | "
+            "[#999](https://github.com/xk320/zhishi/pull/999) |"
+        )
+        head_board = board.replace(old_row + "\n", "", 1)
+        current_review_row = next(
+            line for line in head_board.splitlines()
+            if line.startswith("| P0 | 任务-000116 |")
+        )
+        head_board = head_board.replace(
+            current_review_row + "\n",
+            current_review_row + "\n" + head_row + "\n",
+            1,
+        )
+        paths = [
+            "docs/研发中心/任务/任务-000115.md",
+            "docs/研发中心/任务/任务-000106.md",
+            "docs/研发中心/看板.md",
+        ]
+        inputs = {
+            "changed_paths": paths,
+            "pr_body": (
+                "## 关联任务\n\n- 任务-000115\n\n"
+                "## 变更类型\n\n- 阶段1覆盖受限合同修订\n"
+            ),
+            "base_tasks": {
+                "000115": executor_base,
+                "000106": target_base,
+                "000116": task_text(status="已完成"),
+            },
+            "head_tasks": {
+                "000115": executor_head,
+                "000106": target_head,
+                "000116": task_text(status="已完成"),
+            },
+            "base_board": board,
+            "head_board": head_board,
+            "base_branch": "main",
+            "repository": "xk320/zhishi",
+            "head_repository": "xk320/zhishi",
+        }
+        inputs["path_facts"] = [self.path_fact(path) for path in paths]
+        result = self.policy.evaluate_eligibility(**inputs)
+        self.assertTrue(result.eligible, result.reasons)
+
+        governance_pending = dict(inputs)
+        governance_pending["base_tasks"] = {
+            **inputs["base_tasks"],
+            "000116": task_text(status="待评审"),
+        }
+        result = self.policy.evaluate_eligibility(**governance_pending)
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000116基线状态必须为已完成", result.reasons)
+
+        extra_workflow = dict(inputs)
+        extra_workflow["changed_paths"] = paths + [
+            ".github/workflows/pr-auto-merge.yml"
+        ]
+        extra_workflow["path_facts"] = [
+            self.path_fact(path) for path in extra_workflow["changed_paths"]
+        ]
+        result = self.policy.evaluate_eligibility(**extra_workflow)
+        self.assertFalse(result.eligible)
+        self.assertIn(
+            "阶段1覆盖受限合同修订变更路径“.github/workflows/pr-auto-merge.yml”不允许自动合并",
+            result.reasons,
+        )
+
+        mismatched_metadata = dict(inputs)
+        mismatched_metadata["head_ref_name"] = "codex/other-branch"
+        mismatched_metadata["pr_number"] = 325
+        result = self.policy.evaluate_eligibility(**mismatched_metadata)
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000115执行分支与PR头部事实不一致", result.reasons)
+
+        migrated = dict(inputs)
+        migrated["head_tasks"] = {
+            "000115": executor_head,
+            "000106": target_head.replace("- 状态：阻塞", "- 状态：待执行", 1),
+            "000116": task_text(status="已完成"),
+        }
+        result = self.policy.evaluate_eligibility(**migrated)
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000106基线和头部必须保持阻塞", result.reasons)
+
+        drifted = dict(inputs)
+        drifted["head_tasks"] = {
+            "000115": executor_head,
+            "000106": target_head.replace("禁止跨标的补偿", "允许跨标的补偿", 1),
+            "000116": task_text(status="已完成"),
+        }
+        result = self.policy.evaluate_eligibility(**drifted)
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000106未按固定覆盖受限章节修订且合同指纹漂移", result.reasons)
+
     def test_阻塞任务合同修复只允许单字段目标映射(self):
         result = self.evaluate_blocked_repair()
         self.assertTrue(result.eligible, result.reasons)
