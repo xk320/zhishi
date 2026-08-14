@@ -1889,6 +1889,23 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             + synthetic_task116_row,
             1,
         )
+        # 任务115真实执行后会出现在执行中；阶段1合同修订的基线必须固定为待执行。
+        board = re.sub(
+            r"(?m)^\| P0 \| 任务-000115 \|[^\n]*\n",
+            "",
+            board,
+        )
+        base_task115_row = (
+            "| P0 | 任务-000115 | 将阶段1成本证据门改为覆盖受限模式 | 000105 |\n"
+        )
+        board = board.replace(
+            "| 优先级 | 任务 | 名称 | 唯一前序依赖 |\n"
+            "| --- | --- | --- | --- |\n",
+            "| 优先级 | 任务 | 名称 | 唯一前序依赖 |\n"
+            "| --- | --- | --- | --- |\n"
+            + base_task115_row,
+            1,
+        )
         old_row = next(
             line for line in board.splitlines()
             if line.startswith("| P0 | 任务-000115 |")
