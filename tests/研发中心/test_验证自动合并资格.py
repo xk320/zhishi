@@ -1819,12 +1819,27 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         target_head = self.policy._apply_stage1_contract_repair(target_base)
         self.assertIsNotNone(target_head)
         board = (REPO_ROOT / "docs/研发中心/看板.md").read_text(encoding="utf-8")
+        # 任务116完成后会从真实看板的待评审分区移除；本测试需要固定的
+        # 阶段1基线，因此显式合成一条与当前状态无关的待评审行。
+        board = re.sub(r"(?m)^\|[^\n]*\| 任务-000116 \|[^\n]*\n", "", board)
+        title = self.policy._task_field(
+            self.policy.TASK_TITLE_PATTERN, executor_base
+        )
+        synthetic_task116_row = (
+            f"| P0 | 任务-000116 | {title} | `codex/task-000116-fixture-base` | "
+            "[#998](https://github.com/xk320/zhishi/pull/998) |\n"
+        )
+        board = board.replace(
+            "| 优先级 | 任务 | 名称 | 分支 | PR |\n"
+            "| --- | --- | --- | --- | --- |\n",
+            "| 优先级 | 任务 | 名称 | 分支 | PR |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            + synthetic_task116_row,
+            1,
+        )
         old_row = next(
             line for line in board.splitlines()
             if line.startswith("| P0 | 任务-000115 |")
-        )
-        title = self.policy._task_field(
-            self.policy.TASK_TITLE_PATTERN, executor_base
         )
         head_row = (
             f"| P0 | 任务-000115 | {title} | `codex/task-000115-test` | "
