@@ -36,6 +36,37 @@ class CrossCarrierConflictTests(unittest.TestCase):
             ):
                 self.assertNotEqual(original, CONFLICT._compute_rule_fingerprint())
 
+    def test阶段1覆盖受限变更类型绑定固定目标(self):
+        body = "## 变更类型\n- 阶段1覆盖受限合同修订\n"
+        self.assertEqual(
+            CONFLICT.STAGE1_CONTRACT_REPAIR_TYPE,
+            CONFLICT._change_type_from_body(body),
+        )
+        self.assertEqual("000115", CONFLICT.STAGE1_CONTRACT_REPAIR_EXECUTOR)
+        self.assertEqual("000106", CONFLICT.STAGE1_CONTRACT_REPAIR_TARGET)
+
+    def test阶段1目标合同由主资格器固定校验而非通用漂移门误报(self):
+        path = "docs/研发中心/任务/任务-000106.md"
+        conflicts = []
+
+        def read_at_ref(_root, ref, requested):
+            if requested != path:
+                return None
+            return "base" if ref == "base" else "head"
+
+        with mock.patch.object(
+            CONFLICT, "_list_task_paths", return_value=(path,)
+        ), mock.patch.object(CONFLICT, "_read_at_ref", side_effect=read_at_ref):
+            CONFLICT._check_task_contract_drift(
+                ROOT,
+                "base",
+                "head",
+                conflicts,
+                stage1_contract_repair_target="000106",
+            )
+
+        self.assertEqual([], conflicts)
+
     def test无效提交身份失败关闭(self):
         report = CONFLICT.check_refs(ROOT, "not-a-ref", "main")
         self.assertFalse(report.ok)
