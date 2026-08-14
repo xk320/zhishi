@@ -1,0 +1,133 @@
+{
+  "任务合同执行时SHA-256": "70375b7b7ee55ef58911def5db2ddea4a8c123d56d96ad6ded5d43ae96232b79",
+  "任务编号": "任务-000082",
+  "入口白名单": {
+    "SSH目标": [
+      "ubuntu"
+    ],
+    "声明文件名": [
+      "来源身份声明.json",
+      "source-identity.json",
+      "data-source-manifest.json",
+      "dataset-identity.json"
+    ],
+    "数据库注释列": [
+      "TABLE_SCHEMA",
+      "TABLE_NAME",
+      "TABLE_COMMENT",
+      "COLUMN_NAME",
+      "COLUMN_TYPE",
+      "ORDINAL_POSITION",
+      "COLUMN_COMMENT"
+    ],
+    "数据库范围": [
+      "information_schema.TABLES",
+      "information_schema.COLUMNS"
+    ],
+    "根目录": [
+      "/opt/binance-event",
+      "/opt/celueqing",
+      "/opt/crypto-radar",
+      "/opt/event-prob-lab",
+      "/opt/orderbook-intelligence-service",
+      "/var/lib/mysql"
+    ]
+  },
+  "冻结时间": "2026-08-10T05:56:20.857889+08:00",
+  "合同版本": "source-identity-entry-discovery-1.0",
+  "安全边界": {
+    "修改原始数据": false,
+    "修改生产系统": false,
+    "原始业务记录落盘": false,
+    "数据库业务记录读取": false,
+    "读取价格成交订单簿": false,
+    "读取环境变量或凭据": false,
+    "远端临时文件": false,
+    "远端写入": false
+  },
+  "成员顺序SHA-256": "bf5b5dc916c394deb0366b26f0ee81453e16b5b63f7fc48ba71aeee0e0e32c5e",
+  "执行器SHA-256": "92e2317ab33808587c45d85260f8470a02dafb044af8ae83dbdfff20668a40b0",
+  "批次": "source-identity-entry-discovery-20260810T055620+0800-4dd0d2794c55",
+  "探针SHA-256": "f4e28fbe3afcd7f7d0c9009157a6a810036971b3941afeec921862f856a7c8e3",
+  "结果摘要": {
+    "ZS-DATA-GAP-001": "继续阻塞；未形成每个BTC、ETH成员的完整当前九字段声明",
+    "候选成员总体": 630,
+    "入口候选总体": 0,
+    "分标的": {
+      "BTC": {
+        "候选总体": 315,
+        "入口候选总体": 0,
+        "入口状态计数": {
+          "入口不完整": 0,
+          "已登记": 0,
+          "未登记": 315
+        },
+        "可定位计数": {
+          "不可定位": 315,
+          "已定位": 0
+        },
+        "最终状态计数": {
+          "失效": 0,
+          "失败": 0,
+          "已证明": 0,
+          "拒绝": 6,
+          "无法判定": 309,
+          "未成熟": 0
+        }
+      },
+      "ETH": {
+        "候选总体": 315,
+        "入口候选总体": 0,
+        "入口状态计数": {
+          "入口不完整": 0,
+          "已登记": 0,
+          "未登记": 315
+        },
+        "可定位计数": {
+          "不可定位": 315,
+          "已定位": 0
+        },
+        "最终状态计数": {
+          "失效": 0,
+          "失败": 0,
+          "已证明": 0,
+          "拒绝": 6,
+          "无法判定": 309,
+          "未成熟": 0
+        }
+      }
+    },
+    "已证明": 0
+  },
+  "结论边界": "描述性入口差异不能推导因果、预测优势、胜率、收益、研究准入或交易许可；不足时保持失败安全并阻塞",
+  "规则SHA-256": "6d8c063c04eb02cc5c403067fed389705afe13e3dc1e8139af0c6163635c8bd2",
+  "资源上限": {
+    "单文件最大字节数": 262144,
+    "批次总超时秒": 600,
+    "最大成员数": 1000,
+    "最大日志字节数": 32768,
+    "最大输出字节数": 8388608,
+    "逐成员超时秒": 5
+  },
+  "输入": {
+    "任务-000081成员清单SHA-256": "74a1034fdee473da1d4e750debf474a9b3f171c913ded93f514cf4f0648ba524",
+    "任务-000081批次": "source-identity-nine-fields-20260808T074100+0800-v4",
+    "任务-000081批次清单SHA-256": "230316378417f43098f8033c16ae1ee19f54098dbbd5b8ac2f5b61a45dfb9d41",
+    "声明入口输入": [
+      {
+        "SHA-256": "7f4df93c8ef55b8cd072397afaa7148371bdfeeae4a77d9f78d5c3b53c576b13",
+        "路径": "config/数据/数据来源与资产身份.json"
+      },
+      {
+        "SHA-256": "696e0e2636f0a6d82041a4be46ca2b20222564afd75a5d8a8c8961ca635fc676",
+        "路径": "config/数据/来源身份声明补采.json"
+      }
+    ],
+    "资产清单SHA-256": "019010d64fe47d89c81bfaedafd458f1d886025bb34292c0c32eafcfa4392657"
+  },
+  "输出SHA-256": {
+    "入口候选清单.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+    "来源身份声明入口发现清单.csv": "f8b59f5f74f2fac00a06ea141c7a221aa6f7b4885b887b5983e008162d7e0c61"
+  },
+  "配置SHA-256": "21fe99ab5fd80d097fb1865a0bbb9ab1585a0483b1f634b4bb6a17179adb37d6"
+}

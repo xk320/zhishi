@@ -1,0 +1,24 @@
+[
+  {
+    "HTTP状态": null,
+    "原因代码": "URLError",
+    "合约": [],
+    "响应SHA-256": null,
+    "响应Schema指纹": null,
+    "市场类型": "USDⓈ-M合约",
+    "状态": "失败",
+    "端点": "https://fapi.binance.com/fapi/v1/exchangeInfo",
+    "观察时间": "2026-08-10T15:50:24.234129+08:00"
+  },
+  {
+    "HTTP状态": null,
+    "原因代码": "URLError",
+    "合约": [],
+    "响应SHA-256": null,
+    "响应Schema指纹": null,
+    "市场类型": "币本位合约",
+    "状态": "失败",
+    "端点": "https://dapi.binance.com/dapi/v1/exchangeInfo",
+    "观察时间": "2026-08-10T15:50:24.234129+08:00"
+  }
+]

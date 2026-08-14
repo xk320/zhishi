@@ -1,0 +1,48 @@
+{
+  "合同版本": "source-identity-entry-discovery-1.0",
+  "任务编号": "任务-000082",
+  "允许SSH目标": ["ubuntu"],
+  "允许文件根目录": [
+    "/opt/binance-event",
+    "/opt/celueqing",
+    "/opt/crypto-radar",
+    "/opt/event-prob-lab",
+    "/opt/orderbook-intelligence-service",
+    "/var/lib/mysql"
+  ],
+  "声明文件名": ["来源身份声明.json", "source-identity.json", "data-source-manifest.json", "dataset-identity.json"],
+  "数据库元数据范围": ["information_schema.TABLES", "information_schema.COLUMNS"],
+  "数据库注释列": ["TABLE_SCHEMA", "TABLE_NAME", "TABLE_COMMENT", "COLUMN_NAME", "COLUMN_TYPE", "ORDINAL_POSITION", "COLUMN_COMMENT"],
+  "数据库声明前缀": "知势身份声明:",
+  "身份字段": ["来源提供者", "交易场所", "市场类型", "标的身份", "精确合约", "数据对象", "Schema确切版本", "授权边界", "字段中文映射"],
+  "标的": ["BTC", "ETH"],
+  "主研究尺度": ["4小时", "8小时", "24小时", "48小时"],
+  "事后结果观察窗口": ["15分钟", "1小时"],
+  "输入文件": [
+    {"用途": "设计合同", "路径": "docs/superpowers/specs/task-000082-source-identity-entry-discovery-design.md", "SHA-256": "91050f2ab9e350bcb045602668a96d453aac8f06d0c33d01a9b59020e99381aa"},
+    {"用途": "任务-000081输入快照", "路径": "config/数据/任务-000081来源身份声明输入快照.json", "SHA-256": "f14a700a7cb7f4116c6ba1e2bca50ed8288538f900e75e76bbce37c989d73f83"},
+    {"用途": "任务-000081最终批次清单", "路径": "artifacts/数据/来源身份声明九字段复验/source-identity-nine-fields-20260808T074100+0800-v4/批次清单.json", "SHA-256": "230316378417f43098f8033c16ae1ee19f54098dbbd5b8ac2f5b61a45dfb9d41"},
+    {"用途": "任务-000081最终成员清单", "路径": "artifacts/数据/来源身份声明九字段复验/source-identity-nine-fields-20260808T074100+0800-v4/来源身份声明九字段复验清单.csv", "SHA-256": "74a1034fdee473da1d4e750debf474a9b3f171c913ded93f514cf4f0648ba524"},
+    {"用途": "来源身份总合同", "路径": "config/数据/数据来源与资产身份.json", "SHA-256": "4a416c1e7bf31c93ff41685e68a8dab09e2f8102da3195d7cfd71160e4409452"},
+    {"用途": "来源身份补采合同", "路径": "config/数据/来源身份声明补采.json", "SHA-256": "696e0e2636f0a6d82041a4be46ca2b20222564afd75a5d8a8c8961ca635fc676"},
+    {"用途": "资产清单", "路径": "artifacts/审计/数据源清单.csv", "SHA-256": "019010d64fe47d89c81bfaedafd458f1d886025bb34292c0c32eafcfa4392657"}
+  ],
+  "安全边界": {
+    "远端写入": false,
+    "远端临时文件": false,
+    "数据库业务记录读取": false,
+    "读取环境变量或凭据": false,
+    "原始业务记录落盘": false,
+    "读取价格成交订单簿": false,
+    "修改原始数据": false,
+    "修改生产系统": false
+  },
+  "资源上限": {
+    "批次总超时秒": 600,
+    "逐成员超时秒": 5,
+    "最大成员数": 1000,
+    "最大输出字节数": 8388608,
+    "最大日志字节数": 32768,
+    "单文件最大字节数": 262144
+  }
+}
