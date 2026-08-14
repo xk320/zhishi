@@ -1807,8 +1807,8 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         target_base = (
             REPO_ROOT / "docs/研发中心/任务/任务-000106.md"
         ).read_text(encoding="utf-8")
-        marker = "## 覆盖受限模式（任务-000115适用规则）\n\n- 缺失保持无法判定。\n\n"
-        target_head = target_base.replace("## 背景", marker + "## 背景", 1)
+        target_head = self.policy._apply_stage1_contract_repair(target_base)
+        self.assertIsNotNone(target_head)
         board = (REPO_ROOT / "docs/研发中心/看板.md").read_text(encoding="utf-8")
         old_row = next(
             line for line in board.splitlines()
@@ -1853,6 +1853,15 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         result = self.policy.evaluate_eligibility(**migrated)
         self.assertFalse(result.eligible)
         self.assertIn("任务-000106基线和头部必须保持阻塞", result.reasons)
+
+        drifted = dict(inputs)
+        drifted["head_tasks"] = {
+            "000115": executor_head,
+            "000106": target_head.replace("禁止跨标的补偿", "允许跨标的补偿", 1),
+        }
+        result = self.policy.evaluate_eligibility(**drifted)
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000106未按固定覆盖受限章节修订且合同指纹漂移", result.reasons)
 
     def test_阻塞任务合同修复只允许单字段目标映射(self):
         result = self.evaluate_blocked_repair()

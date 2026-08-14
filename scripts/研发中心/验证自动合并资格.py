@@ -249,6 +249,15 @@ TASK100_CONTRACT_REPAIR_GOVERNANCE = "000101"
 TASK115_BASELINE_BLOCKER_LINE = (
     "- 当前阻塞原因：main可信合并规则当前只登记任务-000056→000055和任务-000086→000084两条阻塞合同修复映射，普通任务无法直接修订任务-000106；若绕过该规则，PR资格将失败关闭。"
 )
+STAGE1_COVERAGE_LIMITED_SECTION = (
+    "## 覆盖受限模式（任务-000115适用规则）\n\n"
+    "- 研究覆盖：仅使用已验证的BTC、ETH覆盖窗口；覆盖外统一为`无法判定`，不补齐、不缩小候选总体或分母。\n"
+    "- 主研究尺度：4小时、8小时、24小时、48小时；15分钟和1小时仅允许作为事后结果观察窗口。\n"
+    "- 成本与延迟：多年主网真实执行延迟不作为当前阶段研究硬门，缺少该证据时保持`无法判定`；不得用网络往返、信号投递确认、本地模拟或Demo结果替代。\n"
+    "- 统计边界：BTC与ETH分别统计，禁止跨标的补偿；必须保留候选总体、已观察、拒绝、失败、未成熟、失效和缺失计数。\n"
+    "- 解释边界：覆盖窗口内仅可报告描述性证据，不得据此推导因果、预测优势、胜率、收益、研究准入或交易许可；真实资金交易保持关闭。\n"
+    "- 历史保护：本规则不改变本任务既有执行记录、历史批次、提交SHA或原始数据。"
+)
 TASK100_OUTPUT_CONTRACT_OLD = "- 更新阶段1最终审计报告、数据缺口清单、README、总体计划、任务文件和看板；"
 TASK100_OUTPUT_CONTRACT_NEW = "- 保持docs/审计/阶段1最终审计报告.md和docs/审计/数据缺口与补采清单.md字节不变；新增docs/审计/阶段1成本与执行证据报告.md，并更新README、总体计划、任务文件和看板；"
 TASK094_NATIVE_SCANNER_PATH = "scripts/审计/阶段1时间质量扫描器.c"
@@ -358,6 +367,20 @@ def _apply_task116_contract_repair(text: str) -> str | None:
     if text.count(anchor) != 1 or TASK115_BASELINE_BLOCKER_LINE in text:
         return None
     return text.replace(anchor, f"{anchor}\n{TASK115_BASELINE_BLOCKER_LINE}", 1)
+
+
+def _apply_stage1_contract_repair(text: str) -> str | None:
+    """只允许在任务-000106合同中追加固定覆盖受限规则章节。"""
+
+    if text.count(STAGE1_COVERAGE_LIMITED_SECTION) != 0:
+        return None
+    if text.count("## 背景") != 1:
+        return None
+    return text.replace(
+        "## 背景",
+        f"{STAGE1_COVERAGE_LIMITED_SECTION}\n\n## 背景",
+        1,
+    )
 
 
 def _task094_resource_fact_reasons(resource_facts: object) -> tuple[str, ...]:
@@ -2446,8 +2469,9 @@ def _validate_stage1_contract_repair(
         _append_reason(reasons, "任务-000106基线和头部必须保持阻塞")
     if _stage1_history_section(target_base) != _stage1_history_section(target_head):
         _append_reason(reasons, "任务-000106执行记录必须保持不可变")
-    if "## 覆盖受限模式（任务-000115适用规则）" not in target_head:
-        _append_reason(reasons, "任务-000106缺少固定覆盖受限适用规则章节")
+    expected_target = _apply_stage1_contract_repair(target_base)
+    if expected_target is None or target_head != expected_target:
+        _append_reason(reasons, "任务-000106未按固定覆盖受限章节修订且合同指纹漂移")
     if base_board is None or head_board is None or not _board_schema_is_valid(base_board) or not _board_schema_is_valid(head_board):
         _append_reason(reasons, "阶段1覆盖受限合同修订看板结构无效")
     else:
