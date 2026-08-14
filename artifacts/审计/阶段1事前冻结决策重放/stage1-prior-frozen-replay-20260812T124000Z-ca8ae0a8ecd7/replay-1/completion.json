@@ -1,0 +1,1 @@
+{"completion_marker_required":true,"final_gate_rechecked_after_completion_readback":true,"final_precommit_resource_facts":{"elapsed_seconds":0.028532,"measured_at":"2026-08-12T12:40:10.219125Z","output_bytes":22308,"process_max_rss_bytes":36929536,"processes":1},"phase":"replay-1","published_bytes":22677,"schema_version":"zhishi-stage1-atomic-publish-completion/v1"}

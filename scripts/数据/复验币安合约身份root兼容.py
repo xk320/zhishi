@@ -256,10 +256,17 @@ def run_root_remote_probe(config: Mapping[str, Any]) -> dict[str, Any]:
                 if set(summary) - {"格式", "字段映射", "行", "Schema指纹", "原因代码"}:
                     return _root_failure("PROBE_CONTENT_SCHEMA_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
                 mapping = summary.get("字段映射")
-                if not isinstance(mapping, dict) or any(not isinstance(key, str) or key not in legacy.CANDIDATE_FIELDS or not isinstance(value, str) for key, value in mapping.items()):
+                if (
+                    not isinstance(mapping, dict)
+                    or set(mapping) != set(legacy.CANDIDATE_FIELDS)
+                    or any(
+                        not isinstance(value, str)
+                        or value not in legacy.FIELD_ALIASES.get(key, ())
+                        for key, value in mapping.items()
+                    )
+                    or len(set(mapping.values())) != len(legacy.CANDIDATE_FIELDS)
+                ):
                     return _root_failure("PROBE_FIELD_MAPPING_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
-                if not summary.get("原因代码") and set(mapping) != set(legacy.CANDIDATE_FIELDS):
-                    return _root_failure("PROBE_FIELD_MAPPING_INCOMPLETE", exit_code=completed.returncode, resource_facts=resource_facts)
             elif not isinstance(summary.get("表"), list):
                 return _root_failure("PROBE_SQLITE_TABLES_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
             elif set(summary) - {"格式", "表", "行", "原因代码"}:
@@ -282,6 +289,14 @@ def run_root_remote_probe(config: Mapping[str, Any]) -> dict[str, Any]:
                         return _root_failure("PROBE_SQLITE_SCHEMA_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
                     if any(not isinstance(table[key], str) or not re.fullmatch(r"[0-9a-f]{64}", table[key]) for key in ("表名指纹", "字段指纹")):
                         return _root_failure("PROBE_SQLITE_FINGERPRINT_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
+                    mapping = table["字段映射"]
+                    if (
+                        not isinstance(mapping, dict)
+                        or set(mapping) != set(legacy.CANDIDATE_FIELDS)
+                        or any(not isinstance(value, str) or not value.strip() for value in mapping.values())
+                        or len(set(mapping.values())) != len(legacy.CANDIDATE_FIELDS)
+                    ):
+                        return _root_failure("PROBE_SQLITE_FIELD_MAPPING_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
             elif set(summary) - {"格式", "字段映射", "行", "Schema指纹", "原因代码"}:
                 return _root_failure("PROBE_CONTENT_SCHEMA_INVALID", exit_code=completed.returncode, resource_facts=resource_facts)
     except (AttributeError, TypeError, ValueError):
@@ -345,7 +360,7 @@ def render_root_batch(
     summary = legacy.summarize(members, verified, remote, api_snapshots, candidates=candidates if complete else [])
     summary["访问模式"] = remote.get("访问模式", ROOT_MODE)
     summary["Root身份事实"] = "uid=0；root不等价于专用只读UID=1001"
-    generated_id = "binance-contract-identity-" + batch_start.strftime("%Y%m%dT%H%M%S%z") + "-" + legacy.fingerprint({"任务": TASK_ID, "API": api_snapshots, "远端": remote, "成员": legacy.sha_path(MEMBERS_PATH)})[:12]
+    generated_id = "binance-contract-identity-" + batch_start.strftime("%Y%m%dT%H%M%S%z") + "-" + legacy.fingerprint({"任务": TASK_ID, "合同版本": config.get("合同版本"), "配置SHA-256": legacy.sha_path(config_path), "任务合同SHA-256": legacy.task_contract_fingerprint(TASK_PATH), "API": api_snapshots, "远端": remote, "成员": legacy.sha_path(MEMBERS_PATH)})[:12]
     batch_id = batch_id_override or generated_id
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+\-]{0,127}", batch_id):
         raise ValueError("批次身份格式非法")

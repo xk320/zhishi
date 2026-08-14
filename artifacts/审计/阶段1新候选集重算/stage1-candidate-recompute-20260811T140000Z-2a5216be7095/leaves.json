@@ -1,0 +1,798 @@
+[
+  {
+    "decision": "阻塞",
+    "formal_member_count": 2937,
+    "gates": {
+      "三类时间": {
+        "evidence_refs": [
+          "member-observations-*.json#/underlying=BTC"
+        ],
+        "reason_code": "ARRIVAL_AND_CAPTURE_TIME_MISSING",
+        "release_conditions": [
+          "同一正式输入版本逐成员补齐事件时间、到达时间和采集时间并验证可见性"
+        ],
+        "status": "无法判定"
+      },
+      "历史重放": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/2"
+        ],
+        "reason_code": "REPLAY_EVIDENCE_NOT_COMPATIBLE",
+        "release_conditions": [
+          "以同一正式输入和三类时间规则完成无时间穿越的历史现场重放"
+        ],
+        "status": "无法判定"
+      },
+      "容量": {
+        "evidence_refs": [
+          "summary.json#/resource_facts"
+        ],
+        "reason_code": "RESEARCH_PIPELINE_CAPACITY_NOT_PROVEN",
+        "release_conditions": [
+          "在隔离研究流水线上完成同版本容量试采并满足资源预算"
+        ],
+        "status": "无法判定"
+      },
+      "恢复": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/4"
+        ],
+        "reason_code": "ISOLATED_RECOVERY_NOT_PROVEN",
+        "release_conditions": [
+          "完成隔离故障注入、幂等重启和不可变输出恢复验证"
+        ],
+        "status": "无法判定"
+      },
+      "成本与执行": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/3"
+        ],
+        "reason_code": "COST_EXECUTION_DATA_MISSING",
+        "release_conditions": [
+          "同版本补齐手续费、价差、深度、冲击、资金费率和执行延迟证据"
+        ],
+        "status": "无法判定"
+      },
+      "来源身份": {
+        "evidence_refs": [
+          "source-batch-files.json#/",
+          "formal-input-*.json#/underlying=BTC"
+        ],
+        "reason_code": "FORMAL_SOURCE_IDENTITY_BOUND",
+        "release_conditions": [
+          "来源批次文件集合、正式输入成员SHA与固定指纹持续全等"
+        ],
+        "status": "通过"
+      },
+      "血缘": {
+        "evidence_refs": [
+          "source-batch-files.json#/",
+          "formal-input-*.json#/underlying=BTC",
+          "member-observations-*.json#/underlying=BTC"
+        ],
+        "reason_code": "CONTENT_ADDRESSED_LINEAGE",
+        "release_conditions": [
+          "来源批次、正式输入、观察成员和内容SHA的一对一血缘持续闭合"
+        ],
+        "status": "通过"
+      },
+      "质量": {
+        "evidence_refs": [
+          "member-observations-*.json#/underlying=BTC",
+          "coverage.json#/BTCUSDT-trades",
+          "coverage.json#/BTCUSDT-aggTrades"
+        ],
+        "reason_code": "FULL_ROW_QUALITY_NOT_AUDITED",
+        "release_conditions": [
+          "同一正式输入版本完成逐行断档、重复、乱序、Schema和异常值质量审计"
+        ],
+        "status": "无法判定"
+      }
+    },
+    "horizon_hours": 4,
+    "market_type": "USDⓈ-M合约",
+    "observed_member_count": 2937,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "underlying": "BTC",
+    "venue": "Binance"
+  },
+  {
+    "decision": "阻塞",
+    "formal_member_count": 2937,
+    "gates": {
+      "三类时间": {
+        "evidence_refs": [
+          "member-observations-*.json#/underlying=BTC"
+        ],
+        "reason_code": "ARRIVAL_AND_CAPTURE_TIME_MISSING",
+        "release_conditions": [
+          "同一正式输入版本逐成员补齐事件时间、到达时间和采集时间并验证可见性"
+        ],
+        "status": "无法判定"
+      },
+      "历史重放": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/2"
+        ],
+        "reason_code": "REPLAY_EVIDENCE_NOT_COMPATIBLE",
+        "release_conditions": [
+          "以同一正式输入和三类时间规则完成无时间穿越的历史现场重放"
+        ],
+        "status": "无法判定"
+      },
+      "容量": {
+        "evidence_refs": [
+          "summary.json#/resource_facts"
+        ],
+        "reason_code": "RESEARCH_PIPELINE_CAPACITY_NOT_PROVEN",
+        "release_conditions": [
+          "在隔离研究流水线上完成同版本容量试采并满足资源预算"
+        ],
+        "status": "无法判定"
+      },
+      "恢复": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/4"
+        ],
+        "reason_code": "ISOLATED_RECOVERY_NOT_PROVEN",
+        "release_conditions": [
+          "完成隔离故障注入、幂等重启和不可变输出恢复验证"
+        ],
+        "status": "无法判定"
+      },
+      "成本与执行": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/3"
+        ],
+        "reason_code": "COST_EXECUTION_DATA_MISSING",
+        "release_conditions": [
+          "同版本补齐手续费、价差、深度、冲击、资金费率和执行延迟证据"
+        ],
+        "status": "无法判定"
+      },
+      "来源身份": {
+        "evidence_refs": [
+          "source-batch-files.json#/",
+          "formal-input-*.json#/underlying=BTC"
+        ],
+        "reason_code": "FORMAL_SOURCE_IDENTITY_BOUND",
+        "release_conditions": [
+          "来源批次文件集合、正式输入成员SHA与固定指纹持续全等"
+        ],
+        "status": "通过"
+      },
+      "血缘": {
+        "evidence_refs": [
+          "source-batch-files.json#/",
+          "formal-input-*.json#/underlying=BTC",
+          "member-observations-*.json#/underlying=BTC"
+        ],
+        "reason_code": "CONTENT_ADDRESSED_LINEAGE",
+        "release_conditions": [
+          "来源批次、正式输入、观察成员和内容SHA的一对一血缘持续闭合"
+        ],
+        "status": "通过"
+      },
+      "质量": {
+        "evidence_refs": [
+          "member-observations-*.json#/underlying=BTC",
+          "coverage.json#/BTCUSDT-trades",
+          "coverage.json#/BTCUSDT-aggTrades"
+        ],
+        "reason_code": "FULL_ROW_QUALITY_NOT_AUDITED",
+        "release_conditions": [
+          "同一正式输入版本完成逐行断档、重复、乱序、Schema和异常值质量审计"
+        ],
+        "status": "无法判定"
+      }
+    },
+    "horizon_hours": 8,
+    "market_type": "USDⓈ-M合约",
+    "observed_member_count": 2937,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "underlying": "BTC",
+    "venue": "Binance"
+  },
+  {
+    "decision": "阻塞",
+    "formal_member_count": 2937,
+    "gates": {
+      "三类时间": {
+        "evidence_refs": [
+          "member-observations-*.json#/underlying=BTC"
+        ],
+        "reason_code": "ARRIVAL_AND_CAPTURE_TIME_MISSING",
+        "release_conditions": [
+          "同一正式输入版本逐成员补齐事件时间、到达时间和采集时间并验证可见性"
+        ],
+        "status": "无法判定"
+      },
+      "历史重放": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/2"
+        ],
+        "reason_code": "REPLAY_EVIDENCE_NOT_COMPATIBLE",
+        "release_conditions": [
+          "以同一正式输入和三类时间规则完成无时间穿越的历史现场重放"
+        ],
+        "status": "无法判定"
+      },
+      "容量": {
+        "evidence_refs": [
+          "summary.json#/resource_facts"
+        ],
+        "reason_code": "RESEARCH_PIPELINE_CAPACITY_NOT_PROVEN",
+        "release_conditions": [
+          "在隔离研究流水线上完成同版本容量试采并满足资源预算"
+        ],
+        "status": "无法判定"
+      },
+      "恢复": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/4"
+        ],
+        "reason_code": "ISOLATED_RECOVERY_NOT_PROVEN",
+        "release_conditions": [
+          "完成隔离故障注入、幂等重启和不可变输出恢复验证"
+        ],
+        "status": "无法判定"
+      },
+      "成本与执行": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/3"
+        ],
+        "reason_code": "COST_EXECUTION_DATA_MISSING",
+        "release_conditions": [
+          "同版本补齐手续费、价差、深度、冲击、资金费率和执行延迟证据"
+        ],
+        "status": "无法判定"
+      },
+      "来源身份": {
+        "evidence_refs": [
+          "source-batch-files.json#/",
+          "formal-input-*.json#/underlying=BTC"
+        ],
+        "reason_code": "FORMAL_SOURCE_IDENTITY_BOUND",
+        "release_conditions": [
+          "来源批次文件集合、正式输入成员SHA与固定指纹持续全等"
+        ],
+        "status": "通过"
+      },
+      "血缘": {
+        "evidence_refs": [
+          "source-batch-files.json#/",
+          "formal-input-*.json#/underlying=BTC",
+          "member-observations-*.json#/underlying=BTC"
+        ],
+        "reason_code": "CONTENT_ADDRESSED_LINEAGE",
+        "release_conditions": [
+          "来源批次、正式输入、观察成员和内容SHA的一对一血缘持续闭合"
+        ],
+        "status": "通过"
+      },
+      "质量": {
+        "evidence_refs": [
+          "member-observations-*.json#/underlying=BTC",
+          "coverage.json#/BTCUSDT-trades",
+          "coverage.json#/BTCUSDT-aggTrades"
+        ],
+        "reason_code": "FULL_ROW_QUALITY_NOT_AUDITED",
+        "release_conditions": [
+          "同一正式输入版本完成逐行断档、重复、乱序、Schema和异常值质量审计"
+        ],
+        "status": "无法判定"
+      }
+    },
+    "horizon_hours": 24,
+    "market_type": "USDⓈ-M合约",
+    "observed_member_count": 2937,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "underlying": "BTC",
+    "venue": "Binance"
+  },
+  {
+    "decision": "阻塞",
+    "formal_member_count": 2937,
+    "gates": {
+      "三类时间": {
+        "evidence_refs": [
+          "member-observations-*.json#/underlying=BTC"
+        ],
+        "reason_code": "ARRIVAL_AND_CAPTURE_TIME_MISSING",
+        "release_conditions": [
+          "同一正式输入版本逐成员补齐事件时间、到达时间和采集时间并验证可见性"
+        ],
+        "status": "无法判定"
+      },
+      "历史重放": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/2"
+        ],
+        "reason_code": "REPLAY_EVIDENCE_NOT_COMPATIBLE",
+        "release_conditions": [
+          "以同一正式输入和三类时间规则完成无时间穿越的历史现场重放"
+        ],
+        "status": "无法判定"
+      },
+      "容量": {
+        "evidence_refs": [
+          "summary.json#/resource_facts"
+        ],
+        "reason_code": "RESEARCH_PIPELINE_CAPACITY_NOT_PROVEN",
+        "release_conditions": [
+          "在隔离研究流水线上完成同版本容量试采并满足资源预算"
+        ],
+        "status": "无法判定"
+      },
+      "恢复": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/4"
+        ],
+        "reason_code": "ISOLATED_RECOVERY_NOT_PROVEN",
+        "release_conditions": [
+          "完成隔离故障注入、幂等重启和不可变输出恢复验证"
+        ],
+        "status": "无法判定"
+      },
+      "成本与执行": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/3"
+        ],
+        "reason_code": "COST_EXECUTION_DATA_MISSING",
+        "release_conditions": [
+          "同版本补齐手续费、价差、深度、冲击、资金费率和执行延迟证据"
+        ],
+        "status": "无法判定"
+      },
+      "来源身份": {
+        "evidence_refs": [
+          "source-batch-files.json#/",
+          "formal-input-*.json#/underlying=BTC"
+        ],
+        "reason_code": "FORMAL_SOURCE_IDENTITY_BOUND",
+        "release_conditions": [
+          "来源批次文件集合、正式输入成员SHA与固定指纹持续全等"
+        ],
+        "status": "通过"
+      },
+      "血缘": {
+        "evidence_refs": [
+          "source-batch-files.json#/",
+          "formal-input-*.json#/underlying=BTC",
+          "member-observations-*.json#/underlying=BTC"
+        ],
+        "reason_code": "CONTENT_ADDRESSED_LINEAGE",
+        "release_conditions": [
+          "来源批次、正式输入、观察成员和内容SHA的一对一血缘持续闭合"
+        ],
+        "status": "通过"
+      },
+      "质量": {
+        "evidence_refs": [
+          "member-observations-*.json#/underlying=BTC",
+          "coverage.json#/BTCUSDT-trades",
+          "coverage.json#/BTCUSDT-aggTrades"
+        ],
+        "reason_code": "FULL_ROW_QUALITY_NOT_AUDITED",
+        "release_conditions": [
+          "同一正式输入版本完成逐行断档、重复、乱序、Schema和异常值质量审计"
+        ],
+        "status": "无法判定"
+      }
+    },
+    "horizon_hours": 48,
+    "market_type": "USDⓈ-M合约",
+    "observed_member_count": 2937,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "underlying": "BTC",
+    "venue": "Binance"
+  },
+  {
+    "decision": "阻塞",
+    "formal_member_count": 2243,
+    "gates": {
+      "三类时间": {
+        "evidence_refs": [
+          "member-observations-*.json#/underlying=ETH"
+        ],
+        "reason_code": "ARRIVAL_AND_CAPTURE_TIME_MISSING",
+        "release_conditions": [
+          "同一正式输入版本逐成员补齐事件时间、到达时间和采集时间并验证可见性"
+        ],
+        "status": "无法判定"
+      },
+      "历史重放": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/2"
+        ],
+        "reason_code": "REPLAY_EVIDENCE_NOT_COMPATIBLE",
+        "release_conditions": [
+          "以同一正式输入和三类时间规则完成无时间穿越的历史现场重放"
+        ],
+        "status": "无法判定"
+      },
+      "容量": {
+        "evidence_refs": [
+          "summary.json#/resource_facts"
+        ],
+        "reason_code": "RESEARCH_PIPELINE_CAPACITY_NOT_PROVEN",
+        "release_conditions": [
+          "在隔离研究流水线上完成同版本容量试采并满足资源预算"
+        ],
+        "status": "无法判定"
+      },
+      "恢复": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/4"
+        ],
+        "reason_code": "ISOLATED_RECOVERY_NOT_PROVEN",
+        "release_conditions": [
+          "完成隔离故障注入、幂等重启和不可变输出恢复验证"
+        ],
+        "status": "无法判定"
+      },
+      "成本与执行": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/3"
+        ],
+        "reason_code": "COST_EXECUTION_DATA_MISSING",
+        "release_conditions": [
+          "同版本补齐手续费、价差、深度、冲击、资金费率和执行延迟证据"
+        ],
+        "status": "无法判定"
+      },
+      "来源身份": {
+        "evidence_refs": [
+          "source-batch-files.json#/",
+          "formal-input-*.json#/underlying=ETH"
+        ],
+        "reason_code": "FORMAL_SOURCE_IDENTITY_BOUND",
+        "release_conditions": [
+          "来源批次文件集合、正式输入成员SHA与固定指纹持续全等"
+        ],
+        "status": "通过"
+      },
+      "血缘": {
+        "evidence_refs": [
+          "source-batch-files.json#/",
+          "formal-input-*.json#/underlying=ETH",
+          "member-observations-*.json#/underlying=ETH"
+        ],
+        "reason_code": "CONTENT_ADDRESSED_LINEAGE",
+        "release_conditions": [
+          "来源批次、正式输入、观察成员和内容SHA的一对一血缘持续闭合"
+        ],
+        "status": "通过"
+      },
+      "质量": {
+        "evidence_refs": [
+          "member-observations-*.json#/underlying=ETH",
+          "coverage.json#/ETHUSDT-trades"
+        ],
+        "reason_code": "FULL_ROW_QUALITY_NOT_AUDITED",
+        "release_conditions": [
+          "同一正式输入版本完成逐行断档、重复、乱序、Schema和异常值质量审计"
+        ],
+        "status": "无法判定"
+      }
+    },
+    "horizon_hours": 4,
+    "market_type": "USDⓈ-M合约",
+    "observed_member_count": 2243,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "underlying": "ETH",
+    "venue": "Binance"
+  },
+  {
+    "decision": "阻塞",
+    "formal_member_count": 2243,
+    "gates": {
+      "三类时间": {
+        "evidence_refs": [
+          "member-observations-*.json#/underlying=ETH"
+        ],
+        "reason_code": "ARRIVAL_AND_CAPTURE_TIME_MISSING",
+        "release_conditions": [
+          "同一正式输入版本逐成员补齐事件时间、到达时间和采集时间并验证可见性"
+        ],
+        "status": "无法判定"
+      },
+      "历史重放": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/2"
+        ],
+        "reason_code": "REPLAY_EVIDENCE_NOT_COMPATIBLE",
+        "release_conditions": [
+          "以同一正式输入和三类时间规则完成无时间穿越的历史现场重放"
+        ],
+        "status": "无法判定"
+      },
+      "容量": {
+        "evidence_refs": [
+          "summary.json#/resource_facts"
+        ],
+        "reason_code": "RESEARCH_PIPELINE_CAPACITY_NOT_PROVEN",
+        "release_conditions": [
+          "在隔离研究流水线上完成同版本容量试采并满足资源预算"
+        ],
+        "status": "无法判定"
+      },
+      "恢复": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/4"
+        ],
+        "reason_code": "ISOLATED_RECOVERY_NOT_PROVEN",
+        "release_conditions": [
+          "完成隔离故障注入、幂等重启和不可变输出恢复验证"
+        ],
+        "status": "无法判定"
+      },
+      "成本与执行": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/3"
+        ],
+        "reason_code": "COST_EXECUTION_DATA_MISSING",
+        "release_conditions": [
+          "同版本补齐手续费、价差、深度、冲击、资金费率和执行延迟证据"
+        ],
+        "status": "无法判定"
+      },
+      "来源身份": {
+        "evidence_refs": [
+          "source-batch-files.json#/",
+          "formal-input-*.json#/underlying=ETH"
+        ],
+        "reason_code": "FORMAL_SOURCE_IDENTITY_BOUND",
+        "release_conditions": [
+          "来源批次文件集合、正式输入成员SHA与固定指纹持续全等"
+        ],
+        "status": "通过"
+      },
+      "血缘": {
+        "evidence_refs": [
+          "source-batch-files.json#/",
+          "formal-input-*.json#/underlying=ETH",
+          "member-observations-*.json#/underlying=ETH"
+        ],
+        "reason_code": "CONTENT_ADDRESSED_LINEAGE",
+        "release_conditions": [
+          "来源批次、正式输入、观察成员和内容SHA的一对一血缘持续闭合"
+        ],
+        "status": "通过"
+      },
+      "质量": {
+        "evidence_refs": [
+          "member-observations-*.json#/underlying=ETH",
+          "coverage.json#/ETHUSDT-trades"
+        ],
+        "reason_code": "FULL_ROW_QUALITY_NOT_AUDITED",
+        "release_conditions": [
+          "同一正式输入版本完成逐行断档、重复、乱序、Schema和异常值质量审计"
+        ],
+        "status": "无法判定"
+      }
+    },
+    "horizon_hours": 8,
+    "market_type": "USDⓈ-M合约",
+    "observed_member_count": 2243,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "underlying": "ETH",
+    "venue": "Binance"
+  },
+  {
+    "decision": "阻塞",
+    "formal_member_count": 2243,
+    "gates": {
+      "三类时间": {
+        "evidence_refs": [
+          "member-observations-*.json#/underlying=ETH"
+        ],
+        "reason_code": "ARRIVAL_AND_CAPTURE_TIME_MISSING",
+        "release_conditions": [
+          "同一正式输入版本逐成员补齐事件时间、到达时间和采集时间并验证可见性"
+        ],
+        "status": "无法判定"
+      },
+      "历史重放": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/2"
+        ],
+        "reason_code": "REPLAY_EVIDENCE_NOT_COMPATIBLE",
+        "release_conditions": [
+          "以同一正式输入和三类时间规则完成无时间穿越的历史现场重放"
+        ],
+        "status": "无法判定"
+      },
+      "容量": {
+        "evidence_refs": [
+          "summary.json#/resource_facts"
+        ],
+        "reason_code": "RESEARCH_PIPELINE_CAPACITY_NOT_PROVEN",
+        "release_conditions": [
+          "在隔离研究流水线上完成同版本容量试采并满足资源预算"
+        ],
+        "status": "无法判定"
+      },
+      "恢复": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/4"
+        ],
+        "reason_code": "ISOLATED_RECOVERY_NOT_PROVEN",
+        "release_conditions": [
+          "完成隔离故障注入、幂等重启和不可变输出恢复验证"
+        ],
+        "status": "无法判定"
+      },
+      "成本与执行": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/3"
+        ],
+        "reason_code": "COST_EXECUTION_DATA_MISSING",
+        "release_conditions": [
+          "同版本补齐手续费、价差、深度、冲击、资金费率和执行延迟证据"
+        ],
+        "status": "无法判定"
+      },
+      "来源身份": {
+        "evidence_refs": [
+          "source-batch-files.json#/",
+          "formal-input-*.json#/underlying=ETH"
+        ],
+        "reason_code": "FORMAL_SOURCE_IDENTITY_BOUND",
+        "release_conditions": [
+          "来源批次文件集合、正式输入成员SHA与固定指纹持续全等"
+        ],
+        "status": "通过"
+      },
+      "血缘": {
+        "evidence_refs": [
+          "source-batch-files.json#/",
+          "formal-input-*.json#/underlying=ETH",
+          "member-observations-*.json#/underlying=ETH"
+        ],
+        "reason_code": "CONTENT_ADDRESSED_LINEAGE",
+        "release_conditions": [
+          "来源批次、正式输入、观察成员和内容SHA的一对一血缘持续闭合"
+        ],
+        "status": "通过"
+      },
+      "质量": {
+        "evidence_refs": [
+          "member-observations-*.json#/underlying=ETH",
+          "coverage.json#/ETHUSDT-trades"
+        ],
+        "reason_code": "FULL_ROW_QUALITY_NOT_AUDITED",
+        "release_conditions": [
+          "同一正式输入版本完成逐行断档、重复、乱序、Schema和异常值质量审计"
+        ],
+        "status": "无法判定"
+      }
+    },
+    "horizon_hours": 24,
+    "market_type": "USDⓈ-M合约",
+    "observed_member_count": 2243,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "underlying": "ETH",
+    "venue": "Binance"
+  },
+  {
+    "decision": "阻塞",
+    "formal_member_count": 2243,
+    "gates": {
+      "三类时间": {
+        "evidence_refs": [
+          "member-observations-*.json#/underlying=ETH"
+        ],
+        "reason_code": "ARRIVAL_AND_CAPTURE_TIME_MISSING",
+        "release_conditions": [
+          "同一正式输入版本逐成员补齐事件时间、到达时间和采集时间并验证可见性"
+        ],
+        "status": "无法判定"
+      },
+      "历史重放": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/2"
+        ],
+        "reason_code": "REPLAY_EVIDENCE_NOT_COMPATIBLE",
+        "release_conditions": [
+          "以同一正式输入和三类时间规则完成无时间穿越的历史现场重放"
+        ],
+        "status": "无法判定"
+      },
+      "容量": {
+        "evidence_refs": [
+          "summary.json#/resource_facts"
+        ],
+        "reason_code": "RESEARCH_PIPELINE_CAPACITY_NOT_PROVEN",
+        "release_conditions": [
+          "在隔离研究流水线上完成同版本容量试采并满足资源预算"
+        ],
+        "status": "无法判定"
+      },
+      "恢复": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/4"
+        ],
+        "reason_code": "ISOLATED_RECOVERY_NOT_PROVEN",
+        "release_conditions": [
+          "完成隔离故障注入、幂等重启和不可变输出恢复验证"
+        ],
+        "status": "无法判定"
+      },
+      "成本与执行": {
+        "evidence_refs": [
+          "summary.json#/remaining_blockers/3"
+        ],
+        "reason_code": "COST_EXECUTION_DATA_MISSING",
+        "release_conditions": [
+          "同版本补齐手续费、价差、深度、冲击、资金费率和执行延迟证据"
+        ],
+        "status": "无法判定"
+      },
+      "来源身份": {
+        "evidence_refs": [
+          "source-batch-files.json#/",
+          "formal-input-*.json#/underlying=ETH"
+        ],
+        "reason_code": "FORMAL_SOURCE_IDENTITY_BOUND",
+        "release_conditions": [
+          "来源批次文件集合、正式输入成员SHA与固定指纹持续全等"
+        ],
+        "status": "通过"
+      },
+      "血缘": {
+        "evidence_refs": [
+          "source-batch-files.json#/",
+          "formal-input-*.json#/underlying=ETH",
+          "member-observations-*.json#/underlying=ETH"
+        ],
+        "reason_code": "CONTENT_ADDRESSED_LINEAGE",
+        "release_conditions": [
+          "来源批次、正式输入、观察成员和内容SHA的一对一血缘持续闭合"
+        ],
+        "status": "通过"
+      },
+      "质量": {
+        "evidence_refs": [
+          "member-observations-*.json#/underlying=ETH",
+          "coverage.json#/ETHUSDT-trades"
+        ],
+        "reason_code": "FULL_ROW_QUALITY_NOT_AUDITED",
+        "release_conditions": [
+          "同一正式输入版本完成逐行断档、重复、乱序、Schema和异常值质量审计"
+        ],
+        "status": "无法判定"
+      }
+    },
+    "horizon_hours": 48,
+    "market_type": "USDⓈ-M合约",
+    "observed_member_count": 2243,
+    "post_event_observation_minutes": [
+      15,
+      60
+    ],
+    "underlying": "ETH",
+    "venue": "Binance"
+  }
+]

@@ -1,0 +1,143 @@
+{
+  "authorization_fingerprint": "ed076ea49d6a8d7f37dfdabe775f9962261ee3b6cf1d6a3146e1958014b6d25b",
+  "batch_id": "binance-archive-provenance-20260811T063739Z-7a6da0087493",
+  "completed_at": "2026-08-11T06:41:08Z",
+  "config_sha256": "453d8a00c881f6c1f83d7cc9353c975c9c8d7d6fe08ae2f8cc64e97626022f13",
+  "curl": {
+    "path": "/usr/bin/curl",
+    "sha256": "d9431c1ea04612844996bcbdf11d052afdc560116718f338ae6365ddb417e155",
+    "version": "curl 8.7.1 (x86_64-apple-darwin25.0) libcurl/8.7.1 (SecureTransport) LibreSSL/3.3.6 zlib/1.2.12 nghttp2/1.67.1"
+  },
+  "executor_sha256": "67b826fca129c95ab78887304c9130b6135e41145735ae4fe5b2787a2c19c966",
+  "group_summaries": {
+    "BTCUSDT-aggTrades": {
+      "candidate_total": 423,
+      "excluded_candidate": 0,
+      "non_candidate_exclusions": 0,
+      "observed": 423,
+      "失效": 0,
+      "失败": 0,
+      "已证明": 423,
+      "拒绝": 0,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "BTCUSDT-trades": {
+      "candidate_total": 2522,
+      "excluded_candidate": 0,
+      "non_candidate_exclusions": 974,
+      "observed": 2522,
+      "失效": 0,
+      "失败": 0,
+      "已证明": 2514,
+      "拒绝": 8,
+      "无法判定": 0,
+      "未成熟": 0
+    },
+    "ETHUSDT-trades": {
+      "candidate_total": 2442,
+      "excluded_candidate": 0,
+      "non_candidate_exclusions": 217,
+      "observed": 2442,
+      "失效": 0,
+      "失败": 0,
+      "已证明": 2243,
+      "拒绝": 199,
+      "无法判定": 0,
+      "未成熟": 0
+    }
+  },
+  "observation_items": [
+    {
+      "included_in_archive_denominator": false,
+      "path": "klines_1d/BTCUSDT.csv",
+      "reason_code": "OFFICIAL_CHECKSUM_MISSING",
+      "status": "无法判定"
+    },
+    {
+      "included_in_archive_denominator": false,
+      "path": "klines_1d/ETHUSDT.csv",
+      "reason_code": "OFFICIAL_CHECKSUM_MISSING",
+      "status": "无法判定"
+    }
+  ],
+  "official_readme": {
+    "bytes": 5144,
+    "document_uri": "https://raw.githubusercontent.com/binance/binance-public-data/5c7f3197591c0d54d85dc43066226bc4c671d47a/README.md",
+    "sha256": "085ab91377aa9325d44f4c7ad27cce4ab381e158403e1d7df2bad39d1a66f7c6"
+  },
+  "planned_output_bytes": 12748036,
+  "remote_listing_total_bytes": 4291419,
+  "remote_listings": {
+    "BTCUSDT-aggTrades": {
+      "fingerprint": "7ed950300932aa09d1ce9423fbac146eac6dc27da77871dba2545fa0a9c26a08",
+      "object_count": 4828,
+      "prefix": "data/futures/um/daily/aggTrades/BTCUSDT/",
+      "response_bytes": 1428275
+    },
+    "BTCUSDT-trades": {
+      "fingerprint": "2f0206668c7660931ace70c394e970679bbc0a2ceb3fc80fdf2d3bd159b16ef8",
+      "object_count": 5056,
+      "prefix": "data/futures/um/daily/trades/BTCUSDT/",
+      "response_bytes": 1453133
+    },
+    "ETHUSDT-trades": {
+      "fingerprint": "eaef759c0a08782abba613030ede1a24200ab411bc426114800938a1ee4ff2c5",
+      "object_count": 4896,
+      "prefix": "data/futures/um/daily/trades/ETHUSDT/",
+      "response_bytes": 1410011
+    }
+  },
+  "resource_facts": {
+    "disk_free_bytes_at_publish": 148199415808,
+    "elapsed_seconds": 209.646,
+    "hash_chunk_bytes": 1048576,
+    "pre_publish_snapshot": {
+      "disk_free_bytes": 148199415808,
+      "measured_at": "2026-08-11T06:41:08Z",
+      "output_disk_path": "/private/tmp/zhishi-task089-final/artifacts/数据",
+      "source_disk_free_bytes": 521846894592,
+      "source_disk_path": "/Volumes/data/data/binance/futures/um",
+      "system_memory_available_bytes": 22419729285,
+      "system_memory_available_percent": 58.0,
+      "system_memory_probe": "macos-memory-pressure-q/1",
+      "system_memory_total_bytes": 38654705664
+    },
+    "process_max_rss_bytes": 182534144,
+    "processes": 1,
+    "start_snapshot": {
+      "disk_free_bytes": 148567568384,
+      "measured_at": "2026-08-11T06:37:39Z",
+      "output_disk_path": "/private/tmp/zhishi-task089-final/artifacts/数据",
+      "source_disk_free_bytes": 521846702080,
+      "source_disk_path": "/Volumes/data/data/binance/futures/um",
+      "system_memory_available_bytes": 22806276341,
+      "system_memory_available_percent": 59.0,
+      "system_memory_probe": "macos-memory-pressure-q/1",
+      "system_memory_total_bytes": 38654705664
+    },
+    "system_memory_available_bytes_at_publish": 22419729285,
+    "system_memory_available_percent_at_publish": 58.0,
+    "system_memory_probe": "macos-memory-pressure-q/1"
+  },
+  "schema_version": "binance-archive-provenance-batch/1",
+  "source_data_modified": false,
+  "source_inventory_after_sha256": "03897f148c771096f4567575c0fb270a30cb0e60d696865dab079bd19583dfe5",
+  "source_inventory_before_sha256": "03897f148c771096f4567575c0fb270a30cb0e60d696865dab079bd19583dfe5",
+  "source_inventory_entry_count": 11972,
+  "stage_gate_changed": false,
+  "started_at": "2026-08-11T06:37:39Z",
+  "task_000084_status_changed": false,
+  "task_contract_sha256_at_execution": "c6529d9d3a28fd082dba3d893395676417e630513a0cf86756eaaa870dfa795d",
+  "task_id": "000092",
+  "totals": {
+    "candidate_total": 5387,
+    "observed": 5387,
+    "失效": 0,
+    "失败": 0,
+    "已证明": 5180,
+    "拒绝": 207,
+    "无法判定": 0,
+    "未成熟": 0
+  }
+}

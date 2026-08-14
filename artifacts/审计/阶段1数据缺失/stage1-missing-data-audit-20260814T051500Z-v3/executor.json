@@ -1,0 +1,7 @@
+{
+  "git_head": "c49b8232ddff0de9831dd58d57fb1fb3645715b7",
+  "python": "3.11.0",
+  "schema_version": "zhishi-stage1-missing-data-audit-executor/v1",
+  "script": "scripts/审计/审计阶段1数据缺失.py",
+  "script_blob_sha256": "ce13bfedeaec69b7b4cb970646da5ed21b719bd5"
+}

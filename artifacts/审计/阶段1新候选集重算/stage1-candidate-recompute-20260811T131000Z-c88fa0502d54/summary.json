@@ -1,0 +1,104 @@
+{
+  "allowed_research_leaf_count": 0,
+  "batch_id": "stage1-candidate-recompute-20260811T131000Z-c88fa0502d54",
+  "completed_at": "2026-08-11T13:42:25Z",
+  "config_sha256": "4ae13cbaf9e0226733ed75e11250cddb50dbe172f252d1adff5b476de339d1a5",
+  "denominator": {
+    "groups": {
+      "BTCUSDT-aggTrades": {
+        "candidate_total": 423,
+        "失效": 0,
+        "失败": 0,
+        "已证明": 423,
+        "拒绝": 0,
+        "无法判定": 0,
+        "未成熟": 0
+      },
+      "BTCUSDT-trades": {
+        "candidate_total": 2522,
+        "失效": 0,
+        "失败": 0,
+        "已证明": 2514,
+        "拒绝": 8,
+        "无法判定": 0,
+        "未成熟": 0
+      },
+      "ETHUSDT-trades": {
+        "candidate_total": 2442,
+        "失效": 0,
+        "失败": 0,
+        "已证明": 2243,
+        "拒绝": 199,
+        "无法判定": 0,
+        "未成熟": 0
+      }
+    },
+    "totals": {
+      "candidate_total": 5387,
+      "失效": 0,
+      "失败": 0,
+      "已证明": 5180,
+      "拒绝": 207,
+      "无法判定": 0,
+      "未成熟": 0
+    }
+  },
+  "executor_sha256": "0a8d90a340d257847ec7aadfc5ca8e039375dafe28215c0a9d97dad66fd66957",
+  "formal_input_fingerprint": "a1c69d6e2446c364578edb08e6b6fa30912f2e5577d7e51377ef8ab4c648952d",
+  "formal_member_count": 5180,
+  "inspection_failure_count": 0,
+  "inspection_scope": "5180个正式输入逐文件内容SHA复验并全量解压流读取；仅解析首末有效记录，未执行逐行业务质量验证",
+  "leaf_count": 8,
+  "legacy_task_000084_current_gate": false,
+  "legacy_task_000084_modified": false,
+  "observation_item_count": 2,
+  "observed_member_count": 5180,
+  "remaining_blockers": [
+    "到达时间与采集时间缺失",
+    "逐行断档、重复、乱序与异常质量未证明",
+    "同版本历史重放证据缺失",
+    "手续费、价差、深度、冲击、资金费率与延迟证据缺失",
+    "研究流水线容量与隔离恢复未证明"
+  ],
+  "resource_facts": {
+    "completed": {
+      "measured_at": "2026-08-11T13:42:25Z",
+      "memory_available_percent": 57.0,
+      "output_disk_free_bytes": 138263257088,
+      "process_max_rss_bytes": 221593600,
+      "source_disk_free_bytes": 520911646720
+    },
+    "elapsed_seconds": 2337.584,
+    "prepublish": {
+      "measured_at": "2026-08-11T13:42:26Z",
+      "memory_available_percent": 57.0,
+      "output_disk_free_bytes": 138263257088,
+      "process_max_rss_bytes": 221593600,
+      "source_disk_free_bytes": 520911646720
+    },
+    "processes": 1,
+    "start": {
+      "measured_at": "2026-08-11T13:03:28Z",
+      "memory_available_percent": 65.0,
+      "output_disk_free_bytes": 139389517824,
+      "process_max_rss_bytes": 121094144,
+      "source_disk_free_bytes": 521229484032
+    }
+  },
+  "schema_version": "zhishi-stage1-candidate-recompute-batch/v1",
+  "source_batch_files_fingerprint": "c44bca0ba5bc4a642dca214d0ce4e4bb346f687c4852ac8a320489f27752c032",
+  "source_batch_id": "binance-archive-provenance-20260811T063739Z-7a6da0087493",
+  "source_data_modified": false,
+  "source_inventory_after_sha256": "03897f148c771096f4567575c0fb270a30cb0e60d696865dab079bd19583dfe5",
+  "source_inventory_before_sha256": "03897f148c771096f4567575c0fb270a30cb0e60d696865dab079bd19583dfe5",
+  "source_inventory_entry_count": 11972,
+  "source_path_symlink_policy": "固定根自身及根内相对路径每级均拒绝符号链接",
+  "source_root_symlink": false,
+  "source_summary_sha256": "b63a375d777535670a0fd33a34c45250487deebfa3d900d4d1cb86ace23b95bd",
+  "stage1_complete": false,
+  "stage2_released": false,
+  "started_at": "2026-08-11T13:03:28Z",
+  "task_contract_sha256": "39897b1b56ed5f10732d6f8b5bdf79a1b76ab4dfc9cf487f19ada798ea5ff42e",
+  "task_id": "000093",
+  "total_time_limit_checked_before_publish": true
+}

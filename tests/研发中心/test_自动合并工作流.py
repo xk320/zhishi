@@ -112,6 +112,20 @@ class EligibilityWorkflowTests(unittest.TestCase):
         self.assertNotIn("转人工", self.text)
         self.assertNotIn("status=${PIPESTATUS[0]}", self.text)
 
+    def test_资格工作流传入关联合并事实且字段受限(self):
+        self.assertIn("referenced_prs", self.text)
+        self.assertIn("关联合并事实PR编号重复或超过上限", self.text)
+        self.assertIn('"merge_commit_sha": fact.get("merge_commit_sha")', self.text)
+        self.assertIn('"base_ref": fact.get("base", {}).get("ref")', self.text)
+        self.assertIn('"head_repo": fact.get("head", {}).get("repo", {}).get("full_name")', self.text)
+        self.assertIn("subprocess.run", self.text)
+
+    def test_关联合并事实读取注入只读GitHub令牌(self):
+        metadata_block = self.text.split(
+            "- name: 生成只读评审元数据", maxsplit=1
+        )[1].split("- name: 验证自动合并资格", maxsplit=1)[0]
+        self.assertIn("GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}", metadata_block)
+
 
 @unittest.skipUnless(MERGE_WORKFLOW.exists(), "等待合并工作流实现")
 class MergeWorkflowTests(unittest.TestCase):

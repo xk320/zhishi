@@ -1,0 +1,46 @@
+{
+  "合同版本": "stage1-simulated-order-lifecycle-1.0",
+  "任务编号": "任务-000103",
+  "SSH逻辑别名": "ubuntu",
+  "数据库": "orderbook",
+  "数据表": "order_book_raw_snapshots",
+  "复合索引": "idx_raw_snapshot_symbol_capture",
+  "标的": ["BTCUSDT", "ETHUSDT"],
+  "交易场所": "Binance",
+  "市场": "USDⓈ-M永续合约",
+  "方向": ["做多", "做空"],
+  "委托场景": ["进取型市价", "进取型限价", "被动限价撤销"],
+  "时钟场景": ["基准", "压力"],
+  "主研究尺度": ["主研究尺度：4小时", "主研究尺度：8小时", "主研究尺度：24小时", "主研究尺度：48小时"],
+  "生产者来源合同": {
+    "证据路径": "config/模拟交易/任务-000103订单簿生产者时间语义证据.json",
+    "证据SHA-256": "96771a789beb74a79aa806553e241699051a71aa94a58cfd9af66d881bbe198a",
+    "仓库快照": "orderbook-intelligence-service-release-20260731",
+    "提交": "030499faca3d6955d75c75cbc59656a4981f6c05",
+    "real_orderbook.py SHA-256": "fdb17777bd325aa52b55a5b03af5187ebc5804ded8ab3cde81237561be17639e",
+    "storage.py SHA-256": "d4fed7bf0fc89666a9836a17f144ef41d2a6d13d829124437032c9787bf9b05d",
+    "快照Schema版本": 1,
+    "来源": "canonical_book",
+    "市场事件字段": "payload.last_event_time_ms",
+    "系统到达字段": "payload.last_local_recv_ts_ms",
+    "市场事件语义": "Binance USDⓈ-M深度增量事件E字段，UTC毫秒",
+    "系统到达语义": "订单簿apply_diff处理增量事件时调用now_ms取得的本地墙钟，UTC毫秒"
+  },
+  "上游输入": {
+    "批次": "stage1-cost-execution-20260812T171000Z-81f61b9fae06",
+    "目录": "artifacts/数据/阶段1成本执行/stage1-cost-execution-20260812T171000Z-81f61b9fae06",
+    "清单SHA-256": "4ba3842c1f52255a9cc7dee0c2872917962b15bf9957bf9b016f61c1f6f28b47",
+    "摘要SHA-256": "f8743203c7499398087919735df27b060a919785d5627d6e9f5e4714b02bfdfb"
+  },
+  "资源上限": {
+    "单SQL秒": 30,
+    "每标的快照": 256,
+    "总快照": 512,
+    "估算扫描行": 10000,
+    "业务响应字节": 67108864,
+    "远端日志字节": 65536,
+    "本地输出字节": 16777216,
+    "RSS字节": 268435456,
+    "总时限秒": 600
+  }
+}

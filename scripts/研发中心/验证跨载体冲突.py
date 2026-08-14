@@ -55,6 +55,65 @@ CHANGE_TYPE_PATTERN = re.compile(
 CONTRACT_CONFLICT_REPAIR_TYPE = "任务合同冲突修复"
 CONTRACT_CONFLICT_REPAIR_EXECUTOR = "000068"
 CONTRACT_CONFLICT_REPAIR_TARGET = "000066"
+TASK094_CONTRACT_REPAIR_EXECUTOR = "000095"
+TASK094_CONTRACT_REPAIR_TARGET = "000094"
+TASK100_CONTRACT_REPAIR_EXECUTOR = "000102"
+TASK100_CONTRACT_REPAIR_TARGET = "000100"
+TASK100_OUTPUT_CONTRACT_OLD = "- 更新阶段1最终审计报告、数据缺口清单、README、总体计划、任务文件和看板；"
+TASK100_OUTPUT_CONTRACT_NEW = "- 保持docs/审计/阶段1最终审计报告.md和docs/审计/数据缺口与补采清单.md字节不变；新增docs/审计/阶段1成本与执行证据报告.md，并更新README、总体计划、任务文件和看板；"
+TASK094_CONTRACT_REPLACEMENTS = (
+    (
+        "3. 对5180个正式成员执行单进程逐ZIP逐行扫描，保存成员级状态、原因码、计数、时间边界、连续段和指纹，不保存原始业务值。",
+        "3. 对5180个正式成员执行固定三进程串行流水线（一个Python主控、一个固定`/usr/bin/unzip`解压子进程、一个固定扫描子进程；成员不并行）逐ZIP逐行扫描，保存成员级状态、原因码、计数、时间边界、连续段和指纹，不保存原始业务值。",
+    ),
+    (
+        "- 使用Python标准库和已有任务-000093列式JSON工具；单进程、逐文件、逐行、常量内存，不新增依赖、数据库或常驻服务。",
+        "- 使用Python标准库、已有任务-000093列式JSON工具和精确源码`scripts/审计/阶段1时间质量扫描器.c`；固定`/usr/bin/clang`只把内容寻址源码编译到临时目录，运行拓扑最多为一个Python主控、一个固定`/usr/bin/unzip`解压子进程和一个固定扫描子进程，成员严格串行，不新增第三方依赖、数据库或常驻服务。",
+    ),
+    (
+        "- 全量单进程扫描触发28800秒、512MiB、磁盘或25MiB输出硬门，且无法在不改变合同语义的情况下继续。",
+        "- 全量固定三进程串行流水线触发28800秒、主进程与全部子进程峰值RSS保守求和超过512MiB、磁盘或25MiB输出硬门，且无法在不改变合同语义的情况下继续。",
+    ),
+    (
+        "- `scripts/审计/审计阶段1新正式输入时间质量.py`及专项测试：确定性解码、逐行验证、成员裁决、连续段和原子发布。",
+        "- `scripts/审计/审计阶段1新正式输入时间质量.py`、精确源码`scripts/审计/阶段1时间质量扫描器.c`及专项测试：确定性解码、有界内存逐行验证、成员裁决、连续段和原子发布。",
+    ),
+    (
+        "- 单进程、流式、常量内存；不保存或输出价格、数量、成交编号、逐行业务正文或敏感信息。",
+        "- 固定三进程串行流水线、流式、常量内存且成员不并行；主进程与全部子进程峰值RSS保守求和执行512MiB失败关闭；不保存或输出价格、数量、成交编号、逐行业务正文或敏感信息。",
+    ),
+    (
+        "6. 真实单进程运行完成，保存扫描行数、解压字节、耗时、RSS、磁盘和源目录前后指纹；资源硬门均满足。",
+        "6. 真实固定三进程串行流水线运行完成，保存扫描行数、解压字节、耗时、进程拓扑、主进程峰值RSS、全部子进程峰值RSS、二者保守求和、测量平台、磁盘和源目录前后指纹；资源硬门均满足。",
+    ),
+    (
+        "python3 -m py_compile scripts/审计/审计阶段1新正式输入时间质量.py tests/审计/test_审计阶段1新正式输入时间质量.py",
+        "python3 -m py_compile scripts/审计/审计阶段1新正式输入时间质量.py tests/审计/test_审计阶段1新正式输入时间质量.py\n/usr/bin/clang -O2 -std=c11 -Wall -Wextra -Werror -fsyntax-only scripts/审计/阶段1时间质量扫描器.c",
+    ),
+    (
+        "- 当前阻塞原因：无。5180个正式成员、任务-000092官方对象`LastModified`和固定本地只读归档均可用；本任务不依赖Ubuntu、数据库、凭据或生产权限。",
+        "- 当前阻塞原因：无。5180个正式成员、任务-000092官方对象`LastModified`和固定本地只读归档均可用；本任务不依赖Ubuntu、数据库、凭据或生产权限。\n- 解除条件：任务-000095治理修复已进入`main`；精确C源码路径、固定三进程串行拓扑与整个进程组资源计量合同已可由可信规则复验。",
+    ),
+)
+
+
+def _apply_task094_contract_repair(text: str) -> str | None:
+    repaired = text
+    for old, new in TASK094_CONTRACT_REPLACEMENTS:
+        if repaired.count(old) != 1 or new in repaired:
+            return None
+        repaired = repaired.replace(old, new, 1)
+    return repaired
+
+
+def _apply_task100_contract_repair(text: str) -> str | None:
+    """逐字替换任务-000100唯一输出条目，不接受缺失或重复。"""
+
+    if text.count(TASK100_OUTPUT_CONTRACT_OLD) != 1:
+        return None
+    if TASK100_OUTPUT_CONTRACT_NEW in text:
+        return None
+    return text.replace(TASK100_OUTPUT_CONTRACT_OLD, TASK100_OUTPUT_CONTRACT_NEW, 1)
 BLOCKED_CONTRACT_REPAIR_EXECUTOR = "000056"
 BLOCKED_CONTRACT_REPAIR_TARGET = "000055"
 ROOT_READONLY_CONTRACT_REPAIR_EXECUTOR = "000086"
@@ -996,6 +1055,8 @@ def _check_task_contract_drift(
     blocked_contract_repair_target: str | None = None,
     root_readonly_contract_repair_target: str | None = None,
     contract_conflict_repair_target: str | None = None,
+    task094_contract_repair_target: str | None = None,
+    task100_contract_repair_target: str | None = None,
 ) -> None:
     """阻止交付或状态PR静默改写目标、范围、输入输出和安全边界。"""
 
@@ -1016,6 +1077,18 @@ def _check_task_contract_drift(
         base_text = _read_at_ref(repo_root, base_ref, path)
         head_text = _read_at_ref(repo_root, head_ref, path)
         if base_text is None or head_text is None:
+            continue
+        if (
+            task094_contract_repair_target is not None
+            and path == f"{TASK_DIR}/任务-{task094_contract_repair_target}.md"
+            and _apply_task094_contract_repair(base_text) == head_text
+        ):
+            continue
+        if (
+            task100_contract_repair_target is not None
+            and path == f"{TASK_DIR}/任务-{task100_contract_repair_target}.md"
+            and _apply_task100_contract_repair(base_text) == head_text
+        ):
             continue
         if _immutable_task_contract(
             base_text,
@@ -1220,6 +1293,65 @@ def _check_task_execution_metadata(
                     decision="失败关闭",
                     repair_mode="禁止缺少源任务PR证据",
                     release_condition="补齐任务-000086历史PR引用",
+                )
+            )
+        return
+    if (
+        change_type == "任务合同冲突修复"
+        and task_id
+        in {TASK094_CONTRACT_REPAIR_EXECUTOR, TASK100_CONTRACT_REPAIR_EXECUTOR}
+    ):
+        target_id = (
+            TASK094_CONTRACT_REPAIR_TARGET
+            if task_id == TASK094_CONTRACT_REPAIR_EXECUTOR
+            else TASK100_CONTRACT_REPAIR_TARGET
+        )
+        # 已完成的治理授权任务只授权后续PR精确修复固定目标合同；
+        # 源任务的历史执行分支和PR
+        # 不能绑定到新的目标修复PR。源任务逐字不变和目标修复范围由
+        # 自动合并资格校验器另行复算，这里仍要求历史元数据完整。
+        if status != "已完成":
+            conflicts.append(
+                _conflict(
+                    "TASK_CONTRACT_CONFLICT",
+                    path,
+                    authority=f"任务-{target_id}合同修复源任务",
+                    decision="失败关闭",
+                    repair_mode="禁止使用未完成治理任务",
+                    release_condition=f"先完成任务-{task_id}并保持其历史合同不变",
+                )
+            )
+        if not task_branch:
+            conflicts.append(
+                _conflict(
+                    "TASK_CONTRACT_CONFLICT",
+                    path,
+                    authority="任务文件执行元数据",
+                    decision="失败关闭",
+                    repair_mode="禁止缺少源任务执行分支",
+                    release_condition=f"补齐任务-{task_id}历史执行分支",
+                )
+            )
+        if not task_started:
+            conflicts.append(
+                _conflict(
+                    "TASK_CONTRACT_CONFLICT",
+                    path,
+                    authority="任务文件执行元数据",
+                    decision="失败关闭",
+                    repair_mode="禁止缺少源任务开始时间",
+                    release_condition=f"补齐任务-{task_id}历史开始时间",
+                )
+            )
+        if not _field(PR_PATTERN, text):
+            conflicts.append(
+                _conflict(
+                    "TASK_CONTRACT_CONFLICT",
+                    path,
+                    authority="任务文件Pull Request元数据",
+                    decision="失败关闭",
+                    repair_mode="禁止缺少源任务PR证据",
+                    release_condition=f"补齐任务-{task_id}历史PR引用",
                 )
             )
         return
@@ -1510,6 +1642,18 @@ def check_refs(
                 and task_id == CONTRACT_CONFLICT_REPAIR_EXECUTOR
                 else None
             ),
+            task094_contract_repair_target=(
+                TASK094_CONTRACT_REPAIR_TARGET
+                if change_type == CONTRACT_CONFLICT_REPAIR_TYPE
+                and task_id == TASK094_CONTRACT_REPAIR_EXECUTOR
+                else None
+            ),
+            task100_contract_repair_target=(
+                TASK100_CONTRACT_REPAIR_TARGET
+                if change_type == CONTRACT_CONFLICT_REPAIR_TYPE
+                and task_id == TASK100_CONTRACT_REPAIR_EXECUTOR
+                else None
+            ),
         )
         _check_historical_immutability(repo_root, base_sha, head_sha, conflicts)
     _check_metadata(
@@ -1622,6 +1766,8 @@ def _compute_rule_fingerprint() -> str:
         "_check_dependencies",
         "_check_scope",
         "_check_historical_immutability",
+        "_apply_task094_contract_repair",
+        "_apply_task100_contract_repair",
         "_root_readonly_section_bounds",
         "_immutable_task_contract",
         "_check_task_contract_drift",
@@ -1666,6 +1812,13 @@ def _compute_rule_fingerprint() -> str:
         ROOT_READONLY_COMPAT_SECTION,
         ROOT_READONLY_CONTRACT_REPAIR_EXECUTOR,
         ROOT_READONLY_CONTRACT_REPAIR_TARGET,
+        TASK094_CONTRACT_REPAIR_EXECUTOR,
+        TASK094_CONTRACT_REPAIR_TARGET,
+        repr(TASK094_CONTRACT_REPLACEMENTS),
+        TASK100_CONTRACT_REPAIR_EXECUTOR,
+        TASK100_CONTRACT_REPAIR_TARGET,
+        TASK100_OUTPUT_CONTRACT_OLD,
+        TASK100_OUTPUT_CONTRACT_NEW,
     ]
     for name in names:
         try:

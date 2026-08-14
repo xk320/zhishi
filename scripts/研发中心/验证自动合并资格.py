@@ -222,6 +222,208 @@ CONTRACT_CONFLICT_REPAIR_ALLOWED_PATHS = frozenset(
         "docs/研发中心/看板.md",
     }
 )
+TASK094_CONTRACT_REPAIR_EXECUTOR = "000095"
+TASK094_CONTRACT_REPAIR_TARGET = "000094"
+TASK100_CONTRACT_REPAIR_EXECUTOR = "000102"
+TASK100_CONTRACT_REPAIR_TARGET = "000100"
+TASK100_CONTRACT_REPAIR_GOVERNANCE = "000101"
+TASK100_OUTPUT_CONTRACT_OLD = "- 更新阶段1最终审计报告、数据缺口清单、README、总体计划、任务文件和看板；"
+TASK100_OUTPUT_CONTRACT_NEW = "- 保持docs/审计/阶段1最终审计报告.md和docs/审计/数据缺口与补采清单.md字节不变；新增docs/审计/阶段1成本与执行证据报告.md，并更新README、总体计划、任务文件和看板；"
+TASK094_NATIVE_SCANNER_PATH = "scripts/审计/阶段1时间质量扫描器.c"
+TASK094_EXECUTOR_PATH = "scripts/审计/审计阶段1新正式输入时间质量.py"
+TASK094_CONFIG_PATH = "config/审计/任务-000094逐行时间质量审计.json"
+TASK094_TASK_PATH = "docs/研发中心/任务/任务-000094.md"
+TASK094_RESOURCE_LIMIT_BYTES = 512 * 1024 * 1024
+TASK094_RESOURCE_PROTOCOL = "zhishi-process-group-rusage/v1"
+TASK094_RESOURCE_PLATFORM = "darwin-rusage-maxrss-by-process/v1"
+TASK094_CONTRACT_HEADER_PREFIXES = (
+    "# 任务-000094：",
+    "- 类型：",
+    "- 阶段：",
+    "- 优先级：",
+    "- 执行方案：",
+    "- 方案状态：",
+    "- 执行授权：",
+    "- 并行规则：",
+)
+TASK094_CONTRACT_REPLACEMENTS = (
+    (
+        "3. 对5180个正式成员执行单进程逐ZIP逐行扫描，保存成员级状态、原因码、计数、时间边界、连续段和指纹，不保存原始业务值。",
+        "3. 对5180个正式成员执行固定三进程串行流水线（一个Python主控、一个固定`/usr/bin/unzip`解压子进程、一个固定扫描子进程；成员不并行）逐ZIP逐行扫描，保存成员级状态、原因码、计数、时间边界、连续段和指纹，不保存原始业务值。",
+    ),
+    (
+        "- 使用Python标准库和已有任务-000093列式JSON工具；单进程、逐文件、逐行、常量内存，不新增依赖、数据库或常驻服务。",
+        "- 使用Python标准库、已有任务-000093列式JSON工具和精确源码`scripts/审计/阶段1时间质量扫描器.c`；固定`/usr/bin/clang`只把内容寻址源码编译到临时目录，运行拓扑最多为一个Python主控、一个固定`/usr/bin/unzip`解压子进程和一个固定扫描子进程，成员严格串行，不新增第三方依赖、数据库或常驻服务。",
+    ),
+    (
+        "- 全量单进程扫描触发28800秒、512MiB、磁盘或25MiB输出硬门，且无法在不改变合同语义的情况下继续。",
+        "- 全量固定三进程串行流水线触发28800秒、主进程与全部子进程峰值RSS保守求和超过512MiB、磁盘或25MiB输出硬门，且无法在不改变合同语义的情况下继续。",
+    ),
+    (
+        "- `scripts/审计/审计阶段1新正式输入时间质量.py`及专项测试：确定性解码、逐行验证、成员裁决、连续段和原子发布。",
+        "- `scripts/审计/审计阶段1新正式输入时间质量.py`、精确源码`scripts/审计/阶段1时间质量扫描器.c`及专项测试：确定性解码、有界内存逐行验证、成员裁决、连续段和原子发布。",
+    ),
+    (
+        "- 单进程、流式、常量内存；不保存或输出价格、数量、成交编号、逐行业务正文或敏感信息。",
+        "- 固定三进程串行流水线、流式、常量内存且成员不并行；主进程与全部子进程峰值RSS保守求和执行512MiB失败关闭；不保存或输出价格、数量、成交编号、逐行业务正文或敏感信息。",
+    ),
+    (
+        "6. 真实单进程运行完成，保存扫描行数、解压字节、耗时、RSS、磁盘和源目录前后指纹；资源硬门均满足。",
+        "6. 真实固定三进程串行流水线运行完成，保存扫描行数、解压字节、耗时、进程拓扑、主进程峰值RSS、全部子进程峰值RSS、二者保守求和、测量平台、磁盘和源目录前后指纹；资源硬门均满足。",
+    ),
+    (
+        "python3 -m py_compile scripts/审计/审计阶段1新正式输入时间质量.py tests/审计/test_审计阶段1新正式输入时间质量.py",
+        "python3 -m py_compile scripts/审计/审计阶段1新正式输入时间质量.py tests/审计/test_审计阶段1新正式输入时间质量.py\n/usr/bin/clang -O2 -std=c11 -Wall -Wextra -Werror -fsyntax-only scripts/审计/阶段1时间质量扫描器.c",
+    ),
+    (
+        "- 当前阻塞原因：无。5180个正式成员、任务-000092官方对象`LastModified`和固定本地只读归档均可用；本任务不依赖Ubuntu、数据库、凭据或生产权限。",
+        "- 当前阻塞原因：无。5180个正式成员、任务-000092官方对象`LastModified`和固定本地只读归档均可用；本任务不依赖Ubuntu、数据库、凭据或生产权限。\n- 解除条件：任务-000095治理修复已进入`main`；精确C源码路径、固定三进程串行拓扑与整个进程组资源计量合同已可由可信规则复验。",
+    ),
+)
+
+
+def _task094_native_scanner_allowed(
+    *, task_ids: Sequence[str], change_type: str | None, path: str
+) -> bool:
+    """只为任务-000094的唯一C扫描器开放受控交付。"""
+
+    return (
+        tuple(task_ids) == (TASK094_CONTRACT_REPAIR_TARGET,)
+        and change_type == "任务交付"
+        and path == TASK094_NATIVE_SCANNER_PATH
+    )
+
+
+def _contract_conflict_executor(body_task_ids: Sequence[str]) -> str | None:
+    """只接受已登记的一次性合同修复入口，未知或混合引用失败关闭。"""
+
+    if tuple(body_task_ids) == (CONTRACT_CONFLICT_REPAIR_EXECUTOR,):
+        return CONTRACT_CONFLICT_REPAIR_EXECUTOR
+    if tuple(body_task_ids) == (TASK094_CONTRACT_REPAIR_EXECUTOR,):
+        return TASK094_CONTRACT_REPAIR_EXECUTOR
+    if tuple(body_task_ids) == (TASK100_CONTRACT_REPAIR_EXECUTOR,):
+        return TASK100_CONTRACT_REPAIR_EXECUTOR
+    return None
+
+
+def _apply_task100_contract_repair(text: str) -> str | None:
+    """逐字替换任务-000100唯一输出条目，不接受缺失或重复。"""
+
+    if text.count(TASK100_OUTPUT_CONTRACT_OLD) != 1:
+        return None
+    if TASK100_OUTPUT_CONTRACT_NEW in text:
+        return None
+    return text.replace(TASK100_OUTPUT_CONTRACT_OLD, TASK100_OUTPUT_CONTRACT_NEW, 1)
+
+
+def _apply_task094_contract_repair(text: str) -> str | None:
+    """逐字应用任务-000094一次性完整合同替换。"""
+
+    repaired = text
+    for old, new in TASK094_CONTRACT_REPLACEMENTS:
+        if repaired.count(old) != 1 or new in repaired:
+            return None
+        repaired = repaired.replace(old, new, 1)
+    return repaired
+
+
+def _task094_resource_fact_reasons(resource_facts: object) -> tuple[str, ...]:
+    """验证任务-000094整个串行进程组的保守资源事实。"""
+
+    if not isinstance(resource_facts, Mapping):
+        return ("任务-000094缺少进程组资源事实",)
+    required = {
+        "measurement_protocol",
+        "measurement_platform",
+        "rss_unit",
+        "process_topology",
+        "members_parallelism",
+        "controller_max_rss_bytes",
+        "compiler_max_rss_bytes",
+        "unzip_max_rss_bytes",
+        "scanner_max_rss_bytes",
+        "children_conservative_sum_max_rss_bytes",
+        "conservative_process_group_max_rss_bytes",
+    }
+    reasons: list[str] = []
+    if set(resource_facts) != required:
+        reasons.append("任务-000094进程组资源字段不完整")
+        return tuple(reasons)
+    if resource_facts.get("measurement_protocol") != TASK094_RESOURCE_PROTOCOL:
+        reasons.append("任务-000094资源测量协议不匹配")
+    if resource_facts.get("measurement_platform") != TASK094_RESOURCE_PLATFORM:
+        reasons.append("任务-000094资源测量平台不匹配")
+    if resource_facts.get("rss_unit") != "bytes":
+        reasons.append("任务-000094资源测量单位不匹配")
+    if resource_facts.get("process_topology") != [
+        "python_controller",
+        "fixed_clang_compile",
+        "fixed_unzip",
+        "fixed_scanner",
+    ]:
+        reasons.append("任务-000094进程拓扑不匹配")
+    if resource_facts.get("members_parallelism") != 1:
+        reasons.append("任务-000094成员扫描不是串行")
+    values = [
+        resource_facts.get("controller_max_rss_bytes"),
+        resource_facts.get("compiler_max_rss_bytes"),
+        resource_facts.get("unzip_max_rss_bytes"),
+        resource_facts.get("scanner_max_rss_bytes"),
+        resource_facts.get("children_conservative_sum_max_rss_bytes"),
+        resource_facts.get("conservative_process_group_max_rss_bytes"),
+    ]
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value <= 0
+        for value in values
+    ):
+        reasons.append("任务-000094进程组RSS事实无效")
+    else:
+        controller, compiler, unzip, scanner, children, total = values
+        if compiler + unzip + scanner != children:
+            reasons.append("任务-000094子进程RSS保守和不守恒")
+        if controller + children != total:
+            reasons.append("任务-000094进程组RSS保守和不守恒")
+        if total > TASK094_RESOURCE_LIMIT_BYTES:
+            reasons.append("任务-000094进程组RSS超过512MiB")
+    return tuple(reasons)
+
+
+def _task094_contract_digest(text: str) -> str | None:
+    """按运行元数据之外的固定任务合同计算任务-000094指纹。"""
+
+    lines = text.splitlines()
+    try:
+        body_start = lines.index("## 依赖与阻塞条件")
+    except ValueError:
+        return None
+    try:
+        body_end = lines.index("## 执行记录", body_start + 1)
+    except ValueError:
+        body_end = len(lines)
+    header = [
+        line
+        for line in lines[:body_start]
+        if any(line.startswith(prefix) for prefix in TASK094_CONTRACT_HEADER_PREFIXES)
+    ]
+    if len(header) != len(TASK094_CONTRACT_HEADER_PREFIXES):
+        return None
+    canonical = (
+        "\n".join(header + [""] + lines[body_start:body_end]).rstrip() + "\n"
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _sha256_path_fact(
+    path_facts: Mapping[str, PathFact], path: str
+) -> str | None:
+    fact = path_facts.get(path)
+    if (
+        fact is None
+        or fact.status not in {"A", "M"}
+        or not isinstance(fact.text, str)
+    ):
+        return None
+    return hashlib.sha256(fact.text.encode("utf-8")).hexdigest()
 IMPLEMENTATION_SHA_PATTERN = re.compile(
     r"^- 实现提交SHA：`([0-9a-f]{40})`$", re.MULTILINE
 )
@@ -524,6 +726,16 @@ def parse_task_references(pr_body: str) -> tuple[str, ...]:
         if match is not None and match.group(1) not in task_ids:
             task_ids.append(match.group(1))
     return tuple(sorted(task_ids))
+
+
+def _raw_task_references(pr_body: str) -> tuple[str, ...]:
+    """保留严格关联任务区段的原始顺序和重复项。"""
+
+    return tuple(
+        match.group(1)
+        for line in _markdown_section(pr_body, "关联任务")
+        if (match := TASK_REFERENCE_LINE.fullmatch(line)) is not None
+    )
 
 
 def parse_change_type(pr_body: str) -> str | None:
@@ -1062,6 +1274,63 @@ def _validate_path_facts(
     return tuple(reasons)
 
 
+def _validate_task094_batch_resource_evidence(
+    path_facts: Sequence[PathFact] | None, reasons: list[str]
+) -> None:
+    """从最终头文件复验批次身份、生成器绑定与进程组资源硬门。"""
+
+    if path_facts is None:
+        _append_reason(reasons, "任务-000094缺少可验证批次路径事实")
+        return
+    summaries = [
+        fact
+        for fact in path_facts
+        if fact.status == "A"
+        and fact.path.startswith("artifacts/审计/阶段1逐行时间质量/")
+        and fact.path.endswith("/summary.json")
+    ]
+    if len(summaries) != 1 or not isinstance(summaries[0].text, str):
+        _append_reason(reasons, "任务-000094必须新增唯一最终批次摘要")
+        return
+    try:
+        document = json.loads(
+            summaries[0].text,
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+    except (TypeError, ValueError, json.JSONDecodeError):
+        _append_reason(reasons, "任务-000094最终批次摘要无效")
+        return
+    if not isinstance(document, Mapping):
+        _append_reason(reasons, "任务-000094最终批次摘要无效")
+        return
+    summary_path = PurePosixPath(summaries[0].path)
+    batch_id = summary_path.parent.name
+    if document.get("batch_id") != batch_id:
+        _append_reason(reasons, "任务-000094批次身份与摘要路径不一致")
+
+    facts_by_path = {fact.path: fact for fact in path_facts}
+    bindings = {
+        "executor_sha256": _sha256_path_fact(facts_by_path, TASK094_EXECUTOR_PATH),
+        "config_sha256": _sha256_path_fact(facts_by_path, TASK094_CONFIG_PATH),
+        "scanner_source_sha256": _sha256_path_fact(
+            facts_by_path, TASK094_NATIVE_SCANNER_PATH
+        ),
+    }
+    task_fact = facts_by_path.get(TASK094_TASK_PATH)
+    bindings["task_contract_sha256"] = (
+        _task094_contract_digest(task_fact.text)
+        if task_fact is not None and isinstance(task_fact.text, str)
+        else None
+    )
+    for field, expected in bindings.items():
+        if expected is None:
+            _append_reason(reasons, f"任务-000094资源证据缺少可信{field}来源")
+        elif document.get(field) != expected:
+            _append_reason(reasons, f"任务-000094资源证据{field}未绑定最终头文件")
+    for reason in _task094_resource_fact_reasons(document.get("process_group_resource_facts")):
+        _append_reason(reasons, reason)
+
+
 def _without_mutable_metadata_lines(
     text: str, prefixes: Sequence[str]
 ) -> tuple[str, ...]:
@@ -1103,7 +1372,7 @@ def _has_unique_metadata_fields(
 
 
 def _successor_mutable_layout(
-    text: str,
+    text: str, *, allow_missing_dependency_release: bool = False,
 ) -> tuple[str, int, int, int] | None:
     """定位后继字段的固定任务头或依赖章节布局。"""
 
@@ -1175,20 +1444,30 @@ def _successor_mutable_layout(
     section_releases = [
         index for index in release_locations if section_start < index < section_end
     ]
+    allowed_release_counts = (
+        {0, 1} if allow_missing_dependency_release else {1}
+    )
     if (
         len(section_blockers) != 1
-        or len(section_releases) != 1
+        or len(section_releases) not in allowed_release_counts
         or not all(in_record(index) or section_start < index < section_end for index in blocker_locations)
         or not all(in_record(index) or section_start < index < section_end for index in release_locations)
     ):
         return None
+    if section_releases and not lines[section_releases[0]].split("：", 1)[1].strip():
+        return None
     return "dependency_section", first_section, section_start, section_end
 
 
-def _without_successor_mutable_lines(text: str) -> tuple[str, ...]:
+def _without_successor_mutable_lines(
+    text: str, *, allow_missing_dependency_release: bool = False
+) -> tuple[str, ...]:
     """移除已验证位置中的后继状态、阻塞原因与解除条件。"""
 
-    layout = _successor_mutable_layout(text)
+    layout = _successor_mutable_layout(
+        text,
+        allow_missing_dependency_release=allow_missing_dependency_release,
+    )
     if layout is None:
         return tuple(text.splitlines())
     kind, first_section, section_start, section_end = layout
@@ -1331,11 +1610,17 @@ def _header_field_line(text: str, prefix: str) -> str | None:
 
 
 def _without_blocking_mutable_lines(
-    text: str, *, allow_initial_metadata: bool
+    text: str, *, allow_initial_metadata: bool,
+    allow_missing_dependency_release: bool = False,
 ) -> tuple[str, ...]:
     """移除阻塞迁移允许变化的状态字段和首次执行元数据。"""
 
-    lines = list(_without_successor_mutable_lines(text))
+    lines = list(
+        _without_successor_mutable_lines(
+            text,
+            allow_missing_dependency_release=allow_missing_dependency_release,
+        )
+    )
     if not allow_initial_metadata:
         return tuple(lines)
     first_section = next(
@@ -1366,15 +1651,6 @@ def _validate_blocking_transition(
 ) -> None:
     """校验进入阻塞时的字段位置、不可变合同和首次执行记录。"""
 
-    base_layout = _successor_mutable_layout(base_task)
-    head_layout = _successor_mutable_layout(head_task)
-    if (
-        base_layout is None
-        or head_layout is None
-        or base_layout[0] != head_layout[0]
-    ):
-        _append_reason(reasons, "阻塞状态闭环字段位置无效")
-        return
     baseline_has_execution_metadata = any(
         (
             _header_field_line(base_task, "- 开始时间：") is not None,
@@ -1384,8 +1660,26 @@ def _validate_blocking_transition(
     allow_initial_metadata = (
         old_status == "待执行" and not baseline_has_execution_metadata
     )
+    allow_missing_dependency_release = (
+        allow_initial_metadata
+        and _header_field_line(base_task, "- 执行分支：") is None
+    )
+    base_layout = _successor_mutable_layout(
+        base_task,
+        allow_missing_dependency_release=allow_missing_dependency_release,
+    )
+    head_layout = _successor_mutable_layout(head_task)
+    if (
+        base_layout is None
+        or head_layout is None
+        or base_layout[0] != head_layout[0]
+    ):
+        _append_reason(reasons, "阻塞状态闭环字段位置无效")
+        return
     if _without_blocking_mutable_lines(
-        base_task, allow_initial_metadata=allow_initial_metadata
+        base_task,
+        allow_initial_metadata=allow_initial_metadata,
+        allow_missing_dependency_release=allow_missing_dependency_release,
     ) != _without_blocking_mutable_lines(
         head_task, allow_initial_metadata=allow_initial_metadata
     ):
@@ -1853,7 +2147,10 @@ def _validate_blocked_contract_repair(
             _append_reason(reasons, "任务-000056类型不是治理")
         if _task_field(AUTOMATION_SCOPE_PATTERN, executor_base) != AUTOMATION_SCOPE:
             _append_reason(reasons, "任务-000056未声明治理自动化授权")
-    if _task_field(TASK_STATUS_PATTERN, target_base) != "阻塞":
+    target_base_status = _task_field(TASK_STATUS_PATTERN, target_base)
+    if target_base_status == "已取消":
+        _append_reason(reasons, f"目标任务-{target_id}已取消，旧root兼容映射已关闭")
+    elif target_base_status != "阻塞":
         _append_reason(reasons, f"目标任务-{target_id}基线状态不是阻塞")
     if _task_field(TASK_STATUS_PATTERN, target_head) != "阻塞":
         _append_reason(reasons, f"目标任务-{target_id}状态不得在合同修复中迁移")
@@ -2120,6 +2417,114 @@ def _validate_contract_conflict_repair(
     )
     allowed_unreferenced.add(target_id)
     return allowed_unreferenced
+
+
+def _validate_task094_contract_repair(
+    *,
+    task_ids: Sequence[str],
+    changed_paths: Sequence[str],
+    base_tasks: Mapping[str, str],
+    head_tasks: Mapping[str, str],
+    base_board: str | None,
+    head_board: str | None,
+    reasons: list[str],
+) -> set[str]:
+    """验证任务-000095→任务-000094的一次性完整合同修复。"""
+
+    executor_id = TASK094_CONTRACT_REPAIR_EXECUTOR
+    target_id = TASK094_CONTRACT_REPAIR_TARGET
+    allowed = {executor_id, target_id}
+    if tuple(task_ids) != (executor_id,):
+        _append_reason(reasons, "任务-000094合同修复必须且只能关联任务-000095")
+        return allowed
+    target_path = f"docs/研发中心/任务/任务-{target_id}.md"
+    if set(changed_paths) != {target_path}:
+        _append_reason(reasons, "任务-000094合同修复只能修改目标任务文件")
+    executor_base = base_tasks.get(executor_id)
+    executor_head = head_tasks.get(executor_id)
+    target_base = base_tasks.get(target_id)
+    target_head = head_tasks.get(target_id)
+    if None in (executor_base, executor_head, target_base, target_head):
+        _append_reason(reasons, "任务-000094合同修复缺少执行任务或目标任务正文")
+        return allowed
+    assert executor_base is not None and executor_head is not None
+    assert target_base is not None and target_head is not None
+    if executor_base != executor_head:
+        _append_reason(reasons, "任务-000095在目标合同修复中必须逐字不变")
+    if _task_field(TASK_STATUS_PATTERN, executor_base) != "已完成":
+        _append_reason(reasons, "任务-000095必须先完成状态闭环")
+    if (
+        _task_field(TASK_STATUS_PATTERN, target_base) != "待执行"
+        or _task_field(TASK_STATUS_PATTERN, target_head) != "待执行"
+    ):
+        _append_reason(reasons, "任务-000094基线和头部必须保持待执行")
+    expected = _apply_task094_contract_repair(target_base)
+    if expected is None or target_head != expected:
+        _append_reason(reasons, "任务-000094未按固定完整合同修复")
+    if base_board is not None and head_board is not None and base_board != head_board:
+        _append_reason(reasons, "任务-000094合同修复不得改写看板")
+    return allowed
+
+
+def _validate_task100_contract_repair(
+    *,
+    task_ids: Sequence[str],
+    changed_paths: Sequence[str],
+    base_tasks: Mapping[str, str],
+    head_tasks: Mapping[str, str],
+    base_board: str | None,
+    head_board: str | None,
+    reasons: list[str],
+) -> set[str]:
+    """验证任务-000102→任务-000100的唯一输出条目合同修复。"""
+
+    executor_id = TASK100_CONTRACT_REPAIR_EXECUTOR
+    target_id = TASK100_CONTRACT_REPAIR_TARGET
+    allowed = {executor_id, target_id}
+    if tuple(task_ids) != (executor_id,):
+        _append_reason(reasons, "任务-000100合同修复必须且只能关联任务-000102")
+        return allowed
+    target_path = f"docs/研发中心/任务/任务-{target_id}.md"
+    if set(changed_paths) != {target_path}:
+        _append_reason(reasons, "任务-000100合同修复只能修改目标任务文件")
+    executor_base = base_tasks.get(executor_id)
+    executor_head = head_tasks.get(executor_id)
+    governance_base = base_tasks.get(TASK100_CONTRACT_REPAIR_GOVERNANCE)
+    governance_head = head_tasks.get(TASK100_CONTRACT_REPAIR_GOVERNANCE)
+    target_base = base_tasks.get(target_id)
+    target_head = head_tasks.get(target_id)
+    if None in (
+        executor_base,
+        executor_head,
+        governance_base,
+        governance_head,
+        target_base,
+        target_head,
+    ):
+        _append_reason(reasons, "任务-000100合同修复缺少治理任务、执行任务或目标任务正文")
+        return allowed
+    assert executor_base is not None and executor_head is not None
+    assert governance_base is not None and governance_head is not None
+    assert target_base is not None and target_head is not None
+    if executor_base != executor_head:
+        _append_reason(reasons, "任务-000102在目标合同修复中必须逐字不变")
+    if governance_base != governance_head:
+        _append_reason(reasons, "任务-000101在目标合同修复中必须逐字不变")
+    if _task_field(TASK_STATUS_PATTERN, governance_base) != "已完成":
+        _append_reason(reasons, "任务-000101必须先完成状态闭环")
+    if _task_field(TASK_STATUS_PATTERN, executor_base) != "已完成":
+        _append_reason(reasons, "任务-000102必须先完成状态闭环")
+    if (
+        _task_field(TASK_STATUS_PATTERN, target_base) != "待执行"
+        or _task_field(TASK_STATUS_PATTERN, target_head) != "待执行"
+    ):
+        _append_reason(reasons, "任务-000100基线和头部必须保持待执行")
+    expected = _apply_task100_contract_repair(target_base)
+    if expected is None or target_head != expected:
+        _append_reason(reasons, "任务-000100未按固定唯一输出条目修复")
+    if base_board is not None and head_board is not None and base_board != head_board:
+        _append_reason(reasons, "任务-000100合同修复不得改写看板")
+    return allowed
 
 
 def _registration_field_value(text: str, field: str) -> str | None:
@@ -2419,6 +2824,15 @@ def _validate_task_registration(
                 reasons,
                 f"任务-{task_id}唯一前序依赖必须且只能出现一次",
             )
+        if task_id == TASK100_CONTRACT_REPAIR_EXECUTOR:
+            governance_task = base_tasks.get(TASK100_CONTRACT_REPAIR_GOVERNANCE)
+            if (
+                governance_task is None
+                or _task_field(TASK_STATUS_PATTERN, governance_task) != "已完成"
+            ):
+                _append_reason(reasons, "任务-000102只能在任务-000101完成后登记")
+            if dependencies != [TASK100_CONTRACT_REPAIR_GOVERNANCE]:
+                _append_reason(reasons, "任务-000102唯一前序依赖必须为任务-000101")
         if status == "阻塞":
             blocker_lines = [
                 line
@@ -2783,6 +3197,8 @@ def evaluate_eligibility(
                 head_board=head_board,
                 reasons=reasons,
             )
+        if tuple(task_ids) == (TASK094_CONTRACT_REPAIR_TARGET,):
+            _validate_task094_batch_resource_evidence(path_facts, reasons)
     elif change_type == "合并后状态闭环":
         _validate_state_closure(
             task_ids=task_ids,
@@ -2807,6 +3223,26 @@ def evaluate_eligibility(
     elif change_type == CONTRACT_CONFLICT_REPAIR_TYPE:
         if repo_root is None or not base_ref:
             _append_reason(reasons, "任务合同冲突修复缺少可信Git基线")
+        elif tuple(task_ids) == (TASK094_CONTRACT_REPAIR_EXECUTOR,):
+            allowed_unreferenced_task_ids = _validate_task094_contract_repair(
+                task_ids=task_ids,
+                changed_paths=changed_paths,
+                base_tasks=base_tasks,
+                head_tasks=head_tasks,
+                base_board=base_board,
+                head_board=head_board,
+                reasons=reasons,
+            )
+        elif tuple(task_ids) == (TASK100_CONTRACT_REPAIR_EXECUTOR,):
+            allowed_unreferenced_task_ids = _validate_task100_contract_repair(
+                task_ids=task_ids,
+                changed_paths=changed_paths,
+                base_tasks=base_tasks,
+                head_tasks=head_tasks,
+                base_board=base_board,
+                head_board=head_board,
+                reasons=reasons,
+            )
         else:
             allowed_unreferenced_task_ids = _validate_contract_conflict_repair(
                 repo_root=repo_root,
@@ -2849,7 +3285,11 @@ def evaluate_eligibility(
                         else _is_low_risk_path(path)
                     )
                 )
-            if not allowed:
+            if not allowed and not _task094_native_scanner_allowed(
+                task_ids=task_ids,
+                change_type=change_type,
+                path=path,
+            ):
                 _append_reason(reasons, f"变更路径“{path}”不允许自动合并")
         elif change_type == BLOCKED_CONTRACT_REPAIR_TYPE:
             if path not in BLOCKED_CONTRACT_REPAIR_ALLOWED_PATHS:
@@ -2873,10 +3313,16 @@ def evaluate_eligibility(
                     )
         elif change_type == CONTRACT_CONFLICT_REPAIR_TYPE:
             task_match = TASK_FILE_PATTERN.fullmatch(path)
-            is_allowed_task = task_match is not None and task_match.group(1) in {
-                CONTRACT_CONFLICT_REPAIR_EXECUTOR,
-                CONTRACT_CONFLICT_REPAIR_TARGET,
-            }
+            contract_task_ids = (
+                {TASK094_CONTRACT_REPAIR_EXECUTOR, TASK094_CONTRACT_REPAIR_TARGET}
+                if tuple(task_ids) == (TASK094_CONTRACT_REPAIR_EXECUTOR,)
+                else {TASK100_CONTRACT_REPAIR_EXECUTOR, TASK100_CONTRACT_REPAIR_TARGET}
+                if tuple(task_ids) == (TASK100_CONTRACT_REPAIR_EXECUTOR,)
+                else {CONTRACT_CONFLICT_REPAIR_EXECUTOR, CONTRACT_CONFLICT_REPAIR_TARGET}
+            )
+            is_allowed_task = (
+                task_match is not None and task_match.group(1) in contract_task_ids
+            )
             is_allowed_test = (
                 len(PurePosixPath(path).parts) == 3
                 and PurePosixPath(path).parts[:2] == ("tests", "研发中心")
@@ -2988,6 +3434,7 @@ def _derive_merge_facts(
     repo_root: Path,
     base_ref: str,
     head_tasks: Mapping[str, str],
+    referenced_prs: Mapping[str, object] | None = None,
 ) -> dict[str, MergeFact]:
     """只从已进入main基线的Git提交推导合并事实。"""
 
@@ -3020,14 +3467,51 @@ def _derive_merge_facts(
             )
             parents = parents_text.split() if parents_text else []
             delivery_match = DELIVERY_SHA_PATTERN.search(task)
-            if (
-                len(parents) != 2
-                or delivery_match is None
-                or not _git_is_ancestor(repo_root, parents[0], base_ref)
-                or not _git_is_ancestor(repo_root, delivery_match.group(1), parents[1])
-            ):
+            if len(parents) == 2:
+                if (
+                    delivery_match is None
+                    or not _git_is_ancestor(repo_root, parents[0], base_ref)
+                    or not _git_is_ancestor(repo_root, delivery_match.group(1), parents[1])
+                ):
+                    continue
+                pr_number = declared.pr_number
+            elif len(parents) == 1:
+                # GitHub squash merge产生单父提交，不能仅凭提交正文推断为PR合并。
+                # 只有工作流从GitHub API读取到同号、已合并、目标main且
+                # merge_commit_sha精确匹配的PR事实时才接受；父提交必须仍在
+                # 当前main祖先链中，防止任意单父提交冒充合并事实。
+                evidence = (
+                    referenced_prs.get(str(declared.pr_number))
+                    if isinstance(referenced_prs, Mapping)
+                    else None
+                )
+                if not isinstance(evidence, Mapping):
+                    continue
+                if (
+                    evidence.get("number") != declared.pr_number
+                    or evidence.get("state") != "closed"
+                    or not evidence.get("merged_at")
+                    or evidence.get("merge_commit_sha") != declared.sha
+                    or evidence.get("base_ref") != "main"
+                    or evidence.get("base_repo") != "xk320/zhishi"
+                    or evidence.get("head_repo") != "xk320/zhishi"
+                    or not re.fullmatch(r"[0-9a-f]{40}", str(evidence.get("head_sha", "")))
+                    or not _git_is_ancestor(repo_root, parents[0], base_ref)
+                ):
+                    continue
+                evidence_base_sha = evidence.get("base_sha")
+                if (
+                    isinstance(evidence_base_sha, str)
+                    and re.fullmatch(r"[0-9a-f]{40}", evidence_base_sha)
+                    and not (
+                        parents[0] == evidence_base_sha
+                        or _git_is_ancestor(repo_root, evidence_base_sha, base_ref)
+                    )
+                ):
+                    continue
+                pr_number = declared.pr_number
+            else:
                 continue
-            pr_number = declared.pr_number
         else:
             pr_number = int(pr_match.group(1))
         try:
@@ -3083,7 +3567,25 @@ def main() -> int:
     changed_paths = tuple(fact.path for fact in path_facts)
     pr_body = str(metadata.get("body", ""))
     change_type = parse_change_type(pr_body)
+    raw_body_task_ids = _raw_task_references(pr_body)
     task_ids = set(parse_task_references(pr_body))
+    body_task_ids = set(task_ids)
+    contract_conflict_executor = None
+    if change_type == CONTRACT_CONFLICT_REPAIR_TYPE:
+        contract_conflict_executor = _contract_conflict_executor(raw_body_task_ids)
+        if contract_conflict_executor is None:
+            print(
+                json.dumps(
+                    {
+                        "eligible": False,
+                        "reasons": ["任务合同冲突修复正文必须精确引用已登记执行任务"],
+                        "changed_paths": list(changed_paths),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 1
     for path in changed_paths:
         match = TASK_FILE_PATTERN.fullmatch(path)
         if match is not None:
@@ -3092,6 +3594,18 @@ def main() -> int:
             if (
                 change_type == BLOCKED_CONTRACT_REPAIR_TYPE
                 and match.group(1) in BLOCKED_CONTRACT_REPAIR_TARGETS
+            ):
+                continue
+            if (
+                change_type == CONTRACT_CONFLICT_REPAIR_TYPE
+                and body_task_ids == {TASK094_CONTRACT_REPAIR_EXECUTOR}
+                and match.group(1) == TASK094_CONTRACT_REPAIR_TARGET
+            ):
+                continue
+            if (
+                change_type == CONTRACT_CONFLICT_REPAIR_TYPE
+                and body_task_ids == {TASK100_CONTRACT_REPAIR_EXECUTOR}
+                and match.group(1) == TASK100_CONTRACT_REPAIR_TARGET
             ):
                 continue
             task_ids.add(match.group(1))
@@ -3111,6 +3625,8 @@ def main() -> int:
     ordered_ids = tuple(sorted(task_ids))
 
     load_ids = set(ordered_ids)
+    if change_type == "任务登记" and ordered_ids == (TASK100_CONTRACT_REPAIR_EXECUTOR,):
+        load_ids.add(TASK100_CONTRACT_REPAIR_GOVERNANCE)
     if change_type == BLOCKED_CONTRACT_REPAIR_TYPE and len(ordered_ids) == 1:
         target_id = {
             BLOCKED_CONTRACT_REPAIR_EXECUTOR: BLOCKED_CONTRACT_REPAIR_TARGET,
@@ -3118,6 +3634,18 @@ def main() -> int:
         }.get(ordered_ids[0])
         if target_id is not None:
             load_ids.add(target_id)
+    if (
+        change_type == CONTRACT_CONFLICT_REPAIR_TYPE
+        and ordered_ids == (TASK094_CONTRACT_REPAIR_EXECUTOR,)
+    ):
+        load_ids.add(TASK094_CONTRACT_REPAIR_TARGET)
+    if (
+        change_type == CONTRACT_CONFLICT_REPAIR_TYPE
+        and ordered_ids == (TASK100_CONTRACT_REPAIR_EXECUTOR,)
+    ):
+        load_ids.update(
+            {TASK100_CONTRACT_REPAIR_GOVERNANCE, TASK100_CONTRACT_REPAIR_TARGET}
+        )
     loaded_ids = tuple(sorted(load_ids))
     base_tasks = _load_ref_tasks(repo_root, arguments.base_ref, loaded_ids)
     head_tasks = _load_ref_tasks(repo_root, arguments.head_ref, loaded_ids)
@@ -3150,6 +3678,7 @@ def main() -> int:
             repo_root,
             arguments.base_ref,
             head_tasks,
+            referenced_prs=metadata.get("referenced_prs"),
         ),
         base_board=_read_path_at_ref(
             repo_root, arguments.base_ref, "docs/研发中心/看板.md"
@@ -3160,7 +3689,7 @@ def main() -> int:
         path_facts=path_facts,
         enforce_board_sync=True,
         task_ids_override=(
-            (CONTRACT_CONFLICT_REPAIR_EXECUTOR,)
+            (contract_conflict_executor,)
             if change_type == CONTRACT_CONFLICT_REPAIR_TYPE
             else None
         ),
@@ -3189,7 +3718,7 @@ def main() -> int:
                 "",
             )
             if change_type == BLOCKED_CONTRACT_REPAIR_TYPE
-            else CONTRACT_CONFLICT_REPAIR_EXECUTOR
+            else contract_conflict_executor or ""
             if change_type == CONTRACT_CONFLICT_REPAIR_TYPE
             else next(iter(ordered_ids), "")
         ),

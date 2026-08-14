@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import ast
 import json
+import re
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -38,6 +40,24 @@ class RootCandidateIndexTests(unittest.TestCase):
         self.assertIn("MAX_QUEUE=16384", source)
         self.assertNotIn("os.system", source)
         self.assertNotIn("subprocess", source)
+
+    def test_probe_source_sanitizes_addresses_and_orders_walk(self) -> None:
+        source = target._probe_source(self.config, 900)
+        self.assertIn("25[0-5]", source)
+        self.assertIn("entries=sorted(os.scandir(current), key=lambda item: item.name)", source)
+
+    def test_generated_probe_matches_ipv4_sensitive_value(self) -> None:
+        source = target._probe_source(self.config, 900)
+        tree = ast.parse(source)
+        safe_assignment = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target_node, ast.Name) and target_node.id == "SAFE" for target_node in node.targets)
+        )
+        pattern = ast.literal_eval(safe_assignment.value.args[0])
+        address = ".".join(("192", "0", "2", "1"))
+        self.assertIsNotNone(re.search(pattern, f"candidate address {address}"))
 
     def test_failure_payload_is_root_compatible_and_empty(self) -> None:
         result = target._failure("INDEX_ENTRY_LIMIT")
@@ -85,10 +105,9 @@ class RootCandidateIndexTests(unittest.TestCase):
 
     def test_complete_empty_index_is_valid_but_not_identity_proof(self) -> None:
         roots = []
-        for path in target.EXPECTED_ROOTS:
+        for index, path in enumerate(target.EXPECTED_ROOTS, 1):
             roots.append(
                 {
-                    "根目录": path.rsplit("/", 1)[-1],
                     "路径指纹": legacy.fingerprint(path),
                     "模式": "0o755",
                     "属主UID": 0,
@@ -135,7 +154,6 @@ class RootCandidateIndexTests(unittest.TestCase):
     def test_probe_rejects_duplicate_root_set(self) -> None:
         roots = []
         root = {
-            "根目录": "binance-event",
             "路径指纹": legacy.fingerprint(target.EXPECTED_ROOTS[0]),
             "模式": "0o755",
             "属主UID": 0,
@@ -269,10 +287,31 @@ class RootCandidateIndexTests(unittest.TestCase):
         }
         self.assertFalse(target._validate_summary(summary, self.config["资源上限"]))
 
+    def test_summary_rejects_unbound_sqlite_schema(self) -> None:
+        summary = {
+            "格式": "sqlite",
+            "表": [{
+                "表名指纹": "not-a-fingerprint",
+                "字段指纹": "b" * 64,
+                "字段映射": {"标的": "symbol"},
+            }],
+            "行": [],
+        }
+        self.assertFalse(target._validate_summary(summary, self.config["资源上限"]))
+
+    def test_summary_rejects_unbound_csv_mapping(self) -> None:
+        summary = {
+            "格式": "csv",
+            "字段映射": {field: field for field in legacy.CANDIDATE_FIELDS},
+            "行": [],
+            "Schema指纹": "b" * 64,
+        }
+        summary["字段映射"]["标的"] = "unbound-column"
+        self.assertFalse(target._validate_summary(summary, self.config["资源上限"]))
+
     def _valid_roots(self):
         return [
             {
-                "根目录": path.rsplit("/", 1)[-1],
                 "路径指纹": legacy.fingerprint(path),
                 "模式": "0o755",
                 "属主UID": 0,
@@ -280,7 +319,7 @@ class RootCandidateIndexTests(unittest.TestCase):
                 "可读": True,
                 "可写": False,
             }
-            for path in target.EXPECTED_ROOTS
+            for index, path in enumerate(target.EXPECTED_ROOTS, 1)
         ]
 
     def _base_payload(self, **overrides):

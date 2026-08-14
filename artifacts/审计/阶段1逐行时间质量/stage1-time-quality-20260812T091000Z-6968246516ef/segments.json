@@ -1,0 +1,1577 @@
+[
+  {
+    "contract": "BTCUSDT",
+    "dataset": "aggTrades",
+    "day_count": 423,
+    "end_date": "2026-07-10",
+    "group": "BTCUSDT-aggTrades",
+    "start_date": "2025-05-14",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 2176,
+    "end_date": "2025-08-22",
+    "group": "BTCUSDT-trades",
+    "start_date": "2019-09-08",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 22,
+    "end_date": "2025-09-14",
+    "group": "BTCUSDT-trades",
+    "start_date": "2025-08-24",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2025-09-21",
+    "group": "BTCUSDT-trades",
+    "start_date": "2025-09-20",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2025-09-26",
+    "group": "BTCUSDT-trades",
+    "start_date": "2025-09-26",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2025-09-30",
+    "group": "BTCUSDT-trades",
+    "start_date": "2025-09-30",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2025-10-04",
+    "group": "BTCUSDT-trades",
+    "start_date": "2025-10-03",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2025-10-08",
+    "group": "BTCUSDT-trades",
+    "start_date": "2025-10-08",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2025-11-02",
+    "group": "BTCUSDT-trades",
+    "start_date": "2025-11-01",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2025-11-09",
+    "group": "BTCUSDT-trades",
+    "start_date": "2025-11-08",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2025-11-15",
+    "group": "BTCUSDT-trades",
+    "start_date": "2025-11-15",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2025-11-22",
+    "group": "BTCUSDT-trades",
+    "start_date": "2025-11-22",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2025-11-29",
+    "group": "BTCUSDT-trades",
+    "start_date": "2025-11-28",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2025-12-06",
+    "group": "BTCUSDT-trades",
+    "start_date": "2025-12-06",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 3,
+    "end_date": "2025-12-21",
+    "group": "BTCUSDT-trades",
+    "start_date": "2025-12-19",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 3,
+    "end_date": "2025-12-25",
+    "group": "BTCUSDT-trades",
+    "start_date": "2025-12-23",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2025-12-28",
+    "group": "BTCUSDT-trades",
+    "start_date": "2025-12-27",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2026-01-01",
+    "group": "BTCUSDT-trades",
+    "start_date": "2025-12-31",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-01-10",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-01-10",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-01-16",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-01-16",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-01-19",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-01-19",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-01-22",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-01-22",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-01-24",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-01-24",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-01-28",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-01-28",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-02-02",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-02-02",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-02-11",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-02-11",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2026-02-18",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-02-17",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2026-02-25",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-02-24",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2026-03-07",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-03-06",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-03-10",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-03-10",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-03-12",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-03-12",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-03-14",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-03-14",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2026-03-22",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-03-21",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2026-03-26",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-03-25",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-04-15",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-04-15",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-04-25",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-04-25",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-05-07",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-05-07",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 3,
+    "end_date": "2026-05-13",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-05-11",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-05-17",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-05-17",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-05-19",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-05-19",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-05-21",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-05-21",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-05-26",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-05-26",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-05-31",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-05-31",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-06-10",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-06-10",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-06-12",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-06-12",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2026-06-20",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-06-19",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2026-07-12",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-07-11",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-07-18",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-07-18",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-07-21",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-07-21",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-07-27",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-07-27",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "BTCUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-07-30",
+    "group": "BTCUSDT-trades",
+    "start_date": "2026-07-30",
+    "underlying": "BTC"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 357,
+    "end_date": "2020-11-17",
+    "group": "ETHUSDT-trades",
+    "start_date": "2019-11-27",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2020-11-20",
+    "group": "ETHUSDT-trades",
+    "start_date": "2020-11-19",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 66,
+    "end_date": "2021-01-26",
+    "group": "ETHUSDT-trades",
+    "start_date": "2020-11-22",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 25,
+    "end_date": "2021-02-21",
+    "group": "ETHUSDT-trades",
+    "start_date": "2021-01-28",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2021-02-23",
+    "group": "ETHUSDT-trades",
+    "start_date": "2021-02-23",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2021-02-27",
+    "group": "ETHUSDT-trades",
+    "start_date": "2021-02-27",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2021-03-01",
+    "group": "ETHUSDT-trades",
+    "start_date": "2021-03-01",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 3,
+    "end_date": "2021-03-10",
+    "group": "ETHUSDT-trades",
+    "start_date": "2021-03-08",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2021-03-12",
+    "group": "ETHUSDT-trades",
+    "start_date": "2021-03-12",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 3,
+    "end_date": "2021-03-16",
+    "group": "ETHUSDT-trades",
+    "start_date": "2021-03-14",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 21,
+    "end_date": "2021-04-07",
+    "group": "ETHUSDT-trades",
+    "start_date": "2021-03-18",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 9,
+    "end_date": "2021-04-17",
+    "group": "ETHUSDT-trades",
+    "start_date": "2021-04-09",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2021-04-20",
+    "group": "ETHUSDT-trades",
+    "start_date": "2021-04-19",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2021-04-25",
+    "group": "ETHUSDT-trades",
+    "start_date": "2021-04-25",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 6,
+    "end_date": "2021-05-02",
+    "group": "ETHUSDT-trades",
+    "start_date": "2021-04-27",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2021-05-10",
+    "group": "ETHUSDT-trades",
+    "start_date": "2021-05-10",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2021-05-13",
+    "group": "ETHUSDT-trades",
+    "start_date": "2021-05-12",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2021-05-16",
+    "group": "ETHUSDT-trades",
+    "start_date": "2021-05-16",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2021-05-19",
+    "group": "ETHUSDT-trades",
+    "start_date": "2021-05-18",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 269,
+    "end_date": "2022-02-14",
+    "group": "ETHUSDT-trades",
+    "start_date": "2021-05-22",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 5,
+    "end_date": "2022-02-20",
+    "group": "ETHUSDT-trades",
+    "start_date": "2022-02-16",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2022-02-23",
+    "group": "ETHUSDT-trades",
+    "start_date": "2022-02-23",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2022-02-26",
+    "group": "ETHUSDT-trades",
+    "start_date": "2022-02-26",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2022-03-10",
+    "group": "ETHUSDT-trades",
+    "start_date": "2022-03-10",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2022-03-12",
+    "group": "ETHUSDT-trades",
+    "start_date": "2022-03-12",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 3,
+    "end_date": "2022-03-17",
+    "group": "ETHUSDT-trades",
+    "start_date": "2022-03-15",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2022-03-19",
+    "group": "ETHUSDT-trades",
+    "start_date": "2022-03-19",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2022-03-22",
+    "group": "ETHUSDT-trades",
+    "start_date": "2022-03-21",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 8,
+    "end_date": "2022-04-04",
+    "group": "ETHUSDT-trades",
+    "start_date": "2022-03-28",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 3,
+    "end_date": "2022-04-10",
+    "group": "ETHUSDT-trades",
+    "start_date": "2022-04-08",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 16,
+    "end_date": "2022-04-27",
+    "group": "ETHUSDT-trades",
+    "start_date": "2022-04-12",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 93,
+    "end_date": "2022-07-30",
+    "group": "ETHUSDT-trades",
+    "start_date": "2022-04-29",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 9,
+    "end_date": "2022-08-09",
+    "group": "ETHUSDT-trades",
+    "start_date": "2022-08-01",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 167,
+    "end_date": "2023-01-24",
+    "group": "ETHUSDT-trades",
+    "start_date": "2022-08-11",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 12,
+    "end_date": "2023-02-06",
+    "group": "ETHUSDT-trades",
+    "start_date": "2023-01-26",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2023-02-09",
+    "group": "ETHUSDT-trades",
+    "start_date": "2023-02-08",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 4,
+    "end_date": "2023-02-14",
+    "group": "ETHUSDT-trades",
+    "start_date": "2023-02-11",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 3,
+    "end_date": "2023-02-19",
+    "group": "ETHUSDT-trades",
+    "start_date": "2023-02-17",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2023-02-22",
+    "group": "ETHUSDT-trades",
+    "start_date": "2023-02-21",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 5,
+    "end_date": "2023-02-28",
+    "group": "ETHUSDT-trades",
+    "start_date": "2023-02-24",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2023-03-02",
+    "group": "ETHUSDT-trades",
+    "start_date": "2023-03-02",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 3,
+    "end_date": "2023-03-06",
+    "group": "ETHUSDT-trades",
+    "start_date": "2023-03-04",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2023-03-11",
+    "group": "ETHUSDT-trades",
+    "start_date": "2023-03-10",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2023-03-14",
+    "group": "ETHUSDT-trades",
+    "start_date": "2023-03-14",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2023-03-19",
+    "group": "ETHUSDT-trades",
+    "start_date": "2023-03-19",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2023-03-22",
+    "group": "ETHUSDT-trades",
+    "start_date": "2023-03-22",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 3,
+    "end_date": "2023-03-26",
+    "group": "ETHUSDT-trades",
+    "start_date": "2023-03-24",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 6,
+    "end_date": "2023-04-03",
+    "group": "ETHUSDT-trades",
+    "start_date": "2023-03-29",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 328,
+    "end_date": "2024-02-26",
+    "group": "ETHUSDT-trades",
+    "start_date": "2023-04-05",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 4,
+    "end_date": "2024-03-04",
+    "group": "ETHUSDT-trades",
+    "start_date": "2024-03-01",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2024-03-09",
+    "group": "ETHUSDT-trades",
+    "start_date": "2024-03-09",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2024-03-15",
+    "group": "ETHUSDT-trades",
+    "start_date": "2024-03-15",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2024-03-20",
+    "group": "ETHUSDT-trades",
+    "start_date": "2024-03-19",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2024-03-31",
+    "group": "ETHUSDT-trades",
+    "start_date": "2024-03-30",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 286,
+    "end_date": "2025-01-12",
+    "group": "ETHUSDT-trades",
+    "start_date": "2024-04-02",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 3,
+    "end_date": "2025-01-18",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-01-16",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 3,
+    "end_date": "2025-01-23",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-01-21",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2025-01-26",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-01-25",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 3,
+    "end_date": "2025-01-30",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-01-28",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2025-02-02",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-02-01",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2025-02-12",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-02-12",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 4,
+    "end_date": "2025-02-18",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-02-15",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2025-02-21",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-02-20",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 11,
+    "end_date": "2025-03-05",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-02-23",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 5,
+    "end_date": "2025-03-11",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-03-07",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 169,
+    "end_date": "2025-08-28",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-03-13",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 16,
+    "end_date": "2025-09-14",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-08-30",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2025-09-18",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-09-18",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2025-09-21",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-09-20",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2025-09-23",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-09-23",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2025-09-26",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-09-26",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2025-10-06",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-10-05",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2025-10-11",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-10-11",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2025-10-18",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-10-18",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 6,
+    "end_date": "2025-10-28",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-10-23",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2025-11-02",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-11-01",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2025-11-14",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-11-14",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2025-11-22",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-11-22",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2025-11-30",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-11-29",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2025-12-05",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-12-05",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2025-12-17",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-12-16",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 3,
+    "end_date": "2025-12-21",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-12-19",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2025-12-23",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-12-23",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 4,
+    "end_date": "2025-12-28",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-12-25",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 6,
+    "end_date": "2026-01-04",
+    "group": "ETHUSDT-trades",
+    "start_date": "2025-12-30",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 6,
+    "end_date": "2026-01-14",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-01-09",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-01-18",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-01-18",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-01-24",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-01-24",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-02-01",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-02-01",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-02-07",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-02-07",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-02-09",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-02-09",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-02-11",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-02-11",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-02-17",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-02-17",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-02-20",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-02-20",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-02-22",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-02-22",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-02-24",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-02-24",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-02-26",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-02-26",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2026-03-03",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-03-02",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 5,
+    "end_date": "2026-03-10",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-03-06",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-03-14",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-03-14",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 4,
+    "end_date": "2026-03-22",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-03-19",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 4,
+    "end_date": "2026-03-27",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-03-24",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2026-03-30",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-03-29",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-04-01",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-04-01",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-04-05",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-04-05",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-04-07",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-04-07",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2026-04-10",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-04-09",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-04-19",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-04-19",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2026-04-28",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-04-27",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-04-30",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-04-30",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-05-05",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-05-05",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-05-09",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-05-09",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-05-17",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-05-17",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2026-05-25",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-05-24",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-06-09",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-06-09",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 3,
+    "end_date": "2026-06-14",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-06-12",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 4,
+    "end_date": "2026-06-19",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-06-16",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 2,
+    "end_date": "2026-06-22",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-06-21",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 7,
+    "end_date": "2026-07-01",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-06-25",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 7,
+    "end_date": "2026-07-17",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-07-11",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 1,
+    "end_date": "2026-07-19",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-07-19",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 3,
+    "end_date": "2026-07-23",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-07-21",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 3,
+    "end_date": "2026-07-27",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-07-25",
+    "underlying": "ETH"
+  },
+  {
+    "contract": "ETHUSDT",
+    "dataset": "trades",
+    "day_count": 6,
+    "end_date": "2026-08-03",
+    "group": "ETHUSDT-trades",
+    "start_date": "2026-07-29",
+    "underlying": "ETH"
+  }
+]

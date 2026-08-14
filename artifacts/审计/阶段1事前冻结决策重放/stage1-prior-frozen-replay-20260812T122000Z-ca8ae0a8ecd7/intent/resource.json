@@ -1,0 +1,1 @@
+{"final_resource_gate_enforced_after_receipt_readback":true,"intent_sha256":"1f3fe7f8aaf8ee6f97b5aac5eac6563c06d51b3b24ed6eea6fc464cf005423a1","resource_facts_before_receipt":{"elapsed_seconds":0.001603,"output_bytes":2093,"process_max_rss_bytes":22986752,"processes":1},"schema_version":"zhishi-stage1-prepare-receipt/v1","source_payload_opened":false}
