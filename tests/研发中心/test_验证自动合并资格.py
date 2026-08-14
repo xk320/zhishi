@@ -1930,7 +1930,7 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         )
         # 任务115真实执行后会出现在执行中；阶段1基线固定为待执行四列表。
         board = re.sub(
-            r"(?m)^\| P0 \| 任务-000115 \|[^\n]*\n",
+            r"(?m)^\|\s*(?:P[0-3]\s*\|\s*)?任务-000115\s*\|[^\n]*\n",
             "",
             board,
         )
