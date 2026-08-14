@@ -2082,7 +2082,12 @@ def _delivery_contract_without_metadata(text: str) -> tuple[str, ...]:
     # 合同正文不可变；执行记录标题前允许Markdown规范要求的一个分隔空行。
     # 多余空行仍保留在比较结果中，确保格式漂移失败关闭。
     contract_end = record_start
-    if contract_end > 0 and lines[contract_end - 1] == "":
+    if (
+        record_start < len(lines)
+        and lines[record_start].strip() == "## 执行记录"
+        and contract_end > 0
+        and lines[contract_end - 1] == ""
+    ):
         contract_end -= 1
     first_section = next(
         (

@@ -573,6 +573,14 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             self.policy._delivery_contract_without_metadata(changed),
         )
 
+    def test_无执行记录的任务合同拒绝尾部空行漂移(self):
+        base = "- 状态：待执行\n- 类型：治理\n正文\n"
+        head = base.rstrip("\n") + "\n\n"
+        self.assertNotEqual(
+            self.policy._delivery_contract_without_metadata(base),
+            self.policy._delivery_contract_without_metadata(head),
+        )
+
     def evaluate(self, **overrides):
         inputs = {
             "changed_paths": [
