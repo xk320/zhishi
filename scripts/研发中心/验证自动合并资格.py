@@ -232,8 +232,14 @@ STAGE1_CONTRACT_REPAIR_ALLOWED_PATHS = frozenset(
         "docs/研究/数据验证阶段执行规范.md",
         "docs/研究/研究准入规范.md",
         "docs/superpowers/specs/task-000115-bounded-cost-coverage-gate-design.md",
-        "docs/治理/PR自动合并策略.md",
-        "docs/研发中心/任务规范.md",
+    }
+)
+STAGE1_DERIVED_DOC_PATHS = frozenset(
+    STAGE1_CONTRACT_REPAIR_ALLOWED_PATHS
+    - {
+        "docs/研发中心/任务/任务-000115.md",
+        "docs/研发中心/任务/任务-000106.md",
+        "docs/研发中心/看板.md",
     }
 )
 CONTRACT_CONFLICT_REPAIR_ALLOWED_PATHS = frozenset(
@@ -257,6 +263,12 @@ STAGE1_COVERAGE_LIMITED_SECTION = (
     "- 统计边界：BTC与ETH分别统计，禁止跨标的补偿；必须保留候选总体、已观察、拒绝、失败、未成熟、失效和缺失计数。\n"
     "- 解释边界：覆盖窗口内仅可报告描述性证据，不得据此推导因果、预测优势、胜率、收益、研究准入或交易许可；真实资金交易保持关闭。\n"
     "- 历史保护：本规则不改变本任务既有执行记录、历史批次、提交SHA或原始数据。"
+)
+STAGE1_DERIVED_DOC_APPENDIX = (
+    "## 任务-000115覆盖受限补充\n\n"
+    "- 本入口只描述已验证覆盖窗口；覆盖外保持`无法判定`，不外推、不缩小分母、不跨标的补偿。\n"
+    "- 主研究尺度固定为4小时、8小时、24小时、48小时；15分钟和1小时仅作事后结果观察。\n"
+    "- 多年主网真实执行延迟、真实资金交易和交易许可不因覆盖受限模式自动放行。"
 )
 TASK100_OUTPUT_CONTRACT_OLD = "- 更新阶段1最终审计报告、数据缺口清单、README、总体计划、任务文件和看板；"
 TASK100_OUTPUT_CONTRACT_NEW = "- 保持docs/审计/阶段1最终审计报告.md和docs/审计/数据缺口与补采清单.md字节不变；新增docs/审计/阶段1成本与执行证据报告.md，并更新README、总体计划、任务文件和看板；"
@@ -381,6 +393,14 @@ def _apply_stage1_contract_repair(text: str) -> str | None:
         f"{STAGE1_COVERAGE_LIMITED_SECTION}\n\n## 背景",
         1,
     )
+
+
+def _apply_stage1_derived_doc_repair(text: str) -> str | None:
+    """只允许在阶段1派生入口末尾追加固定边界说明。"""
+
+    if text.endswith(STAGE1_DERIVED_DOC_APPENDIX + "\n"):
+        return None
+    return text.rstrip("\n") + "\n\n" + STAGE1_DERIVED_DOC_APPENDIX + "\n"
 
 
 def _task094_resource_fact_reasons(resource_facts: object) -> tuple[str, ...]:
@@ -2422,12 +2442,17 @@ def _stage1_history_section(text: str) -> tuple[str, ...] | None:
 
 def _validate_stage1_contract_repair(
     *,
+    repo_root: Path | None,
+    base_ref: str | None,
+    head_ref_name: str | None,
+    pr_number: int | None,
     task_ids: Sequence[str],
     changed_paths: Sequence[str],
     base_tasks: Mapping[str, str],
     head_tasks: Mapping[str, str],
     base_board: str | None,
     head_board: str | None,
+    path_facts: Sequence[PathFact] | None,
     reasons: list[str],
 ) -> set[str]:
     """验证任务-000115→任务-000106覆盖受限合同修订入口。"""
@@ -2460,6 +2485,12 @@ def _validate_stage1_contract_repair(
         _append_reason(reasons, "任务-000115基线状态必须为待执行")
     if _task_field(TASK_STATUS_PATTERN, executor_head) != "待评审":
         _append_reason(reasons, "任务-000115头部状态必须为待评审")
+    if head_ref_name is not None and _task_field(EXECUTION_BRANCH_PATTERN, executor_head) != head_ref_name:
+        _append_reason(reasons, "任务-000115执行分支与PR头部事实不一致")
+    if pr_number is not None:
+        pr_match = PULL_REQUEST_PATTERN.search(executor_head)
+        if pr_match is None or int(pr_match.group(1)) != pr_number:
+            _append_reason(reasons, "任务-000115任务文件PR编号与当前PR事实不一致")
     if _delivery_contract_without_metadata(executor_base) != _delivery_contract_without_metadata(executor_head):
         _append_reason(reasons, "任务-000115执行合同在修订PR中不得改写")
     if (
@@ -2472,11 +2503,37 @@ def _validate_stage1_contract_repair(
     expected_target = _apply_stage1_contract_repair(target_base)
     if expected_target is None or target_head != expected_target:
         _append_reason(reasons, "任务-000106未按固定覆盖受限章节修订且合同指纹漂移")
+    if STAGE1_DERIVED_DOC_PATHS.intersection(changed_paths):
+        if repo_root is None or not base_ref or path_facts is None:
+            _append_reason(reasons, "阶段1派生文档缺少可信基线或头部正文")
+        else:
+            head_texts = {fact.path: fact.text for fact in path_facts}
+            for path in sorted(STAGE1_DERIVED_DOC_PATHS.intersection(changed_paths)):
+                base_text = _read_path_at_ref(repo_root, base_ref, path)
+                head_text = head_texts.get(path)
+                expected = (
+                    _apply_stage1_derived_doc_repair(base_text)
+                    if base_text is not None
+                    else None
+                )
+                if expected is None or head_text != expected:
+                    _append_reason(
+                        reasons,
+                        f"阶段1派生文档“{path}”未按固定追加式边界修订且内容指纹漂移",
+                    )
     if base_board is None or head_board is None or not _board_schema_is_valid(base_board) or not _board_schema_is_valid(head_board):
         _append_reason(reasons, "阶段1覆盖受限合同修订看板结构无效")
     else:
         base_rows = _board_rows(base_board)
         head_rows = _board_rows(head_board)
+        _validate_delivery_board(
+            task_ids=(executor_id,),
+            base_tasks=base_tasks,
+            head_tasks=head_tasks,
+            base_board=base_board,
+            head_board=head_board,
+            reasons=reasons,
+        )
         for task_id in set(base_rows) | set(head_rows):
             if task_id not in {executor_id, target_id} and base_rows.get(task_id) != head_rows.get(task_id):
                 _append_reason(reasons, "阶段1覆盖受限合同修订夹带其他看板迁移")
@@ -3324,6 +3381,8 @@ def evaluate_eligibility(
     path_facts: Sequence[PathFact] | None = None,
     enforce_board_sync: bool = False,
     task_ids_override: Sequence[str] | None = None,
+    head_ref_name: str | None = None,
+    pr_number: int | None = None,
 ) -> EligibilityResult:
     """按基线任务合同、严格PR合同和变更路径判定资格。"""
 
@@ -3455,12 +3514,17 @@ def evaluate_eligibility(
 
     elif change_type == STAGE1_CONTRACT_REPAIR_TYPE:
         allowed_unreferenced_task_ids = _validate_stage1_contract_repair(
+            repo_root=repo_root,
+            base_ref=base_ref,
+            head_ref_name=head_ref_name,
+            pr_number=pr_number,
             task_ids=task_ids,
             changed_paths=changed_paths,
             base_tasks=base_tasks,
             head_tasks=head_tasks,
             base_board=base_board,
             head_board=head_board,
+            path_facts=path_facts,
             reasons=reasons,
         )
 
@@ -3941,6 +4005,12 @@ def main() -> int:
         task_ids_override=(
             (contract_conflict_executor,)
             if change_type == CONTRACT_CONFLICT_REPAIR_TYPE
+            else None
+        ),
+        head_ref_name=str(metadata.get("head_ref", "")) or None,
+        pr_number=(
+            int(metadata["pr_number"])
+            if str(metadata.get("pr_number", "")).isdigit()
             else None
         ),
     )

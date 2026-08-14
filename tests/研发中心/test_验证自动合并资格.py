@@ -1804,6 +1804,15 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         executor_head = executor_base.replace(
             "- 状态：待执行", "- 状态：待评审", 1
         )
+        executor_head = executor_head.replace(
+            "\n\n## 依赖与阻塞条件",
+            "\n- 开始时间：`2026-08-15T01:00:00+08:00`\n"
+            "- 执行分支：`codex/task-000115-test`\n"
+            "- Pull Request：[#999](https://github.com/xk320/zhishi/pull/999)\n"
+            "- 实现提交SHA：`0123456789abcdef0123456789abcdef01234567`\n"
+            "\n## 依赖与阻塞条件",
+            1,
+        )
         target_base = (
             REPO_ROOT / "docs/研发中心/任务/任务-000106.md"
         ).read_text(encoding="utf-8")
@@ -1821,7 +1830,16 @@ class AutoMergeEligibilityTests(unittest.TestCase):
             f"| P0 | 任务-000115 | {title} | `codex/task-000115-test` | "
             "[#999](https://github.com/xk320/zhishi/pull/999) |"
         )
-        head_board = board.replace(old_row, head_row, 1)
+        head_board = board.replace(old_row + "\n", "", 1)
+        current_review_row = next(
+            line for line in head_board.splitlines()
+            if line.startswith("| P0 | 任务-000116 |")
+        )
+        head_board = head_board.replace(
+            current_review_row + "\n",
+            current_review_row + "\n" + head_row + "\n",
+            1,
+        )
         paths = [
             "docs/研发中心/任务/任务-000115.md",
             "docs/研发中心/任务/任务-000106.md",
@@ -1844,6 +1862,13 @@ class AutoMergeEligibilityTests(unittest.TestCase):
         inputs["path_facts"] = [self.path_fact(path) for path in paths]
         result = self.policy.evaluate_eligibility(**inputs)
         self.assertTrue(result.eligible, result.reasons)
+
+        mismatched_metadata = dict(inputs)
+        mismatched_metadata["head_ref_name"] = "codex/other-branch"
+        mismatched_metadata["pr_number"] = 325
+        result = self.policy.evaluate_eligibility(**mismatched_metadata)
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000115执行分支与PR头部事实不一致", result.reasons)
 
         migrated = dict(inputs)
         migrated["head_tasks"] = {
