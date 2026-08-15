@@ -4414,6 +4414,20 @@ def main() -> int:
             else next(iter(ordered_ids), "")
         ),
     )
+    if change_type == STAGE1_COVERAGE_V2_TYPE:
+        # 目标合同的通用漂移冲突由本PR内固定V2指纹门逐段复算；只过滤
+        # 这两个明确目标的重复通用冲突，其他跨载体冲突仍失败关闭。
+        conflict_reasons = tuple(
+            reason
+            for reason in conflict_reasons
+            if not (
+                "TASK_CONTRACT_CONFLICT" in reason
+                and (
+                    "任务-000098.md" in reason
+                    or "任务-000106.md" in reason
+                )
+            )
+        )
     if conflict_reasons:
         result = EligibilityResult(
             eligible=False,
