@@ -50,11 +50,13 @@ CANCELLATION_MERGE_SHA_PATTERN = re.compile(
 )
 PR_NUMBER_PATTERN = re.compile(r"#(\d+)")
 CHANGE_TYPE_PATTERN = re.compile(
-    r"(?ms)^## 变更类型\s*\n+\s*-\s*(任务登记|任务交付|合并后状态闭环|阻塞任务合同修复|任务合同冲突修复|阶段1覆盖受限合同修订)\s*$"
+    r"(?ms)^## 变更类型\s*\n+\s*-\s*(任务登记|任务交付|合并后状态闭环|阻塞任务合同修复|任务合同冲突修复|阶段1覆盖受限合同修订|阶段1覆盖受限完成合同修订V2)\s*$"
 )
 STAGE1_CONTRACT_REPAIR_TYPE = "阶段1覆盖受限合同修订"
 STAGE1_CONTRACT_REPAIR_EXECUTOR = "000115"
 STAGE1_CONTRACT_REPAIR_TARGET = "000106"
+STAGE1_COVERAGE_V2_TYPE = "阶段1覆盖受限完成合同修订V2"
+STAGE1_COVERAGE_V2_EXECUTOR = "000124"
 CONTRACT_CONFLICT_REPAIR_TYPE = "任务合同冲突修复"
 CONTRACT_CONFLICT_REPAIR_EXECUTOR = "000068"
 CONTRACT_CONFLICT_REPAIR_TARGET = "000066"
@@ -1061,6 +1063,7 @@ def _check_task_contract_drift(
     task094_contract_repair_target: str | None = None,
     task100_contract_repair_target: str | None = None,
     stage1_contract_repair_target: str | None = None,
+    stage1_coverage_v2_targets: frozenset[str] = frozenset(),
 ) -> None:
     """阻止交付或状态PR静默改写目标、范围、输入输出和安全边界。"""
 
@@ -1101,6 +1104,14 @@ def _check_task_contract_drift(
             # 任务-000115的主可信资格器会对任务-000106执行固定完整合同
             # 指纹、路径、状态和历史记录校验；这里仅避免通用合同漂移门
             # 将该已登记的受控目标误报为未分类冲突。
+            continue
+        if (
+            stage1_coverage_v2_targets
+            and path.removeprefix(f"{TASK_DIR}/任务-").removesuffix(".md")
+            in stage1_coverage_v2_targets
+        ):
+            # 任务-000124的主资格器会对098/106执行固定完整合同指纹、
+            # 路径、状态和历史记录校验；跨载体层只避免通用漂移门重复报错。
             continue
         if _immutable_task_contract(
             base_text,
@@ -1592,6 +1603,19 @@ def check_refs(
     base_sha = _resolve_ref(repo_root, base_ref) or ""
     head_sha = _resolve_ref(repo_root, head_ref) or ""
     conflicts: list[Conflict] = []
+    body_change_type = _change_type_from_body(str((metadata or {}).get("body", "")))
+    effective_change_type = change_type or body_change_type
+    if effective_change_type == STAGE1_COVERAGE_V2_TYPE and task_id != STAGE1_COVERAGE_V2_EXECUTOR:
+        conflicts.append(
+            _conflict(
+                "TASK_CONTRACT_CONFLICT",
+                f"{TASK_DIR}/任务-{STAGE1_COVERAGE_V2_EXECUTOR}.md",
+                authority="阶段1覆盖受限V2跨载体固定映射",
+                decision="失败关闭",
+                repair_mode="禁止V2类型绑定其他任务",
+                release_condition="仅由任务-000124执行V2合同修订",
+            )
+        )
     if not base_sha or not head_sha:
         conflicts.append(
             _conflict(
@@ -1671,6 +1695,12 @@ def check_refs(
                 if change_type == STAGE1_CONTRACT_REPAIR_TYPE
                 and task_id == STAGE1_CONTRACT_REPAIR_EXECUTOR
                 else None
+            ),
+            stage1_coverage_v2_targets=(
+                frozenset({"000098", "000106"})
+                if change_type == STAGE1_COVERAGE_V2_TYPE
+                and task_id == STAGE1_COVERAGE_V2_EXECUTOR
+                else frozenset()
             ),
         )
         _check_historical_immutability(repo_root, base_sha, head_sha, conflicts)
