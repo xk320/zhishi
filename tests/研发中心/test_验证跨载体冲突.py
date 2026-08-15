@@ -45,6 +45,31 @@ class CrossCarrierConflictTests(unittest.TestCase):
         self.assertEqual("000115", CONFLICT.STAGE1_CONTRACT_REPAIR_EXECUTOR)
         self.assertEqual("000106", CONFLICT.STAGE1_CONTRACT_REPAIR_TARGET)
 
+    def test阶段1覆盖受限V2变更类型绑定唯一执行者(self):
+        body = "## 变更类型\n- 阶段1覆盖受限完成合同修订V2\n"
+        self.assertEqual(
+            CONFLICT.STAGE1_COVERAGE_V2_TYPE,
+            CONFLICT._change_type_from_body(body),
+        )
+        self.assertEqual("000124", CONFLICT.STAGE1_COVERAGE_V2_EXECUTOR)
+
+    def test阶段1覆盖受限V2错任务失败关闭(self):
+        metadata = {
+            "body": "## 变更类型\n- 阶段1覆盖受限完成合同修订V2\n",
+            "pr_number": 359,
+            "head_ref": "codex/task-000125-cross-carrier-v2-v1",
+        }
+        report = CONFLICT.check_refs(
+            ROOT,
+            "main",
+            "main",
+            metadata=metadata,
+            task_id="000125",
+            change_type=CONFLICT.STAGE1_COVERAGE_V2_TYPE,
+        )
+        self.assertFalse(report.ok)
+        self.assertTrue(any("V2" in reason for reason in report.reasons))
+
     def test阶段1目标合同由主资格器固定校验而非通用漂移门误报(self):
         path = "docs/研发中心/任务/任务-000106.md"
         conflicts = []
