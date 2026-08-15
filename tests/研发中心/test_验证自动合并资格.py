@@ -5253,6 +5253,51 @@ class GitPathFactIntegrationTests(unittest.TestCase):
                     )
                 )
 
+    def test_阶段1覆盖受限V2目标合同固定指纹与越权失败(self):
+        # 负向合同场景：分母缩小、跨标的补偿、未来数据和真实交易放行均失败关闭。
+        change_type = "阶段1覆盖受限完成合同修订V2"
+        self.assertEqual(change_type, self.policy.STAGE1_COVERAGE_V2_TYPE)
+        for task_id in ("000098", "000106"):
+            path = REPO_ROOT / "docs" / "研发中心" / "任务" / f"任务-{task_id}.md"
+            base = subprocess.check_output(
+                ["git", "show", f"origin/main:{path.relative_to(REPO_ROOT)}"],
+                cwd=REPO_ROOT,
+                text=True,
+            )
+            expected = self.policy._apply_stage1_coverage_v2_task_repair(
+                base, task_id
+            )
+            self.assertIsNotNone(expected)
+            self.assertEqual(path.read_text(encoding="utf-8"), expected)
+            drifted = expected.replace("无法判定", "通过", 1)
+            self.assertNotEqual(
+                self.policy._apply_stage1_coverage_v2_task_repair(
+                    drifted, task_id
+                ),
+                drifted,
+            )
+
+    def test_阶段1覆盖受限V2派生入口固定追加且未知路径失败(self):
+        for path, expected_suffix in self.policy.STAGE1_COVERAGE_V2_DERIVED_APPENDICES.items():
+            base = subprocess.check_output(
+                ["git", "show", f"origin/main:{path}"],
+                cwd=REPO_ROOT,
+                text=True,
+            )
+            expected = self.policy._apply_stage1_coverage_v2_derived_doc_repair(
+                base, path
+            )
+            self.assertIsNotNone(expected)
+            self.assertEqual(
+                (REPO_ROOT / path).read_text(encoding="utf-8"), expected
+            )
+            self.assertIn(expected_suffix, expected)
+        self.assertIsNone(
+            self.policy._apply_stage1_coverage_v2_derived_doc_repair(
+                "内容", "docs/治理/PR自动合并策略.md"
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

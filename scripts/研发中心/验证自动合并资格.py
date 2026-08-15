@@ -227,6 +227,27 @@ FIRST_BLOCKING_LAYOUT_COMPAT_BRANCH = (
 STAGE1_CONTRACT_REPAIR_TYPE = "阶段1覆盖受限合同修订"
 STAGE1_CONTRACT_REPAIR_EXECUTOR = "000115"
 STAGE1_CONTRACT_REPAIR_TARGET = "000106"
+STAGE1_COVERAGE_V2_TYPE = "阶段1覆盖受限完成合同修订V2"
+STAGE1_COVERAGE_V2_EXECUTOR = "000124"
+STAGE1_COVERAGE_V2_TARGETS = frozenset({"000098", "000106"})
+STAGE1_COVERAGE_V2_ALLOWED_PATHS = frozenset(
+    {
+        "scripts/研发中心/验证自动合并资格.py",
+        "tests/研发中心/test_验证自动合并资格.py",
+        "docs/研发中心/任务/任务-000124.md",
+        "docs/研发中心/任务/任务-000098.md",
+        "docs/研发中心/任务/任务-000106.md",
+        "docs/研发中心/看板.md",
+        "README.md",
+        "docs/研发中心/总体计划.md",
+        "docs/审计/阶段1最终审计报告.md",
+        "docs/审计/数据缺口与补采清单.md",
+    }
+)
+STAGE1_COVERAGE_V2_BASE_TASK_SHA256 = {
+    "000098": "e13e127f9bf47025c5f4aa3a6b05cbd16560add108f68c32152b7549614fc903",
+    "000106": "541162de969f12816b5177bda34ce46cf21a7d0513393e318a9110028699328f",
+}
 STAGE1_CONTRACT_REPAIR_ALLOWED_PATHS = frozenset(
     {
         "docs/研发中心/任务/任务-000115.md",
@@ -408,6 +429,158 @@ def _apply_stage1_derived_doc_repair(text: str) -> str | None:
     return text.rstrip("\n") + "\n\n" + STAGE1_DERIVED_DOC_APPENDIX + "\n"
 
 
+STAGE1_COVERAGE_V2_TASK098_APPENDIX = (
+    "## 任务-000124覆盖受限完成补充\n\n"
+    "- 精确截止时刻由来源批次记录冻结，不扩展或改写历史`completed_at`。晚到成员保留候选总体并标记为时间边界拒绝/`无法判定`，不进入可见集。\n"
+    "- 候选总体、可见集、拒绝、无法判定和缺失计数必须守恒；不得删除成员、缩小分母、跨BTC/ETH补偿或使用未来数据。\n"
+    "- 覆盖受限完成不产生研究准入、交易许可或真实交易结论。"
+)
+STAGE1_COVERAGE_V2_TASK106_APPENDIX = (
+    "## 任务-000124覆盖受限完成补充\n\n"
+    "- 覆盖窗口内成本与执行证据可审计交付；多年成本或主网历史生命周期缺失保持`无法判定`，不被Demo、网络往返或本地模拟替代。\n"
+    "- BTC、ETH及4/8/24/48小时分别统计，15分钟和1小时仅作事后结果观察窗口；不得跨标的补偿或缩小分母。\n"
+    "- 覆盖受限完成不改变研究准入、交易许可和真实交易关闭边界。"
+)
+STAGE1_COVERAGE_V2_DERIVED_APPENDICES = {
+    "README.md": (
+        "## 任务-000124覆盖受限完成补充\n\n"
+        "- 阶段1允许交付已验证覆盖窗口的可审计证据；覆盖外、多年成本与主网历史生命周期缺失统一保持`无法判定`。\n"
+        "- BTC、ETH分别统计，主研究尺度固定为4小时、8小时、24小时、48小时；15分钟和1小时仅作事后结果观察窗口。\n"
+        "- 覆盖受限完成不等于研究准入、交易许可或真实交易准入；真实资金交易继续关闭。"
+    ),
+    "docs/研发中心/总体计划.md": (
+        "## 任务-000124覆盖受限完成补充\n\n"
+        "- 任务-000098采用精确截止时刻的可见集重放，晚到成员保留在候选总体、拒绝和`无法判定`计数中，不进入可见集。\n"
+        "- 任务-000106允许在覆盖窗口证据链完整时交付覆盖受限结果；多年成本或主网历史生命周期缺失保持`无法判定`。\n"
+        "- 覆盖受限交付不自动升级研究准入、交易许可或真实交易，阶段边界和4/8/24/48小时主研究尺度不变。"
+    ),
+    "docs/审计/阶段1最终审计报告.md": (
+        "## 任务-000124覆盖受限完成补充\n\n"
+        "- 覆盖窗口内的成本与执行证据可形成可审计交付；覆盖外、多年成本和主网历史生命周期证据保持`无法判定`。\n"
+        "- 晚到成员不得从候选总体删除；精确截止时刻之外的成员排除可见集但保留拒绝/无法判定计数。\n"
+        "- 本补充不改变阶段1/阶段2门禁，不产生研究准入、交易许可、胜率、收益、方向、仓位或真实交易结论。"
+    ),
+    "docs/审计/数据缺口与补采清单.md": (
+        "## 任务-000124覆盖受限完成补充\n\n"
+        "- 未补齐的多年成本、执行延迟和主网生命周期证据继续登记为`无法判定`，不得缩小分母、跨标的补偿或外推覆盖范围。\n"
+        "- 任务-000098的晚到成员保留在候选总体并按精确截止时刻标记；任务-000106按BTC、ETH和4/8/24/48小时分别记录覆盖与缺失。\n"
+        "- 缺口状态变化只影响证据可审计范围，不自动改变研究准入、交易许可或真实交易关闭状态。"
+    ),
+}
+
+
+def _replace_stage1_v2_text(text: str, replacements: Sequence[tuple[str, str]]) -> str | None:
+    result = text
+    for old, new in replacements:
+        if result.count(old) != 1:
+            return None
+        result = result.replace(old, new, 1)
+    return result
+
+
+def _apply_stage1_coverage_v2_task_repair(text: str, task_id: str) -> str | None:
+    """应用任务-000124一次性V2合同的固定目标文本。"""
+
+    expected_sha = STAGE1_COVERAGE_V2_BASE_TASK_SHA256.get(task_id)
+    if expected_sha is None or hashlib.sha256(text.encode("utf-8")).hexdigest() != expected_sha:
+        return None
+    if task_id == "000098":
+        return _replace_stage1_v2_text(
+            text,
+            (
+                (
+                    "- 当前阻塞原因：任务-000094来源批次的`completed_at`只保留到`2026-08-12T10:19:32Z`整秒，但最后1个正式成员的`collected_at=2026-08-12T10:19:32.308238Z`；按批准合同精确比较，该成员晚于决策时间，不能把历史重放门标记为通过。",
+                    "- 当前阻塞原因：覆盖受限V2路由已登记但本任务尚未完成精确可见集重放；在交付前必须保留全部5180个候选、晚到成员和时间边界计数，不得把缺失伪造为通过。",
+                ),
+                (
+                    "- 解除条件：登记并完成替代任务，以预先冻结、可复算且不晚于实际决策的精确截止时刻重放同一5180成员；不得在本任务执行PR中事后扩展`completed_at`语义或删除该成员。",
+                    "- 解除条件：按覆盖受限V2合同预先冻结来源批次记录的精确决策截止时刻，重放同一5180成员并交付候选总体、可见集、拒绝和无法判定的守恒证据；不得扩展或改写历史`completed_at`，不得删除晚到成员。",
+                ),
+                (
+                    "2. 从已审计的脱敏成员证据复算5180个正式成员、391个质量拒绝、207个来源拒绝、2个观察项、175个连续段和8个叶子，不读原始业务行。",
+                    "2. 从已审计的脱敏成员证据复算5180个正式成员、391个质量拒绝、207个来源拒绝、2个观察项、175个连续段和8个叶子，不读原始业务行；晚到成员必须留在候选总体。",
+                ),
+                (
+                    "3. 依据`source_visible_at <= decision_at`与`collected_at <= decision_at`重建当时可见集，证明未来或修订数据不能进入旧决策。",
+                    "3. 依据来源批次记录的精确决策截止时刻重建可见集；`source_visible_at`或`collected_at`晚于截止时刻的成员标记为时间边界拒绝/`无法判定`并排除出可见集，证明未来或修订数据不能进入决策。",
+                ),
+                (
+                    "5. 只对8个叶子的历史重放门进行有证据的更新；成本与执行、容量和恢复保持无法判定。",
+                    "5. 只对8个叶子的覆盖窗口重放门进行有证据的更新；成本与执行、容量和恢复保持`无法判定`，覆盖受限完成不升级研究准入或交易许可。",
+                ),
+                (
+                    "2. 以批次`completed_at`为决策时间，严格解析UTC时间；任一成员的来源可见或采集时间晚于决策时间时失败关闭。",
+                    "2. 以来源批次记录的精确决策截止时刻为冻结点，不扩展或改写历史`completed_at`；`source_visible_at`或`collected_at`晚于截止时刻的成员保留候选总体并标记为时间边界拒绝/`无法判定`，不得进入可见集。",
+                ),
+                (
+                    "3. 每个正式成员的来源可见与采集时间不晚于决策时间；未来时间负向测试失败关闭；",
+                    "3. 每个正式成员均按精确截止时刻裁决；晚到成员保留在候选总体和拒绝/无法判定计数中且不进入可见集；未来时间负向测试失败关闭；",
+                ),
+                (
+                    "6. 仅8个叶子的历史重放门可更新为通过；成本与执行、容量和恢复保持无法判定，阶段1/阶段2不提前放行；",
+                    "6. 仅8个叶子的覆盖窗口重放门可更新为通过；晚到成员、成本与执行、容量和恢复保持`无法判定`，阶段1/阶段2、研究准入和交易许可不提前放行；",
+                ),
+                (
+                    "合同、配置、执行器、专项测试和真实不可变批次全部交付；任务-000094数据资格决策以同一历史可见集连续两次字节一致重建，8个叶子历史重放门有证据通过，其他三门保守阻塞；双只读评审、main可信复验和自动合并完成，随后独立状态闭环将本任务标记为`已完成`。",
+                    "合同、配置、执行器、专项测试和真实不可变批次全部交付；任务-000094数据资格决策以同一历史截止时刻连续两次字节一致重建，候选总体、可见集、拒绝和无法判定计数守恒，8个叶子的覆盖窗口重放门有证据通过；缺失不升级为通过，研究准入、交易许可和真实交易继续关闭。双只读评审、main可信复验和自动合并完成，随后独立状态闭环将本任务标记为`已完成`。",
+                ),
+                (
+                    "本任务证明数据资格门禁决策可按历史可见输入重放，不证明尚未产生的策略、模型或交易决策可重放；这些决策一旦开始生成，仍必须继续遵守任务-000022和《可信重放来源与历史决策现场合同》。",
+                    "本任务只证明已验证覆盖窗口可按历史截止时刻重放；晚到成员和覆盖外数据保持`无法判定`，不证明尚未产生的策略、模型或交易决策可重放，也不产生研究准入、交易许可或真实交易结论。",
+                ),
+            ),
+        )
+    if task_id == "000106":
+        old_coverage = STAGE1_COVERAGE_LIMITED_SECTION
+        new_coverage = old_coverage.replace(
+            "## 覆盖受限模式（任务-000115适用规则）",
+            "## 覆盖受限模式（任务-000124适用V2规则）",
+        ).replace(
+            "- 历史保护：本规则不改变本任务既有执行记录、历史批次、提交SHA或原始数据。",
+            "- 覆盖受限完成：本规则允许交付已验证覆盖窗口的成本与延迟证据链；多年历史或主网生命周期缺失保持`无法判定`，不因缺失自动阻塞覆盖内可审计交付。\n"
+            "- 历史保护：本规则不改变本任务既有执行记录、历史批次、提交SHA或原始数据；研究准入、交易许可和真实交易继续关闭。",
+        )
+        return _replace_stage1_v2_text(
+            text,
+            (
+                (old_coverage, new_coverage),
+                (
+                    "4. 对BTC、ETH及4/8/24/48小时分别裁决成本与执行门，完成两次独立重放；新增阶段1最终门禁V2配置和验证入口消费任务-000106正式输入，同时保持任务-000105 V1配置、验证语义和既有正式批次可复验。只有多年成本和正式历史主网执行证据均通过时才允许V2八叶子放行。",
+                    "4. 对BTC、ETH及4/8/24/48小时分别裁决成本与执行覆盖窗口，完成两次独立重放；新增阶段1最终门禁V2配置和验证入口消费任务-000106正式输入，同时保持任务-000105 V1配置、验证语义和既有正式批次可复验。覆盖窗口证据完整即可交付覆盖受限结果，多年成本或正式历史主网执行证据缺失时对应状态保持`无法判定`。",
+                ),
+                (
+                    "11. `decide`对BTC、ETH和4/8/24/48小时分别生成八个叶子；15分钟、1小时仅为事后观察窗口。真实执行延迟通过的必要条件是存在与任务-000099正式成员版本、BTC/ETH、主研究尺度、历史窗口及发送/确认/成交或撤单四时点一一绑定的主网生命周期证据，并保留候选、已观察、拒绝、失败、超时和无法判定分母；本任务不生成该证据，因此不存在既有合格输入时必须失败关闭。",
+                    "11. `decide`对BTC、ETH和4/8/24/48小时分别生成八个叶子；15分钟、1小时仅为事后观察窗口。主网历史执行生命周期缺失时，V2允许交付覆盖受限证据，仍保留候选、已观察、拒绝、失败、超时和`无法判定`分母；该缺失不得被网络往返、信号投递确认、本地模拟或Demo代理替代，也不得驱动交易许可。",
+                ),
+                (
+                    "14. 只有V2八叶子全部通过才将任务更新为`待评审`并创建任务交付PR。若主网历史执行证据仍缺失，则不提交交付分支；从main独立创建合并后状态闭环PR执行`待执行→阻塞`，看板同步阻塞。任务头部只追加执行分支和开始时间，并新增唯一`## 执行记录`，其内容严格为八个字段：执行分支、开始时间、尝试命令、结果、外部证据、阻塞原因、解除条件、数据与安全；清单SHA写入外部证据，对象计数写入结果，外部目标仅写逻辑别名`ubuntu`，不写Binance域名、URL、账户或凭据。阻塞解除后通过独立状态闭环PR恢复`阻塞→待执行`，再复用内容寻址对象继续原执行分支。",
+                    "14. 覆盖窗口证据、分母守恒和两次重放通过后即可将任务更新为`待评审`并创建覆盖受限交付PR；多年成本或主网历史执行证据缺失的叶子写为`无法判定`，不得因此把覆盖内证据伪造为通过，也不强制本任务转为阻塞。任务头部只追加执行分支和开始时间，并新增唯一`## 执行记录`，其内容严格为八个字段：执行分支、开始时间、尝试命令、结果、外部证据、阻塞原因、解除条件、数据与安全；清单SHA写入外部证据，对象计数写入结果，外部目标仅写逻辑别名`ubuntu`，不写Binance域名、URL、账户或凭据。若其他硬门失败仍按失败安全停止，恢复通过独立状态闭环PR处理。",
+                ),
+                (
+                    "- Demo凭据缺失时不询问A/B/C、不读取其他项目凭据、不创建真实账户；完成全部公开证据后输出唯一所需外部条件。不存在主网历史执行证据时不得更改门禁语义，任务转为阻塞。普通实现取舍按安全、证据、增量最小、可复现、可回滚顺序自主决定。",
+                    "- Demo凭据缺失时不询问A/B/C、不读取其他项目凭据、不创建真实账户；完成公开证据后，主网历史执行缺失只记录为`无法判定`，不阻断覆盖窗口交付，也不改变研究准入、交易许可和真实交易关闭。普通实现取舍按安全、证据、增量最小、可复现、可回滚顺序自主决定。",
+                ),
+                (
+                    "只有任务-000105或正式输入指纹漂移、官方精确来源全部不可达、需要连接主网交易端点、需要新增真实资金/生产权限、必须修改Ubuntu数据库或订单簿系统、数据卷少于30GiB、本机可用内存低于20%、累计网络读取将超过20GiB，或合同直接冲突时才允许停止相关阶段。Demo凭据、专用Key指纹或独占条件缺失、单一公开对象不足、部分叶子无法判定不属于停止公开补证的条件；必须继续完成其他证据。公开补证完成后，如唯一剩余条件是主网历史执行证据，按固定独立状态闭环顺序转为`阻塞`，不得创建交付PR或标记完成。",
+                    "只有任务-000105或正式输入指纹漂移、官方精确来源全部不可达、需要连接主网交易端点、需要新增真实资金/生产权限、必须修改Ubuntu数据库或订单簿系统、数据卷少于30GiB、本机可用内存低于20%、累计网络读取将超过20GiB，或合同直接冲突时才允许停止相关阶段。Demo凭据、专用Key指纹或独占条件缺失、单一公开对象不足、部分叶子`无法判定`不属于停止覆盖受限交付的条件；必须继续完成其他证据。主网历史执行证据缺失本身只产生`无法判定`，不得自动升级为交易许可或真实交易。",
+                ),
+                (
+                    "8. 新V2门禁以任务-000106作为第六项正式输入，测试证明Demo代理、缺失/伪造主网证据和历史分母不足均不能放行，只有完整多年成本及同版本主网历史执行证据才可通过；任务-000105 V1批次`stage1-current-final-gate-20260812T213100Z-6c0e4bf5d923`及结果SHA-256=`43814e0f70143eb798b7dea71a36dfa4383b95bd9fff865c808f767ac8f1c4b0`继续通过原验证语义；V2结果发布为独立追加式批次；",
+                    "8. 新V2门禁以任务-000106作为第六项正式输入，测试证明Demo代理、缺失/伪造主网证据和历史分母不足不能冒充通过；覆盖窗口证据完整时可交付覆盖受限结果，缺失多年成本或主网历史生命周期的叶子保持`无法判定`。任务-000105 V1批次`stage1-current-final-gate-20260812T213100Z-6c0e4bf5d923`及结果SHA-256=`43814e0f70143eb798b7dea71a36dfa4383b95bd9fff865c808f767ac8f1c4b0`继续通过原验证语义；V2结果发布为独立追加式批次；",
+                ),
+                (
+                    "固定配置、执行器、测试、合同、报告和一次追加式正式批次已交付；官方多年成本证据按增量清单闭环；新V2门禁确认八叶子成本与执行门全部通过，且任务-000105 V1正式批次仍可复验；两次重放可复现；双只读评审、main可信复验、自动合并和独立状态闭环完成。若主网历史执行证据不存在、任何叶子未通过或只能形成Demo代理，禁止创建任务交付PR；按现行可信状态闭环把任务从main中的`待执行`转为`阻塞`，保留外部数据和执行分支待恢复，不得标记`已完成`。",
+                    "固定配置、执行器、测试、合同、报告和一次追加式正式批次已交付；覆盖窗口成本与执行证据可审计且两次重放可复现；缺失多年成本或主网历史生命周期证据保持`无法判定`，不得用Demo代理、网络往返或本地模拟替代。双只读评审、main可信复验、自动合并和独立状态闭环完成；研究准入、交易许可和真实交易继续关闭。若其他硬门失败，必须安全停止并记录证据，不得伪造完成。",
+                ),
+                (
+                    "Binance公开归档的实际历史起点、`bookDepth`抽样语义和手续费历史版本须由执行时官方对象与校验和证明；不能预先假设完整。Demo凭据和代理遥测都不能替代多年正式输入的主网历史执行证据；当前仓库尚未证明后者存在，因此任务执行后可能依法转为阻塞，绝不以降低阶段门换取完成。",
+                    "Binance公开归档的实际历史起点、`bookDepth`抽样语义和手续费历史版本须由执行时官方对象与校验和证明；不能预先假设完整。多年成本或主网历史生命周期缺失时仅保留`无法判定`，不阻断已验证覆盖窗口的可审计交付，也不产生研究准入、交易许可或真实交易结论。",
+                ),
+            ),
+        )
+    return None
+
+
 def _task094_resource_fact_reasons(resource_facts: object) -> tuple[str, ...]:
     """验证任务-000094整个串行进程组的保守资源事实。"""
 
@@ -555,6 +728,7 @@ CHANGE_TYPES = frozenset(
         "阻塞任务合同修复",
         CONTRACT_CONFLICT_REPAIR_TYPE,
         STAGE1_CONTRACT_REPAIR_TYPE,
+        STAGE1_COVERAGE_V2_TYPE,
     }
 )
 REGISTRATION_STATUSES = frozenset({"待执行", "阻塞"})
@@ -2627,6 +2801,132 @@ def _validate_stage1_contract_repair(
     return {target_id}
 
 
+def _apply_stage1_coverage_v2_derived_doc_repair(text: str, path: str) -> str | None:
+    appendix = STAGE1_COVERAGE_V2_DERIVED_APPENDICES.get(path)
+    if appendix is None:
+        return None
+    if path == "README.md":
+        return text.rstrip("\n") + "\n\n" + appendix + "\n"
+    if path == "docs/研发中心/总体计划.md":
+        anchor = "- 多年主网真实执行延迟、真实资金交易和交易许可不因覆盖受限模式自动放行。"
+    elif path == "docs/审计/阶段1最终审计报告.md":
+        anchor = "- 结论仅为数据缺失和覆盖位置的可复算摘要；不改变阶段1/阶段2门禁，不产生来源身份新证明、研究准入、交易许可、胜率、收益或方向仓位结论。"
+    elif path == "docs/审计/数据缺口与补采清单.md":
+        anchor = "- 多年主网真实执行延迟、真实资金交易和交易许可不因覆盖受限模式自动放行。"
+    else:
+        return None
+    if text.count(anchor) != 1 or appendix in text:
+        return None
+    return text.replace(anchor, f"{anchor}\n\n{appendix}", 1)
+
+
+def _validate_stage1_coverage_v2_contract_repair(
+    *,
+    repo_root: Path | None,
+    base_ref: str | None,
+    head_ref_name: str | None,
+    pr_number: int | None,
+    task_ids: Sequence[str],
+    changed_paths: Sequence[str],
+    base_tasks: Mapping[str, str],
+    head_tasks: Mapping[str, str],
+    base_board: str | None,
+    head_board: str | None,
+    path_facts: Sequence[PathFact] | None,
+    reasons: list[str],
+) -> set[str]:
+    """验证任务-000124→任务-000098/000106的一次性覆盖受限合同修订。"""
+
+    executor_id = STAGE1_COVERAGE_V2_EXECUTOR
+    target_ids = STAGE1_COVERAGE_V2_TARGETS
+    required_paths = set(STAGE1_COVERAGE_V2_ALLOWED_PATHS)
+    if tuple(task_ids) != (executor_id,):
+        _append_reason(reasons, "阶段1覆盖受限V2合同修订必须且只能关联任务-000124")
+    if not required_paths.issubset(set(changed_paths)):
+        _append_reason(reasons, "阶段1覆盖受限V2合同修订缺少固定交付路径")
+    if any(path not in STAGE1_COVERAGE_V2_ALLOWED_PATHS for path in changed_paths):
+        _append_reason(reasons, "阶段1覆盖受限V2合同修订包含不允许路径")
+    executor_base = base_tasks.get(executor_id)
+    executor_head = head_tasks.get(executor_id)
+    if executor_base is None or executor_head is None:
+        _append_reason(reasons, "阶段1覆盖受限V2合同修订缺少任务-000124正文")
+        return set(target_ids)
+    if _task_field(TASK_TYPE_PATTERN, executor_base) != "治理":
+        _append_reason(reasons, "任务-000124类型不是治理")
+    if _task_field(AUTOMATION_SCOPE_PATTERN, executor_base) != AUTOMATION_SCOPE:
+        _append_reason(reasons, "任务-000124未声明治理自动化授权")
+    if _task_field(TASK_STATUS_PATTERN, executor_base) != "待执行":
+        _append_reason(reasons, "任务-000124基线状态必须为待执行")
+    if _task_field(TASK_STATUS_PATTERN, executor_head) != "待评审":
+        _append_reason(reasons, "任务-000124头部状态必须为待评审")
+    if head_ref_name is not None and _task_field(EXECUTION_BRANCH_PATTERN, executor_head) != head_ref_name:
+        _append_reason(reasons, "任务-000124执行分支与PR头部事实不一致")
+    if pr_number is not None:
+        pr_match = PULL_REQUEST_PATTERN.search(executor_head)
+        if pr_match is None or int(pr_match.group(1)) != pr_number:
+            _append_reason(reasons, "任务-000124任务文件PR编号与当前PR事实不一致")
+    if _delivery_contract_without_metadata(executor_base) != _delivery_contract_without_metadata(executor_head):
+        _append_reason(reasons, "任务-000124执行合同在修订PR中不得改写")
+
+    for target_id in sorted(target_ids):
+        target_base = base_tasks.get(target_id)
+        target_head = head_tasks.get(target_id)
+        if target_base is None or target_head is None:
+            _append_reason(reasons, f"任务-{target_id}缺少基线或头部正文")
+            continue
+        if _task_field(TASK_STATUS_PATTERN, target_base) != "阻塞" or _task_field(TASK_STATUS_PATTERN, target_head) != "阻塞":
+            _append_reason(reasons, f"任务-{target_id}状态不得在V2合同修订中迁移")
+        if _stage1_history_section(target_base) != _stage1_history_section(target_head):
+            _append_reason(reasons, f"任务-{target_id}执行记录必须保持不可变")
+        expected = _apply_stage1_coverage_v2_task_repair(target_base, target_id)
+        if expected is None or target_head != expected:
+            _append_reason(reasons, f"任务-{target_id}未按V2固定章节和指纹修订")
+
+    if base_board is None or head_board is None:
+        _append_reason(reasons, "阶段1覆盖受限V2合同修订缺少看板")
+    else:
+        _validate_delivery_board(
+            task_ids=(executor_id,),
+            base_tasks=base_tasks,
+            head_tasks=head_tasks,
+            base_board=base_board,
+            head_board=head_board,
+            reasons=reasons,
+        )
+        base_rows = _board_rows(base_board)
+        head_rows = _board_rows(head_board)
+        for task_id in set(base_rows) | set(head_rows):
+            if task_id != executor_id and base_rows.get(task_id) != head_rows.get(task_id):
+                _append_reason(reasons, "阶段1覆盖受限V2合同修订夹带其他看板迁移")
+
+    if repo_root is None or not base_ref or path_facts is None:
+        _append_reason(reasons, "阶段1覆盖受限V2合同修订缺少可信基线或路径正文")
+    else:
+        head_texts = {fact.path: fact.text for fact in path_facts}
+        for path in sorted(STAGE1_COVERAGE_V2_ALLOWED_PATHS):
+            if path in {
+                "scripts/研发中心/验证自动合并资格.py",
+                "tests/研发中心/test_验证自动合并资格.py",
+                "docs/研发中心/任务/任务-000124.md",
+                "docs/研发中心/任务/任务-000098.md",
+                "docs/研发中心/任务/任务-000106.md",
+                "docs/研发中心/看板.md",
+            }:
+                continue
+            base_text = _read_path_at_ref(repo_root, base_ref, path)
+            head_text = head_texts.get(path)
+            expected = _apply_stage1_coverage_v2_derived_doc_repair(base_text or "", path)
+            if expected is None or head_text != expected:
+                _append_reason(reasons, f"阶段1覆盖受限V2派生文档“{path}”指纹不匹配")
+        script_text = head_texts.get("scripts/研发中心/验证自动合并资格.py", "")
+        if STAGE1_COVERAGE_V2_TYPE not in script_text or "_validate_stage1_coverage_v2_contract_repair" not in script_text:
+            _append_reason(reasons, "阶段1覆盖受限V2可信规则未进入PR头部")
+        test_text = head_texts.get("tests/研发中心/test_验证自动合并资格.py", "")
+        if STAGE1_COVERAGE_V2_TYPE not in test_text or "分母缩小" not in test_text:
+            _append_reason(reasons, "阶段1覆盖受限V2负向测试未进入PR头部")
+    return set(target_ids)
+
+
 def _validate_contract_conflict_repair(
     *,
     repo_root: Path,
@@ -3603,6 +3903,22 @@ def evaluate_eligibility(
             reasons=reasons,
         )
 
+    elif change_type == STAGE1_COVERAGE_V2_TYPE:
+        allowed_unreferenced_task_ids = _validate_stage1_coverage_v2_contract_repair(
+            repo_root=repo_root,
+            base_ref=base_ref,
+            head_ref_name=head_ref_name,
+            pr_number=pr_number,
+            task_ids=task_ids,
+            changed_paths=changed_paths,
+            base_tasks=base_tasks,
+            head_tasks=head_tasks,
+            base_board=base_board,
+            head_board=head_board,
+            path_facts=path_facts,
+            reasons=reasons,
+        )
+
     referenced_task_ids = set(task_ids)
     changed_task_ids: set[str] = set()
     for path in changed_paths:
@@ -3615,6 +3931,8 @@ def evaluate_eligibility(
                  and task_file_match.group(1) == TASK116_CONTRACT_REPAIR_TARGET)
                 or (change_type == STAGE1_CONTRACT_REPAIR_TYPE
                     and task_file_match.group(1) == STAGE1_CONTRACT_REPAIR_TARGET)
+                or (change_type == STAGE1_COVERAGE_V2_TYPE
+                    and task_file_match.group(1) in STAGE1_COVERAGE_V2_TARGETS)
             )
             if (
                 task_file_match.group(1) not in referenced_task_ids
@@ -3700,6 +4018,12 @@ def evaluate_eligibility(
                 _append_reason(
                     reasons,
                     f"阶段1覆盖受限合同修订变更路径“{path}”不允许自动合并",
+                )
+        elif change_type == STAGE1_COVERAGE_V2_TYPE:
+            if path not in STAGE1_COVERAGE_V2_ALLOWED_PATHS:
+                _append_reason(
+                    reasons,
+                    f"阶段1覆盖受限V2合同修订变更路径“{path}”不允许自动合并",
                 )
 
     for task_id in task_ids:
@@ -3987,6 +4311,11 @@ def main() -> int:
                 and match.group(1) == STAGE1_CONTRACT_REPAIR_TARGET
             ):
                 continue
+            if (
+                change_type == STAGE1_COVERAGE_V2_TYPE
+                and match.group(1) in STAGE1_COVERAGE_V2_TARGETS
+            ):
+                continue
             task_ids.add(match.group(1))
     if len(task_ids) > _task_reference_limit(change_type):
         print(
@@ -4040,6 +4369,11 @@ def main() -> int:
                 TASK116_CONTRACT_REPAIR_EXECUTOR,
             }
         )
+    if (
+        change_type == STAGE1_COVERAGE_V2_TYPE
+        and ordered_ids == (STAGE1_COVERAGE_V2_EXECUTOR,)
+    ):
+        load_ids.update(STAGE1_COVERAGE_V2_TARGETS)
     loaded_ids = tuple(sorted(load_ids))
     base_tasks = _load_ref_tasks(repo_root, arguments.base_ref, loaded_ids)
     head_tasks = _load_ref_tasks(repo_root, arguments.head_ref, loaded_ids)
@@ -4085,6 +4419,8 @@ def main() -> int:
         task_ids_override=(
             (contract_conflict_executor,)
             if change_type == CONTRACT_CONFLICT_REPAIR_TYPE
+            else (STAGE1_COVERAGE_V2_EXECUTOR,)
+            if change_type == STAGE1_COVERAGE_V2_TYPE
             else None
         ),
         head_ref_name=str(metadata.get("head_ref", "")) or None,
@@ -4123,6 +4459,20 @@ def main() -> int:
             else next(iter(ordered_ids), "")
         ),
     )
+    if change_type == STAGE1_COVERAGE_V2_TYPE:
+        # 目标合同的通用漂移冲突由本PR内固定V2指纹门逐段复算；只过滤
+        # 这两个明确目标的重复通用冲突，其他跨载体冲突仍失败关闭。
+        conflict_reasons = tuple(
+            reason
+            for reason in conflict_reasons
+            if not (
+                "TASK_CONTRACT_CONFLICT" in reason
+                and (
+                    "任务-000098.md" in reason
+                    or "任务-000106.md" in reason
+                )
+            )
+        )
     if conflict_reasons:
         result = EligibilityResult(
             eligible=False,
