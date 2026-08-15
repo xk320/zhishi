@@ -5169,6 +5169,8 @@ class GitPathFactIntegrationTests(unittest.TestCase):
 
     def test_阶段1覆盖受限V2目标合同固定指纹与越权失败(self):
         # 负向合同场景：分母缩小、跨标的补偿、未来数据和真实交易放行均失败关闭。
+        change_type = "阶段1覆盖受限完成合同修订V2"
+        self.assertEqual(change_type, self.policy.STAGE1_COVERAGE_V2_TYPE)
         for task_id in ("000098", "000106"):
             path = REPO_ROOT / "docs" / "研发中心" / "任务" / f"任务-{task_id}.md"
             base = subprocess.check_output(
