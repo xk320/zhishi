@@ -3317,6 +3317,92 @@ class AutoMergeEligibilityTests(unittest.TestCase):
 
         self.assertTrue(result.eligible, result.reasons)
 
+    def _任务126首次阻塞布局对(self, *, branch=None):
+        base = task_text(
+            status="待执行", task_type="治理", dependency=None,
+            title="兼容阶段1覆盖受限派生文档的冻结输入指纹",
+        ).replace("# 任务-000013", "# 任务-000126", 1)
+        base = base.replace("- 执行分支：`branch`\n", "", 1)
+        base += (
+            "\n## 依赖与阻塞条件\n\n"
+            "- 唯一前序依赖：任务-000125已完成并进入main。\n"
+            "- 当前问题：任务-000124派生文档尚未进入main。\n"
+            "- 解除条件：兼容映射进入main后重新执行。\n"
+        )
+        branch = branch or self.policy.FIRST_BLOCKING_LAYOUT_COMPAT_BRANCH
+        head = (
+            base.replace("- 状态：待执行", "- 状态：阻塞", 1)
+            .replace(
+                "- 优先级：P1\n",
+                "- 优先级：P1\n"
+                f"- 执行分支：`{branch}`\n"
+                "- 开始时间：`2026-08-15T11:00:00+08:00`\n",
+                1,
+            )
+            .replace(
+                "- 当前问题：任务-000124派生文档尚未进入main。\n"
+                "- 解除条件：兼容映射进入main后重新执行。\n",
+                "- 当前问题：任务-000124派生文档尚未进入main。\n"
+                "- 当前阻塞原因：任务-000124候选文档尚未进入main。\n"
+                "- 解除条件：兼容映射进入main后重新执行。\n",
+                1,
+            )
+            + (
+                "\n## 执行记录\n\n"
+                f"- 执行分支：`{branch}`\n"
+                "- 开始时间：`2026-08-15T11:00:00+08:00`\n"
+                "- 尝试命令：`python3 -m pytest -q tests/审计 tests/数据`\n"
+                "- 结果：457通过，12失败，未生成兼容批次。\n"
+                "- 外部证据：冻结输入指纹与候选文档头不一致。\n"
+                "- 阻塞原因：任务-000124候选文档尚未进入main。\n"
+                "- 解除条件：任务-000124进入main后重新执行。\n"
+                "- 数据与安全：未访问服务器、数据库、原始数据或生产系统。\n"
+            )
+        )
+        return base, head
+
+    def _评估任务126首次阻塞(self, *, branch=None):
+        base, head = self._任务126首次阻塞布局对(branch=branch)
+        body = (
+            "## 关联任务\n\n- 任务-000126\n\n"
+            "## 变更类型\n\n- 合并后状态闭环\n"
+        )
+        base_board = blocked_transition_board(blocked=False).replace(
+            "任务-000013", "任务-000126"
+        ).replace(
+            "建立 PR 自动合并策略与审批规则",
+            "兼容阶段1覆盖受限派生文档的冻结输入指纹",
+        ).replace("000012", "000125")
+        head_board = blocked_transition_board(blocked=True).replace(
+            "任务-000013", "任务-000126"
+        ).replace(
+            "建立 PR 自动合并策略与审批规则",
+            "兼容阶段1覆盖受限派生文档的冻结输入指纹",
+        ).replace("000012", "000125").replace(
+            "任务-000125尚未完成。",
+            "任务-000124候选文档尚未进入main。",
+        )
+        return self.evaluate(
+            changed_paths=[
+                "docs/研发中心/任务/任务-000126.md",
+                "docs/研发中心/看板.md",
+            ],
+            pr_body=body,
+            base_tasks={"000126": base},
+            head_tasks={"000126": head},
+            base_board=base_board,
+            head_board=head_board,
+        )
+
+    def test_任务126首次阻塞仅允许固定依赖章节布局(self):
+        result = self._评估任务126首次阻塞()
+        self.assertTrue(result.eligible, result.reasons)
+
+    def test_任务126首次阻塞拒绝其他分支复用例外(self):
+        result = self._评估任务126首次阻塞(branch="codex/task-000127-reuse")
+        self.assertFalse(result.eligible)
+        self.assertIn("任务-000126首次阻塞执行分支未绑定固定目标", result.reasons)
+
     def test_合并后状态闭环允许首次补齐同章节唯一解除条件(self):
         body = (
             "## 关联任务\n\n- 任务-000013\n\n"
