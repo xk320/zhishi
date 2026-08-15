@@ -219,6 +219,11 @@ CONTRACT_CONFLICT_REPAIR_TARGET = "000066"
 CONTRACT_CONFLICT_REPAIR_PR = 165
 TASK116_CONTRACT_REPAIR_EXECUTOR = "000116"
 TASK116_CONTRACT_REPAIR_TARGET = "000115"
+FIRST_BLOCKING_LAYOUT_COMPAT_EXECUTOR = "000127"
+FIRST_BLOCKING_LAYOUT_COMPAT_TARGET = "000126"
+FIRST_BLOCKING_LAYOUT_COMPAT_BRANCH = (
+    "codex/task-000126-frozen-input-fingerprint-compat-v1"
+)
 STAGE1_CONTRACT_REPAIR_TYPE = "阶段1覆盖受限合同修订"
 STAGE1_CONTRACT_REPAIR_EXECUTOR = "000115"
 STAGE1_CONTRACT_REPAIR_TARGET = "000106"
@@ -1723,8 +1728,36 @@ def _without_blocking_mutable_lines(
     return tuple(filtered)
 
 
+def _first_blocking_layout_compat_base(text: str, *, task_id: str, old_status: str) -> str:
+    """为唯一首次阻塞目标合成不可变的缺失阻塞字段占位。"""
+
+    if task_id != FIRST_BLOCKING_LAYOUT_COMPAT_TARGET or old_status != "待执行":
+        return text
+    if _header_field_line(text, "- 当前阻塞原因：") is not None:
+        return text
+    if _header_field_line(text, "- 执行分支：") is not None:
+        return text
+    if _section_bounds(text, "## 执行记录") is not None:
+        return text
+    lines = text.splitlines()
+    section = _section_bounds(text, "## 依赖与阻塞条件")
+    if section is None:
+        return text
+    start, end = section
+    insert_at = next(
+        (
+            index + 1
+            for index in range(start + 1, end)
+            if lines[index].startswith("- 当前问题：")
+        ),
+        start + 1,
+    )
+    lines.insert(insert_at, "- 当前阻塞原因：无；首次阻塞布局兼容占位。")
+    return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+
+
 def _validate_blocking_transition(
-    *, base_task: str, head_task: str, old_status: str, reasons: list[str]
+    *, task_id: str, base_task: str, head_task: str, old_status: str, reasons: list[str]
 ) -> None:
     """校验进入阻塞时的字段位置、不可变合同和首次执行记录。"""
 
@@ -1741,8 +1774,11 @@ def _validate_blocking_transition(
         allow_initial_metadata
         and _header_field_line(base_task, "- 执行分支：") is None
     )
+    compat_base = _first_blocking_layout_compat_base(
+        base_task, task_id=task_id, old_status=old_status
+    )
     base_layout = _successor_mutable_layout(
-        base_task,
+        compat_base,
         allow_missing_dependency_release=allow_missing_dependency_release,
     )
     head_layout = _successor_mutable_layout(head_task)
@@ -1753,8 +1789,16 @@ def _validate_blocking_transition(
     ):
         _append_reason(reasons, "阻塞状态闭环字段位置无效")
         return
+    if task_id == FIRST_BLOCKING_LAYOUT_COMPAT_TARGET and old_status == "待执行":
+        if base_task == compat_base:
+            _append_reason(reasons, "任务-000126首次阻塞缺少受控布局兼容基线")
+        if head_layout[0] != "dependency_section":
+            _append_reason(reasons, "任务-000126首次阻塞必须使用依赖章节布局")
+        branch = _header_field_line(head_task, "- 执行分支：")
+        if branch != f"- 执行分支：`{FIRST_BLOCKING_LAYOUT_COMPAT_BRANCH}`":
+            _append_reason(reasons, "任务-000126首次阻塞执行分支未绑定固定目标")
     if _without_blocking_mutable_lines(
-        base_task,
+        compat_base,
         allow_initial_metadata=allow_initial_metadata,
         allow_missing_dependency_release=allow_missing_dependency_release,
     ) != _without_blocking_mutable_lines(
@@ -3312,6 +3356,7 @@ def _validate_state_closure(
         if (old_status, new_status) in BLOCKING_TRANSITIONS:
             blocking += 1
             _validate_blocking_transition(
+                task_id=task_id,
                 base_task=base_task,
                 head_task=head_task,
                 old_status=old_status or "",
