@@ -68,7 +68,13 @@ class CrossCarrierConflictTests(unittest.TestCase):
             change_type=CONFLICT.STAGE1_COVERAGE_V2_TYPE,
         )
         self.assertFalse(report.ok)
-        self.assertTrue(any("V2" in reason for reason in report.reasons))
+        self.assertTrue(
+            any(
+                "TASK_CONTRACT_CONFLICT" in reason
+                and "任务-000124.md" in reason
+                for reason in report.reasons
+            )
+        )
 
     def test阶段1目标合同由主资格器固定校验而非通用漂移门误报(self):
         path = "docs/研发中心/任务/任务-000106.md"
